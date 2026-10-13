@@ -1,0 +1,8 @@
+# Litmatch Service Map
+
+> Interactive map of how the 25 services/modules of Litmatch coordinate and why (72 audited cross-service flows). The page is large; for machine reading use the context pack below (many small markdown files with stable ids).
+
+- [Context pack index](https://ducmanh001.github.io/litmatch-atlas-demo/llms.txt): start here
+- [Service map data per service](https://ducmanh001.github.io/litmatch-atlas-demo/pack/service-map/index.md): collaborators with why / if missing, techniques, Q&A, findings
+- [Flows](https://ducmanh001.github.io/litmatch-atlas-demo/pack/flows/index.md): the 72 sequence flows, one file each
+- [Feature slices](https://ducmanh001.github.io/litmatch-atlas-demo/pack/slices/index.md): follow one feature from screen to database
