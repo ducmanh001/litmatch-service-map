@@ -1,0 +1,325 @@
+{
+ "id": "movie-match-anon-chat-finish-reactions",
+ "title": "Xem phim ẩn danh: chat, reaction và kết thúc",
+ "summary": "Trong phiên xem phim ẩn danh, hai người chat có Idempotency-Key, gửi reaction tạm thời, bấm kết thúc và dọn trạng thái. movie-match lưu dữ liệu vào PostgreSQL còn Redis và signaling-gateway đẩy sự kiện realtime xuống cả hai client.",
+ "caption": "Chat idempotent qua DB, reaction và đổi trạng thái đi qua Redis tới gateway, kết thúc và dọn phiên trong transaction.",
+ "participants": [
+  {
+   "id": "web",
+   "label": "Web client",
+   "kind": "client"
+  },
+  {
+   "id": "movie-match",
+   "label": "movie-match",
+   "kind": "service"
+  },
+  {
+   "id": "postgres",
+   "label": "PostgreSQL",
+   "kind": "infra"
+  },
+  {
+   "id": "redis",
+   "label": "Redis",
+   "kind": "infra"
+  },
+  {
+   "id": "signaling-gateway",
+   "label": "signaling-gateway",
+   "kind": "service"
+  }
+ ],
+ "steps": [
+  {
+   "from": "web",
+   "to": "movie-match",
+   "label": "POST /anon/sessions/:id/messages kèm header Idempotency-Key",
+   "kind": "call",
+   "mechanism": "http"
+  },
+  {
+   "from": "movie-match",
+   "to": "postgres",
+   "label": "Kiểm tra người tham gia rồi lưu message với key đã gắn tiền tố user",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "note": "Nếu vi phạm unique: cùng nội dung và session thì trả lại message cũ (replay), khác nội dung thì lỗi 409 MESSAGE_IDEMPOTENCY_CONFLICT.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/movie-match/movie-match.service.ts",
+     "line": 553,
+     "quote": "return await this.messageRepo.save("
+    }
+   ]
+  },
+  {
+   "from": "movie-match",
+   "to": "web",
+   "label": "Trả message đã lưu (hoặc bản replay)",
+   "kind": "return",
+   "mechanism": "http"
+  },
+  {
+   "from": "web",
+   "to": "movie-match",
+   "label": "GET /anon/sessions/:id/messages phân trang theo cursor seq",
+   "kind": "call",
+   "mechanism": "http"
+  },
+  {
+   "from": "movie-match",
+   "to": "postgres",
+   "label": "Kiểm tra người tham gia, đọc message có seq lớn hơn cursor",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/movie-match/movie-match.service.ts",
+     "line": 600,
+     "quote": "const rows = await this.messageRepo"
+    }
+   ]
+  },
+  {
+   "from": "web",
+   "to": "movie-match",
+   "label": "POST /anon/sessions/:id/reactions (emoji trong whitelist, throttle 60/phút)",
+   "kind": "call",
+   "mechanism": "http"
+  },
+  {
+   "from": "movie-match",
+   "to": "postgres",
+   "label": "Đọc session, xác nhận người gửi thuộc phiên ẩn danh đang Active",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/movie-match/movie-match.service.ts",
+     "line": 817,
+     "quote": "const session = await this.sessionRepo.findOneBy({ id: sessionId });"
+    }
+   ]
+  },
+  {
+   "from": "movie-match",
+   "to": "redis",
+   "label": "Publish MovieReactionSent cho cả hai user, không lưu DB",
+   "kind": "async",
+   "mechanism": "redis-pubsub",
+   "note": "publishRealtimeEvent bắt lỗi publish và chỉ logger.warn, nên reaction không làm request lỗi.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/movie-match/movie-match.service.ts",
+     "line": 637,
+     "quote": "publishRealtimeEvent(this.redis, this.logger, uid, envelope),"
+    }
+   ]
+  },
+  {
+   "from": "redis",
+   "to": "signaling-gateway",
+   "label": "Gateway PSUBSCRIBE realtime:user:* nhận envelope",
+   "kind": "async",
+   "mechanism": "redis-pubsub",
+   "evidence": [
+    {
+     "file": "apps/signaling-gateway/src/app/signaling.gateway.ts",
+     "line": 346,
+     "quote": ".psubscribe(REALTIME_USER_CHANNEL_PATTERN)"
+    }
+   ]
+  },
+  {
+   "from": "signaling-gateway",
+   "to": "web",
+   "label": "Đẩy movie reaction xuống socket room của từng user",
+   "kind": "async",
+   "mechanism": "socket",
+   "evidence": [
+    {
+     "file": "apps/signaling-gateway/src/app/signaling.gateway.ts",
+     "line": 332,
+     "quote": "this.server.local.to(userRoom(userId)).emit(envelope.event, envelope.data);"
+    }
+   ]
+  },
+  {
+   "from": "web",
+   "to": "movie-match",
+   "label": "POST /anon/sessions/:id/finish kết thúc phần xem, sang phase rating",
+   "kind": "call",
+   "mechanism": "http"
+  },
+  {
+   "from": "movie-match",
+   "to": "postgres",
+   "label": "Khóa session, tự hết hạn nếu quá giờ, lưu watchEndedAt và dừng playback",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "note": "Idempotent: nếu watchEndedAt đã có (hoặc phiên vừa bị lazy-expire sang Ended) thì không ghi và không publish lại.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/movie-match/movie-match.service.ts",
+     "line": 458,
+     "quote": "await manager.save(session);"
+    }
+   ]
+  },
+  {
+   "from": "movie-match",
+   "to": "redis",
+   "label": "Publish MovieStateChanged (isPlaying=false) cho cả hai user",
+   "kind": "async",
+   "mechanism": "redis-pubsub",
+   "note": "Publish nằm trong callback transaction, lỗi publish bị nuốt (chỉ log).",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/movie-match/movie-match.service.ts",
+     "line": 856,
+     "quote": "publishRealtimeEvent(this.redis, this.logger, uid, envelope),"
+    }
+   ]
+  },
+  {
+   "from": "redis",
+   "to": "signaling-gateway",
+   "label": "Gateway PSUBSCRIBE realtime:user:* nhận envelope",
+   "kind": "async",
+   "mechanism": "redis-pubsub",
+   "evidence": [
+    {
+     "file": "apps/signaling-gateway/src/app/signaling.gateway.ts",
+     "line": 346,
+     "quote": ".psubscribe(REALTIME_USER_CHANNEL_PATTERN)"
+    }
+   ]
+  },
+  {
+   "from": "signaling-gateway",
+   "to": "web",
+   "label": "Đẩy trạng thái playback đã dừng xuống cả hai client",
+   "kind": "async",
+   "mechanism": "socket",
+   "evidence": [
+    {
+     "file": "apps/signaling-gateway/src/app/signaling.gateway.ts",
+     "line": 332,
+     "quote": "this.server.local.to(userRoom(userId)).emit(envelope.event, envelope.data);"
+    }
+   ]
+  },
+  {
+   "from": "web",
+   "to": "movie-match",
+   "label": "GET /anon/current để phục hồi trạng thái, hết hạn lazy",
+   "kind": "call",
+   "mechanism": "http"
+  },
+  {
+   "from": "movie-match",
+   "to": "postgres",
+   "label": "Trong 1 transaction: lazy-expire, đọc phiên active hoặc queue entry",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/movie-match/movie-match.service.ts",
+     "line": 366,
+     "quote": "return this.dataSource.transaction(async (manager) => {"
+    }
+   ]
+  },
+  {
+   "from": "web",
+   "to": "movie-match",
+   "label": "DELETE /anon/current huỷ queue hoặc đóng phiên cho cả hai",
+   "kind": "call",
+   "mechanism": "http"
+  },
+  {
+   "from": "movie-match",
+   "to": "postgres",
+   "label": "Advisory lock, xoá queue, đặt phiên Ended/Cancelled, xoá active participant",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/movie-match/movie-match.service.ts",
+     "line": 407,
+     "quote": "await manager.save(session);"
+    }
+   ]
+  },
+  {
+   "from": "movie-match",
+   "to": "web",
+   "label": "Trả state Idle",
+   "kind": "return",
+   "mechanism": "http"
+  }
+ ],
+ "groups": [
+  {
+   "from": 8,
+   "to": 10,
+   "label": "Publish realtime best-effort",
+   "kind": "besteffort"
+  },
+  {
+   "from": 12,
+   "to": 13,
+   "label": "Transaction kết thúc phần xem",
+   "kind": "transaction"
+  },
+  {
+   "from": 14,
+   "to": 15,
+   "label": "Fanout realtime sau publish",
+   "kind": "besteffort"
+  },
+  {
+   "from": 17,
+   "to": 17,
+   "label": "Transaction đọc và lazy-expire",
+   "kind": "transaction"
+  },
+  {
+   "from": 19,
+   "to": 19,
+   "label": "Transaction dismiss phiên",
+   "kind": "transaction"
+  }
+ ],
+ "invariants": [
+  "Idempotency-Key được gắn tiền tố userId rồi lưu cùng message với ràng buộc unique, nên retry cùng nội dung trả lại message cũ thay vì tạo bản trùng.",
+  "Reaction chỉ là realtime: service không ghi DB, chỉ kiểm tra whitelist và tư cách người tham gia rồi publish qua Redis, gateway mới là nơi đẩy xuống socket.",
+  "endAnonWatch khóa dòng session (pessimistic_write) trước khi đổi watchEndedAt, nên hai người bấm kết thúc cùng lúc chỉ ghi và publish một lần.",
+  "dismissAnonCurrent lấy advisory lock rồi đóng phiên cho cả hai bên, để người kia không phải chờ vô hạn."
+ ],
+ "failureModes": [
+  {
+   "when": "Redis publish thất bại khi gửi reaction hoặc đổi playback",
+   "effect": "publishRealtimeEvent chỉ log cảnh báo, request vẫn thành công; client dựa vào polling GET /anon/current."
+  },
+  {
+   "when": "Gửi message khi phiên không còn Active",
+   "effect": "Trả lỗi 409 MovieMatchErrors.ENDED."
+  },
+  {
+   "when": "Idempotency-Key trùng nhưng nội dung hoặc session khác",
+   "effect": "Trả 409 MESSAGE_IDEMPOTENCY_CONFLICT."
+  },
+  {
+   "when": "Reaction ngoài whitelist",
+   "effect": "Trả 422 REACTION_INVALID, không publish."
+  },
+  {
+   "when": "Kết thúc phần xem: publish MovieStateChanged chạy trong callback transaction, trước khi commit",
+   "effect": "Suy luận: event có thể tới client trước commit; publish lỗi chỉ bị log, nhưng nếu commit sau đó lỗi thì event đã phát đi dù DB không đổi."
+  }
+ ],
+ "dataIssues": [],
+ "uncertain": []
+}

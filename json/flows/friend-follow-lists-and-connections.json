@@ -1,0 +1,274 @@
+{
+ "id": "friend-follow-lists-and-connections",
+ "title": "Danh sách follower/following và danh sách bạn bè",
+ "summary": "Trang hồ sơ và trang Bạn bè đọc số follow, danh sách follower/following theo cursor và danh sách bạn bè (ghép đôi hoặc follow 2 chiều). Friend giữ bảng follow/friendship nên tự truy vấn Postgres; hồ sơ công khai lấy từ user, còn quy tắc block lấy từ safety. Block 2 chiều với người xem làm hồ sơ biến thành 404 và lọc người bị chặn khỏi từng dòng.",
+ "caption": "Bốn lần đọc mới của friend: đều kiểm block qua safety, đọc follow/friendship trong Postgres rồi ghép hồ sơ công khai từ user.",
+ "participants": [
+  {
+   "id": "web",
+   "label": "Web client",
+   "kind": "client"
+  },
+  {
+   "id": "friend",
+   "label": "Friend",
+   "kind": "service"
+  },
+  {
+   "id": "safety",
+   "label": "Safety",
+   "kind": "service"
+  },
+  {
+   "id": "user",
+   "label": "User",
+   "kind": "service"
+  },
+  {
+   "id": "postgres",
+   "label": "PostgreSQL",
+   "kind": "infra"
+  }
+ ],
+ "steps": [
+  {
+   "from": "web",
+   "to": "friend",
+   "label": "GET /profiles/:profileUserId/follow-counts: lấy số follower/following (cả của chính mình)",
+   "kind": "call",
+   "mechanism": "http",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/friend/controllers/profile-social.controller.ts",
+     "line": 46,
+     "quote": "@Get(':profileUserId/follow-counts')"
+    }
+   ]
+  },
+  {
+   "from": "friend",
+   "to": "user",
+   "label": "Kiểm tra profile tồn tại (getByIdOrThrow)",
+   "kind": "call",
+   "mechanism": "di-call",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/friend/services/profile-social.service.ts",
+     "line": 398,
+     "quote": "await this.userService.getByIdOrThrow(profileUserId);"
+    }
+   ]
+  },
+  {
+   "from": "friend",
+   "to": "safety",
+   "label": "Nếu xem profile của người khác: kiểm block 2 chiều, bị block thì 404 gộp",
+   "kind": "call",
+   "mechanism": "di-call",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/friend/services/profile-social.service.ts",
+     "line": 400,
+     "quote": "await this.assertNotBlocked(viewerUserId, profileUserId);"
+    }
+   ]
+  },
+  {
+   "from": "friend",
+   "to": "postgres",
+   "label": "Đếm follow active theo hai chiều",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/friend/services/profile-social.service.ts",
+     "line": 406,
+     "quote": "this.followRepo.countBy({ followeeUserId: profileUserId, active: true }),"
+    }
+   ]
+  },
+  {
+   "from": "friend",
+   "to": "web",
+   "label": "Trả followerCount và followingCount",
+   "kind": "return",
+   "mechanism": "http"
+  },
+  {
+   "from": "web",
+   "to": "friend",
+   "label": "GET /profiles/:profileUserId/followers hoặc /following: lấy một trang danh sách",
+   "kind": "call",
+   "mechanism": "http",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/friend/controllers/profile-social.controller.ts",
+     "line": 61,
+     "quote": "@Get(':profileUserId/followers')"
+    },
+    {
+     "file": "apps/core-api/src/modules/friend/controllers/profile-social.controller.ts",
+     "line": 82,
+     "quote": "@Get(':profileUserId/following')"
+    }
+   ]
+  },
+  {
+   "from": "friend",
+   "to": "safety",
+   "label": "Lấy tập user bị block 2 chiều với người xem để loại khỏi trang",
+   "kind": "call",
+   "mechanism": "di-call",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/friend/services/profile-social.service.ts",
+     "line": 323,
+     "quote": "const blockedIds = await this.safetyService.getBlockedUserIds(viewerUserId);"
+    }
+   ],
+   "note": "Trước đó friend cũng gọi assertProfileReadable (getByIdOrThrow + assertNotBlocked) như ở follow-counts."
+  },
+  {
+   "from": "friend",
+   "to": "postgres",
+   "label": "Đọc profile_follows active theo keyset (last_followed_at, id), chỉ user active",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/friend/services/profile-social.service.ts",
+     "line": 318,
+     "quote": "const after = this.decodeFollowCursor(cursor);"
+    }
+   ]
+  },
+  {
+   "from": "friend",
+   "to": "user",
+   "label": "Lấy hồ sơ công khai của các user trong trang",
+   "kind": "call",
+   "mechanism": "di-call",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/friend/controllers/profile-social.controller.ts",
+     "line": 167,
+     "quote": "const profiles = await this.userService.findByIds("
+    }
+   ]
+  },
+  {
+   "from": "friend",
+   "to": "postgres",
+   "label": "Đánh dấu người xem đang theo dõi ai trong trang (isFollowing)",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/friend/controllers/profile-social.controller.ts",
+     "line": 173,
+     "quote": "const followedIds = await this.profileSocial.filterFollowedIds("
+    }
+   ]
+  },
+  {
+   "from": "friend",
+   "to": "web",
+   "label": "Trả trang {profile, followedAt, isFollowing} kèm cursor kế tiếp",
+   "kind": "return",
+   "mechanism": "http",
+   "note": "Cursor sai trả 400 FRIEND_CURSOR_INVALID."
+  },
+  {
+   "from": "web",
+   "to": "friend",
+   "label": "GET /friends/connections: lấy danh sách bạn bè",
+   "kind": "call",
+   "mechanism": "http",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/friend/friend.controller.ts",
+     "line": 85,
+     "quote": "@Get('friends/connections')"
+    }
+   ]
+  },
+  {
+   "from": "friend",
+   "to": "safety",
+   "label": "Lấy tập user bị block 2 chiều với mình",
+   "kind": "call",
+   "mechanism": "di-call",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/friend/services/profile-social.service.ts",
+     "line": 214,
+     "quote": "const blockedIds = await this.safetyService.getBlockedUserIds(userId);"
+    }
+   ]
+  },
+  {
+   "from": "friend",
+   "to": "postgres",
+   "label": "SQL gộp friendships và follow hai chiều, loại user bị khoá hoặc bị block (tối đa 500)",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/friend/services/profile-social.service.ts",
+     "line": 229,
+     "quote": "FROM friendships f"
+    },
+    {
+     "file": "apps/core-api/src/modules/friend/services/profile-social.service.ts",
+     "line": 234,
+     "quote": "FROM profile_follows a"
+    }
+   ]
+  },
+  {
+   "from": "friend",
+   "to": "user",
+   "label": "Lấy hồ sơ công khai của các đối phương",
+   "kind": "call",
+   "mechanism": "di-call",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/friend/friend.controller.ts",
+     "line": 95,
+     "quote": "const profiles = await this.userService.findByIds("
+    }
+   ]
+  },
+  {
+   "from": "friend",
+   "to": "web",
+   "label": "Trả danh sách bạn kèm cờ isFriend, isMutualFollow và since",
+   "kind": "return",
+   "mechanism": "http"
+  }
+ ],
+ "groups": [],
+ "invariants": [
+  "Cả bốn route đều lọc người có block 2 chiều với người xem: follow-counts/followers/following trả 404 khi chính profile bị block, danh sách và connections loại từng dòng bị block.",
+  "Chỉ follow còn active và user active mới xuất hiện; unfollow là xoá mềm nên không làm lệch số đếm.",
+  "Friend chỉ giữ id; hồ sơ công khai luôn do UserService ghép vào, nên danh sách không lộ trường ngoài PublicProfileDto."
+ ],
+ "failureModes": [
+  {
+   "when": "Profile không tồn tại hoặc bị block 2 chiều với người xem",
+   "effect": "follow-counts/followers/following trả 404 gộp (PROFILE_SOCIAL_PROFILE_NOT_AVAILABLE), không đọc bảng follow."
+  },
+  {
+   "when": "Cursor của followers/following sai định dạng",
+   "effect": "Trả 400 FRIEND_CURSOR_INVALID, không truy vấn trang."
+  },
+  {
+   "when": "Người dùng có hơn 500 bạn",
+   "effect": "friends/connections cắt ở 500 dòng mới nhất, không có phân trang."
+  }
+ ],
+ "dataIssues": [],
+ "uncertain": [
+  "Luồng này được thêm 2026-10-10 theo code HEAD d3cb28c bằng đọc mã trực tiếp; chưa qua bước kiểm toán độc lập của agent thứ hai như 71 flow trước."
+ ]
+}

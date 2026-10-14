@@ -1,0 +1,263 @@
+{
+ "id": "vip-purchase-iap",
+ "title": "Mua VIP và xác minh biên nhận IAP",
+ "summary": "Hai luồng tiền chạy qua cùng một sổ cái: mua VIP bằng diamond với Idempotency-Key, và nạp diamond qua IAP chỉ khi server tự hỏi Apple/Google. Economy phải ghi sổ, ví, VIP/biên nhận trong một giao dịch PostgreSQL để không trừ/cộng lệch.",
+ "caption": "Economy gom ghi sổ + ví + VIP (hoặc biên nhận IAP) vào một transaction PostgreSQL; biên nhận IAP được xác minh với store trước khi ghi sổ.",
+ "participants": [
+  {
+   "id": "web",
+   "label": "Web client",
+   "kind": "client"
+  },
+  {
+   "id": "economy",
+   "label": "Economy",
+   "kind": "service"
+  },
+  {
+   "id": "postgres",
+   "label": "PostgreSQL",
+   "kind": "infra"
+  },
+  {
+   "id": "external:app-store-google-play",
+   "label": "Apple / Google Play",
+   "kind": "external"
+  }
+ ],
+ "steps": [
+  {
+   "from": "web",
+   "to": "economy",
+   "label": "POST /economy/vip/purchase kèm Idempotency-Key và planId",
+   "kind": "call",
+   "mechanism": "http"
+  },
+  {
+   "from": "economy",
+   "to": "postgres",
+   "label": "Đọc gói VIP đang active (VipPlan) theo planId",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/economy/economy.service.ts",
+     "line": 377,
+     "quote": "const plan = await this.planRepo.findOneBy({ id: planId, active: true });"
+    }
+   ]
+  },
+  {
+   "from": "economy",
+   "to": "postgres",
+   "label": "LedgerService.record: tra khóa idempotency vip:{userId}:{key}, có rồi thì trả replay",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/economy/services/ledger.service.ts",
+     "line": 61,
+     "quote": ".findOneBy({ idempotencyKey: input.idempotencyKey });"
+    }
+   ]
+  },
+  {
+   "from": "economy",
+   "to": "postgres",
+   "label": "Mở transaction: ghi giao dịch, khóa ví FOR UPDATE, ghi ledger_entries, cập nhật số dư",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "note": "Kiểm tra đủ số dư nằm trong lúc khóa ví (WALLET_INSUFFICIENT_BALANCE), không ở đầu luồng.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/economy/services/ledger.service.ts",
+     "line": 74,
+     "quote": "const result = await this.dataSource.transaction((manager) =>"
+    },
+    {
+     "file": "apps/core-api/src/modules/economy/services/ledger.service.ts",
+     "line": 420,
+     "quote": ".setLock('pessimistic_write')"
+    }
+   ]
+  },
+  {
+   "from": "economy",
+   "to": "postgres",
+   "label": "Cùng transaction: gia hạn VIP trên ví, ghi OutboxEvent economy.vip.purchased",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/economy/economy.service.ts",
+     "line": 423,
+     "quote": "await manager.update("
+    },
+    {
+     "file": "apps/core-api/src/modules/economy/economy.service.ts",
+     "line": 428,
+     "quote": "await manager.save("
+    }
+   ]
+  },
+  {
+   "from": "economy",
+   "to": "web",
+   "label": "Trả transactionId, tier, vipExpiresAt, replayed",
+   "kind": "return",
+   "mechanism": "http"
+  },
+  {
+   "from": "web",
+   "to": "economy",
+   "label": "POST /economy/iap/verify kèm provider, productId, payload biên nhận",
+   "kind": "call",
+   "mechanism": "http"
+  },
+  {
+   "from": "economy",
+   "to": "postgres",
+   "label": "Đọc IapProduct active theo productId + provider để biết số diamond",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/economy/economy.service.ts",
+     "line": 300,
+     "quote": "const product = await this.productRepo.findOneBy({"
+    }
+   ]
+  },
+  {
+   "from": "economy",
+   "to": "external:app-store-google-play",
+   "label": "IapVerifier.verify: server tự xác minh biên nhận với store, không tin client",
+   "kind": "call",
+   "mechanism": "http",
+   "note": "Chỉ implementation 'store' gọi Apple/Google; 'dev' chấp nhận devTransactionId giả, 'disabled' từ chối.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/economy/economy.service.ts",
+     "line": 313,
+     "quote": "const verified = await this.iapVerifier.verify("
+    },
+    {
+     "file": "apps/core-api/src/modules/economy/clients/apple-receipt-api.adapter.ts",
+     "line": 100,
+     "quote": "response = await fetch(url, {"
+    }
+   ]
+  },
+  {
+   "from": "external:app-store-google-play",
+   "to": "economy",
+   "label": "Trả providerTransactionId đã xác minh",
+   "kind": "return",
+   "mechanism": "http"
+  },
+  {
+   "from": "economy",
+   "to": "postgres",
+   "label": "ledger.record, khóa iap:{provider}:{providerTransactionId}: ghi sổ và cộng ví",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/economy/economy.service.ts",
+     "line": 322,
+     "quote": "idempotencyKey: `iap:${provider}:${verified.providerTransactionId}`,"
+    },
+    {
+     "file": "apps/core-api/src/modules/economy/services/ledger.service.ts",
+     "line": 74,
+     "quote": "const result = await this.dataSource.transaction((manager) =>"
+    }
+   ]
+  },
+  {
+   "from": "economy",
+   "to": "postgres",
+   "label": "Cùng transaction: lưu IapReceipt gắn transactionId của bút toán",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/economy/economy.service.ts",
+     "line": 346,
+     "quote": "await manager.save("
+    }
+   ]
+  },
+  {
+   "from": "economy",
+   "to": "web",
+   "label": "Trả transactionId, diamonds, replayed",
+   "kind": "return",
+   "mechanism": "http"
+  }
+ ],
+ "groups": [
+  {
+   "from": 4,
+   "to": 5,
+   "label": "Transaction: sổ cái + ví + VIP + outbox",
+   "kind": "transaction"
+  },
+  {
+   "from": 9,
+   "to": 10,
+   "label": "Xác minh biên nhận với store",
+   "kind": "external"
+  },
+  {
+   "from": 11,
+   "to": 12,
+   "label": "Transaction: sổ cái + ví + biên nhận IAP",
+   "kind": "transaction"
+  }
+ ],
+ "invariants": [
+  "Gia hạn VIP và OutboxEvent được ghi trong callback withinTransaction của LedgerService, cùng transaction với ledger_entries và ví khóa FOR UPDATE: trừ diamond và cấp VIP thành công hoặc hỏng cùng nhau.",
+  "Khóa idempotency được tra trước khi mở transaction và còn được kiểm lại trong transaction, nên client gửi lại cùng Idempotency-Key chỉ nhận replay, không gia hạn lần hai.",
+  "IAP: verify với store phải xong trước ledger.record; khóa idempotency lấy từ providerTransactionId do server xác minh, nên gửi lại receipt không cộng diamond đôi.",
+  "IapReceipt được lưu trong cùng transaction với bút toán và mang transactionId, để không có biên nhận mồ côi hoặc bút toán không có biên nhận."
+ ],
+ "failureModes": [
+  {
+   "when": "Gói VIP không tồn tại hoặc không active",
+   "effect": "Ném VIP_PLAN_UNKNOWN (404) trước khi chạm sổ cái."
+  },
+  {
+   "when": "Số dư ví không đủ lúc trừ diamond mua VIP",
+   "effect": "Ledger ném WALLET_INSUFFICIENT_BALANCE; transaction rollback, không cấp VIP."
+  },
+  {
+   "when": "productId IAP không có trong catalog",
+   "effect": "Ném IAP_PRODUCT_UNKNOWN (400), không gọi store và không ghi sổ."
+  },
+  {
+   "when": "Verifier ở chế độ 'disabled' hoặc receipt không hợp lệ",
+   "effect": "Verifier ném lỗi (IAP_DISABLED 403 / IAP_RECEIPT_INVALID 400) trước mọi ghi sổ."
+  },
+  {
+   "when": "Hai request cùng khóa idempotency chạy đồng thời",
+   "effect": "Insert có orIgnore; request thua đọc lại bản thắng và trả replayed=true nếu cùng request hash."
+  }
+ ],
+ "dataIssues": [],
+ "uncertain": [],
+ "resolved": [
+  {
+   "id": "vip-purchase-iap#V15",
+   "status": "confirmed",
+   "finding": "OutboxRelayService relay OutboxEvent economy.vip.purchased qua EventBusPort (KafkaEventBusAdapter) lên topic litmatch.economy.events. Không có consumer/subscriber nào trong repo (chỉ định nghĩa subscribe ở adapter và spec); relay còn mặc định tắt (ECONOMY_OUTBOX_RELAY_ENABLED false).",
+   "original": "OutboxEvent economy.vip.purchased chỉ được xác nhận là ghi vào bảng trong transaction; bên nhận (relay/consumer) không nằm trong trace nên không khẳng định ở đây."
+  },
+  {
+   "id": "vip-purchase-iap#V17",
+   "status": "confirmed",
+   "finding": "Default code 'dev'; .env.example và k8s/base configmap 'dev'; deploy/production/compose.yml, deploy/hosted/core-api.env.example và CI local 'disabled'. Chế độ 'store' không profile nào trong repo bật. Giá trị runtime thật ngoài repo không biết được.",
+   "original": "Verifier thực chạy là 'dev', 'store' hay 'disabled' do biến môi trường ECONOMY_IAP_VERIFIER quyết định lúc chạy, nên đọc code không xác định được môi trường cụ thể có gọi Apple/Google hay không."
+  }
+ ]
+}

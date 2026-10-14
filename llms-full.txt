@@ -1,0 +1,1134 @@
+<!-- FILE: https://ducmanh001.github.io/litmatch-service-map/roadmap.md -->
+
+# Roadmap · Litmatch Service Map
+
+id: roadmap
+site: map
+updated: 2026-10-14; repo ducmanh001/litmatch @ d3cb28c
+
+"Roadmap" của trang này: **A. lộ trình đọc**, **B. quan sát và trạng thái xử lý** (việc còn mở của hệ thống, theo service map), **C. phạm vi phủ**, **D. lộ trình dự án** (nằm ở Atlas, có liên kết).
+Tệp máy đọc: [llms.txt](llms.txt) · [sitemap.xml](sitemap.xml) · [search-index.json](search-index.json) · [index.json](index.json).
+
+## A. Lộ trình đọc
+
+| Câu hỏi | Mở trước | Mở tiếp |
+|---|---|---|
+| Service A gọi service B để làm gì, nếu B vắng thì sao | service-map/<A>.md | service-map/<B>.md |
+| Kỹ thuật dùng ở một service (idempotency, outbox, lock, retry) | service-map/<service>-techniques.md | service-map/qa-idempotency.md, service-map/qa-consistency-concurrency.md |
+| Một luồng xuyên service từ đầu tới cuối | flows/index.md rồi flows/<id>.md | json/flows/<id>.json (bản có cấu trúc) |
+| Endpoint hoặc job này thuộc luồng nào | lookup/entrypoint-to-flow.md | flows/<id>.md |
+| Câu hỏi chéo (authn, authz, rate limit, webhook, realtime, token) | service-map/qa-*.md (xem service-map/index.md) | service-map/findings.md |
+| Có gì đáng lo, cái nào đã sửa | mục B của trang này | service-map/findings.md |
+| Bảng, cột, API chi tiết, FE | https://ducmanh001.github.io/litmatch-atlas-demo/pack/modules/index.md | https://ducmanh001.github.io/litmatch-atlas-demo/roadmap.md |
+| Tra theo tên | lookup/index.md | search.html, search-index.json |
+
+## B. Quan sát và trạng thái xử lý
+
+Chưa xử lý: 8/13. Còn lại đã sửa trong code (đối chiếu commit).
+
+| id | trạng thái | service | quan sát |
+|---|---|---|---|
+| V1 | fixed | signaling-gateway | Relay realtime có thể nhân bản event khi chạy nhiều pod? |
+| V6 | fixed | short-video | Đếm view video có race khi hai request song song? |
+| V7 | fixed | short-video | Sweeper video failed có thể bỏ đói video mới? |
+| V8 | confirmed | short-video | sort=ranked loại video chưa có rankScore dù comment nói fallback |
+| V10 | fixed | mini-game | Hủy mini-game có thể ghi đè kết quả đã chốt? |
+| V11 | fixed | economy | Kiểm bundleId Apple bị bỏ qua khi biến môi trường rỗng? |
+| V12 | confirmed | safety | getHiddenUserIds đọc mọi report vĩnh viễn? |
+| V13 | confirmed | matching | Lazy-expire lời mời có thể không được lưu? |
+| M1 | confirmed | media-server | Chú thích đầu file k8s của media-server lỗi thời so với cấu hình |
+| M2 | confirmed | matching, signaling-gateway | Sự kiện match.matched được khai báo nhưng không có nơi nào phát |
+| M3 | confirmed | movie-match, signaling-gateway | Movie Match ẩn danh phát realtime bên trong transaction, trái với tài liệu |
+| M4 | confirmed | auth, app-shell | AUTH_MIN_AGE và DEPLOY_ENVIRONMENT có trong .env.example nhưng không có schema hay mã đọc |
+| M5 | confirmed | signaling-gateway | Đặc tả AsyncAPI trong repo chỉ liệt kê 8 trong 26 sự kiện realtime |
+
+Chi tiết từng quan sát: [service-map/findings.md](service-map/findings.md).
+
+## C. Phạm vi phủ
+
+- 25 service/module, 72 luồng xuyên service (flows/index.md), 214 entrypoint (188 thuộc luồng xuyên service, 26 xử lý cục bộ trong một service, 0 chưa rõ).
+- Mỗi service có datasheet (collaborator kèm "vì sao" và "nếu vắng thì sao") và thẻ kỹ thuật.
+- Giới hạn: phân tích tĩnh từ code, không quan sát runtime; datasheet bảng/API/FE ở Atlas.
+
+## D. Lộ trình dự án
+
+Giai đoạn, thang quy mô S0-S8, ưu tiên P0-P2 và quyết định đã hoãn nằm ở [roadmap của Atlas](https://ducmanh001.github.io/litmatch-atlas-demo/roadmap.md) (mục B).
+
+Các trang cùng bộ: [Atlas](https://ducmanh001.github.io/litmatch-atlas-demo/) · [Service Map](https://ducmanh001.github.io/litmatch-service-map/) · [Error History](https://ducmanh001.github.io/litmatch-error-history/). Roadmap dự án và việc còn mở nằm ở [roadmap của Atlas](https://ducmanh001.github.io/litmatch-atlas-demo/roadmap.md).
+
+
+<!-- FILE: https://ducmanh001.github.io/litmatch-service-map/README.md -->
+
+# Litmatch Service Map
+
+Bản đồ 25 service của Litmatch: ai gọi ai và vì sao, 72 luồng xuyên service đã kiểm toán, kỹ thuật áp dụng, điểm đáng chú ý và trạng thái xử lý.
+
+Public on GitHub Pages: https://ducmanh001.github.io/litmatch-service-map/ . Nothing is hidden. Built 2026-10-14 from ducmanh001/litmatch @ d3cb28c by static analysis (no runtime observation).
+
+## For AI assistants
+
+- [llms.txt](llms.txt) → start here; [llms-full.txt](llms-full.txt) → indexes in one file
+- [roadmap.md](roadmap.md) → what to read for which task, and what is still open
+- [sitemap.xml](sitemap.xml), [search-index.json](search-index.json), [index.json](index.json)
+
+## For people
+
+- [index.html](index.html) main page · [sitemap.html](sitemap.html) · [roadmap.html](roadmap.html) · [search.html](search.html) · [view.html](view.html?f=roadmap.md) (renders any markdown file)
+
+Sister sites: Litmatch System Atlas https://ducmanh001.github.io/litmatch-atlas-demo/ · Litmatch Error History https://ducmanh001.github.io/litmatch-error-history/
+
+
+<!-- FILE: https://ducmanh001.github.io/litmatch-service-map/service-map/index.md -->
+
+# Index of service-map files
+
+id: service-map:index
+
+- [service-map:admin](admin.md): API back-office: RBAC, audit, điều phối module
+- [techniques:admin](admin-techniques.md): 17 technique cards.
+- [service-map:app-shell](app-shell.md): Health probe và hợp đồng capabilities
+- [techniques:app-shell](app-shell-techniques.md): 7 technique cards.
+- [service-map:auth](auth.md): Đăng nhập, phiên refresh và nâng cấp guest
+- [techniques:auth](auth-techniques.md): 23 technique cards.
+- [service-map:avatar](avatar.md): Catalog, sở hữu và trang bị avatar
+- [techniques:avatar](avatar-techniques.md): 9 technique cards.
+- [service-map:calling](calling.md): Vòng đời CallSession voice 2 người trên LiveKit
+- [techniques:calling](calling-techniques.md): 19 technique cards.
+- [service-map:discovery](discovery.md): Duyệt người dùng và Nearby ẩn vị trí
+- [techniques:discovery](discovery-techniques.md): 14 technique cards.
+- [service-map:economy](economy.md): Sổ cái kép, ví diamond, VIP, nạp tiền
+- [techniques:economy](economy-techniques.md): 29 technique cards.
+- [service-map:feed](feed.md): Bài đăng, bình luận, thả tim và Stories 24h
+- [techniques:feed](feed-techniques.md): 18 technique cards.
+- [service-map:friend](friend.md): Bạn bè, chat 1-1, streak, follow và mở chat từ profile
+- [techniques:friend](friend-techniques.md): 22 technique cards.
+- [service-map:gift](gift.md): Catalog quà và luồng tặng quà
+- [techniques:gift](gift-techniques.md): 12 technique cards.
+- [service-map:matching](matching.md): Hàng đợi ghép cặp, ticket, invite, MatchSession
+- [techniques:matching](matching-techniques.md): 31 technique cards.
+- [service-map:media-server](media-server.md): LiveKit SFU: cấu hình và deploy, không logic
+- [techniques:media-server](media-server-techniques.md): 6 technique cards.
+- [service-map:media](media.md): Presigned upload ảnh, xác thực asset
+- [techniques:media](media-techniques.md): 9 technique cards.
+- [service-map:mini-game](mini-game.md): Oẳn tù tì 2 người giữa bạn bè, move ẩn
+- [techniques:mini-game](mini-game-techniques.md): 13 technique cards.
+- [service-map:mood](mood.md): Trạng thái tâm trạng preset, hết hạn theo TTL
+- [techniques:mood](mood-techniques.md): 9 technique cards.
+- [service-map:movie-match](movie-match.md): Phiên xem chung 2 người, playback state
+- [techniques:movie-match](movie-match-techniques.md): 21 technique cards.
+- [service-map:notification](notification.md): Thông báo in-app và Web Push
+- [techniques:notification](notification-techniques.md): 14 technique cards.
+- [service-map:palm-match](palm-match.md): Ghép đôi ẩn danh theo hàng đợi, bói bài
+- [techniques:palm-match](palm-match-techniques.md): 14 technique cards.
+- [service-map:party-room](party-room.md): Phòng audio nhiều người, role và grace rớt mạng
+- [techniques:party-room](party-room-techniques.md): 28 technique cards.
+- [service-map:safety](safety.md): Report, block và luật ẩn người dùng
+- [techniques:safety](safety-techniques.md): 15 technique cards.
+- [service-map:short-video](short-video.md): Video ngắn: upload, duyệt, xem, tim, bình luận
+- [techniques:short-video](short-video-techniques.md): 18 technique cards.
+- [service-map:signaling-gateway](signaling-gateway.md): Fanout Socket.IO, quota kết nối, presence
+- [techniques:signaling-gateway](signaling-gateway-techniques.md): 22 technique cards.
+- [service-map:soul-match](soul-match.md): Phòng chat ẩn danh, rating, mutual-like
+- [techniques:soul-match](soul-match-techniques.md): 19 technique cards.
+- [service-map:support](support.md): Phiếu hỗ trợ và vòng đời xử lý
+- [techniques:support](support-techniques.md): 10 technique cards.
+- [service-map:user](user.md): Hồ sơ người dùng, quyền riêng tư, trạng thái
+- [techniques:user](user-techniques.md): 13 technique cards.
+- [qa:authn-model](qa-authn-model.md): JWT bearer không trạng thái, kiểm bằng JwtAuthGuard đăng ký toàn cục: route nào muốn mở phải gắn @Public(). Có ba đường vào (khách kèm toke…
+- [qa:authz-model](qa-authz-model.md): Kết hợp nhiều lớp và không có policy engine (không CASL, Casbin hay OPA trong package.json): RBAC cho vai trò (RolesGuard toàn cục + ma trậ…
+- [qa:token-lifecycle](qa-token-lifecycle.md): Access token ngắn hạn kèm refresh token xoay vòng: mỗi lần refresh phát token mới, dùng lại token cũ bị coi là bị lộ và thu hồi cả họ token…
+- [qa:webhook-security](qa-webhook-security.md): Mọi webhook công khai đều tự xác minh nguồn gửi trước khi làm gì: PayOS bằng HMAC-SHA256, Apple bằng JWS (kiểm chuỗi chứng chỉ x5c lên Appl…
+- [qa:media-access](qa-media-access.md): Quyền vào phòng media là capability token ngắn hạn do core-api ký (LiveKit grants theo vai trò); đổi vai trò giữa chừng thì core-api đẩy qu…
+- [qa:realtime-delivery](qa-realtime-delivery.md): Redis pub/sub fanout, at-most-once, không lưu và không replay, chỉ publish sau khi commit. Không dùng Redis Streams hay hàng đợi cho realti…
+- [qa:queues-and-workers](qa-queues-and-workers.md): Không có thư viện job queue chung (không BullMQ, Agenda hay pg-boss trong package.json). Ghép đôi dùng Redis sorted set chia shard (ZADD/ZP…
+- [qa:consistency-concurrency](qa-consistency-concurrency.md): Một PostgreSQL chung nên atomicity xuyên module dùng chung một transaction (truyền EntityManager), không saga hay 2PC. Race được chặn bằng …
+- [qa:idempotency](qa-idempotency.md): Hai lớp: client gửi Idempotency-Key (decorator @IdempotencyKey) và DB giữ chốt cuối bằng unique trên cột idempotency_key, nên retry mạng nh…
+- [qa:rate-limit-abuse](qa-rate-limit-abuse.md): Nhiều lớp: ThrottlerGuard toàn cục đứng trước JWT và @Throttle riêng cho route nhạy cảm; rate limit nghiệp vụ bằng Redis (Lua) dùng chung n…
+- [qa:api-contract](qa-api-contract.md): Hợp đồng REST sinh từ chính controller (OpenAPI) rồi sinh client TypeScript; DTO validate bằng class-validator; phân trang bằng cursor; sch…
+- [qa:observability](qa-observability.md): Metrics và tracing qua OpenTelemetry, log JSON bằng pino, probe liveness/readiness cho Kubernetes và audit log cho hành động nhạy cảm của a…
+- [service-map:findings](findings.md): 13 observations with status.
+
+
+<!-- FILE: https://ducmanh001.github.io/litmatch-service-map/flows/index.md -->
+
+# Cross-service flows (72), grouped
+
+id: flows:index
+
+## Vận hành (admin)
+
+- [admin-ban-and-refund](admin-ban-and-refund.md): Admin khoá tài khoản và hoàn giao dịch
+- [admin-broadcast-notification](admin-broadcast-notification.md): Admin gửi thông báo hàng loạt
+- [admin-dashboard](admin-dashboard.md): Bảng điều khiển admin
+- [admin-economy-inspect-and-config](admin-economy-inspect-and-config.md): Admin xem ví, giao dịch và chỉnh cấu hình kinh tế
+- [admin-gift-catalog](admin-gift-catalog.md): Admin quản lý danh mục quà
+- [admin-report-resolution](admin-report-resolution.md): Admin xử lý báo cáo vi phạm
+- [admin-room-management](admin-room-management.md): Admin xem và đóng phòng party
+- [admin-staff-and-permissions](admin-staff-and-permissions.md): Admin quản lý nhân sự và ma trận quyền
+- [admin-support-tickets](admin-support-tickets.md): Người dùng gửi ticket hỗ trợ, admin xử lý
+- [admin-user-lookup-and-unban](admin-user-lookup-and-unban.md): Admin tra cứu người dùng và mở khoá
+- [admin-video-moderation-queue](admin-video-moderation-queue.md): Admin duyệt hàng chờ video
+- [app-shell-health-and-readiness](app-shell-health-and-readiness.md): Kiểm tra sẵn sàng của core-api (readiness)
+
+## Danh tính
+
+- [auth-guest-login-and-socket](auth-guest-login-and-socket.md): Đăng nhập khách rồi mở kết nối realtime
+- [auth-guest-upgrade](auth-guest-upgrade.md): Nâng cấp tài khoản khách thành tài khoản thật
+- [auth-otp-login](auth-otp-login.md): Đăng nhập bằng OTP điện thoại
+- [auth-refresh-and-logout](auth-refresh-and-logout.md): Làm mới phiên và đăng xuất (cookie httpOnly + CSRF)
+- [auth-search-by-phone](auth-search-by-phone.md): Tìm người theo số điện thoại
+- [auth-social-login](auth-social-login.md): Đăng nhập bằng Apple, Google hoặc Facebook
+- [user-presence-read](user-presence-read.md): Xem trạng thái online của người dùng
+
+## Tiền tệ & quà
+
+- [avatar-buy-item](avatar-buy-item.md): Mua vật phẩm avatar bằng kim cương
+- [economy-outbox-relay](economy-outbox-relay.md): Relay outbox của Economy ra Kafka
+- [economy-reconciliation-and-startup-guards](economy-reconciliation-and-startup-guards.md): Đối soát sổ cái và guard khởi động của verifier
+- [gift-in-party-room](gift-in-party-room.md): Tặng quà trong phòng party
+- [gift-on-video](gift-on-video.md): Tặng quà cho tác giả video
+- [gift-to-profile-chat-gate](gift-to-profile-chat-gate.md): Tặng quà từ hồ sơ để mở chat (cổng quà)
+- [iap-store-notifications-and-refund-poll](iap-store-notifications-and-refund-poll.md): Hoàn tiền IAP: webhook Apple/Google và job quét refund
+- [payos-topup-webhook](payos-topup-webhook.md): Nạp kim cương qua PayOS và webhook
+- [vip-purchase-iap](vip-purchase-iap.md): Mua VIP và xác minh biên nhận IAP
+
+## Ghép đôi & gọi
+
+- [calling-end-and-ticker](calling-end-and-ticker.md): Kết thúc cuộc gọi và đồng hồ cuộc gọi
+- [calling-like-after-call](calling-like-after-call.md): Like sau cuộc gọi để thành bạn
+- [discovery-browse-and-nearby](discovery-browse-and-nearby.md): Khám phá người dùng và gần đây
+- [friend-direct-call](friend-direct-call.md): Gọi trực tiếp cho bạn bè
+- [matching-invite-accept](matching-invite-accept.md): Chấp nhận lời mời và tạo phiên ghép
+- [matching-invite-create](matching-invite-create.md): Mời chơi có chủ đích: tạo và xem lời mời
+- [matching-invite-decline-cancel](matching-invite-decline-cancel.md): Từ chối hoặc huỷ lời mời
+- [matching-sweeper-jobs](matching-sweeper-jobs.md): Job dọn lời mời và vé ghép đôi hết hạn
+- [matching-ticket-status-cancel-speedup](matching-ticket-status-cancel-speedup.md): Xem, huỷ và tăng tốc vé ghép đôi
+- [matching-to-call](matching-to-call.md): Từ hàng đợi ghép đôi đến cuộc gọi thoại
+- [mini-game-session](mini-game-session.md): Mini game giữa hai bạn bè
+- [mood-status-visibility](mood-status-visibility.md): Trạng thái tâm trạng và quyền xem
+- [movie-match-anon-chat-finish-reactions](movie-match-anon-chat-finish-reactions.md): Xem phim ẩn danh: chat, reaction và kết thúc
+- [movie-match-anonymous](movie-match-anonymous.md): Xem phim chung ẩn danh: hàng đợi, đồng bộ playback, rating
+- [movie-match-friend-session](movie-match-friend-session.md): Xem phim chung giữa bạn bè
+- [palm-match-queue-and-rating](palm-match-queue-and-rating.md): Palm Match: vào hàng, lật và đánh giá
+- [soul-match-room-reads-and-reveal](soul-match-room-reads-and-reveal.md): Đọc phòng Soul Match và lộ hồ sơ sau mutual-like
+- [soul-match-send-message](soul-match-send-message.md): Gửi tin nhắn ẩn danh trong phòng Soul Match
+- [soul-match-session](soul-match-session.md): Phòng chat ẩn danh Soul Match và mutual-like
+
+## Xã hội & nội dung
+
+- [feed-comment-with-notification](feed-comment-with-notification.md): Bình luận bài kèm thông báo
+- [feed-delete-post](feed-delete-post.md): Xoá bài và bình luận
+- [feed-post-with-image](feed-post-with-image.md): Đăng bài kèm ảnh: upload presigned rồi gắn asset
+- [feed-reaction-with-notification](feed-reaction-with-notification.md): Reaction bài kèm thông báo
+- [feed-read-posts](feed-read-posts.md): Đọc feed và bài đăng
+- [friend-follow-lists-and-connections](friend-follow-lists-and-connections.md): Danh sách follower/following và danh sách bạn bè
+- [friend-list-and-conversation-reads](friend-list-and-conversation-reads.md): Danh sách bạn, đọc tin và streak
+- [friend-open-conversation-from-profile](friend-open-conversation-from-profile.md): Mở chat từ hồ sơ trước khi là bạn
+- [friend-profile-follow-and-actions](friend-profile-follow-and-actions.md): Theo dõi và xem hành động khả dụng trên hồ sơ
+- [friend-streak-warning-job](friend-streak-warning-job.md): Job cảnh báo streak sắp mất
+- [message-push-notification](message-push-notification.md): Tin nhắn bạn bè: realtime và Web Push
+- [short-video-browse-and-detail](short-video-browse-and-detail.md): Duyệt video ngắn, xem chi tiết, view và reaction
+- [short-video-comments](short-video-comments.md): Bình luận video ngắn
+- [short-video-publish-moderation](short-video-publish-moderation.md): Đăng video ngắn và duyệt bởi admin
+- [short-video-ranking-and-sweeper-jobs](short-video-ranking-and-sweeper-jobs.md): Job tính điểm xếp hạng và dọn video lỗi
+- [short-video-report](short-video-report.md): Báo cáo video vi phạm
+- [story-create-with-image](story-create-with-image.md): Đăng story kèm ảnh và dọn story hết hạn
+- [story-reply-to-dm](story-reply-to-dm.md): Trả lời story thành tin nhắn
+- [story-ring-view-and-viewers](story-ring-view-and-viewers.md): Vòng story, xem story và người đã xem
+
+## Phòng party & an toàn
+
+- [party-room-detail-and-comments](party-room-detail-and-comments.md): Xem phòng party và bình luận trong phòng
+- [party-room-leave-and-role-change](party-room-leave-and-role-change.md): Rời phòng và đổi vai trò thành viên
+- [party-room-lifecycle](party-room-lifecycle.md): Vòng đời phòng party với LiveKit
+- [party-room-speaker-invite](party-room-speaker-invite.md): Mời lên nói và phản hồi lời mời
+- [safety-block-and-unblock](safety-block-and-unblock.md): Chặn và bỏ chặn người dùng
+- [safety-report-and-trust-score](safety-report-and-trust-score.md): Báo cáo người dùng và trừ điểm tin cậy
+
+## Coverage
+
+{"total":214,"flow":188,"local":26,"cross-open":0,"unverified":0}
+
+Entrypoints confirmed as local-only (no cross-service coordination):
+- user: GET /users/me — Đọc một dòng users bằng userRepo.findOneBy trong UserService.getByIdOrThrow, 404 nếu không có. Chỉ bảng của module user…
+- user: PATCH /users/me — Đọc User theo id rồi gộp các trường hồ sơ, kiểm tra tuổi/khoảng seeking thuần hàm và userRepo.save vào bảng user của ch…
+- user: GET /users/me/privacy — Đọc một dòng privacy_settings của user (findOneBy) rồi dựng DTO với DEFAULT_PRIVACY_SETTINGS nếu chưa có. Chỉ bảng của …
+- user: PUT /users/me/privacy — Chỉ upsert bảng PrivacySetting của user theo userId rồi đọc lại bằng findOneBy; không gọi module/provider khác, không p…
+- user: GET /users/:id — Chỉ findOneBy User theo id rồi map PublicProfileDto; chỉ đọc bảng của user.
+- app-shell: GET /health — Alias gọi live() trả { status: 'ok', uptimeSeconds } từ process.uptime(); không chạm DB/Redis/dependency.
+- app-shell: GET /health/live — Handler thuần trả status ok và uptime từ process.uptime(); không gọi ReadinessService, Postgres hay Redis.
+- app-shell: GET /capabilities — Chỉ suy ra CapabilitiesDto từ ConfigService (env) và danh sách bảo trì trong bộ nhớ; không gọi provider thật, DB hay Re…
+- economy: GET /economy/wallet — Chỉ walletRepo.findOneBy Wallet của user trong DB economy, trả 0 nếu chưa có ví; không ghi ledger hay gọi service khác.
+- economy: GET /economy/iap/products — Chỉ productRepo.find IapProduct active sắp theo diamonds trong DB economy; không verify receipt với Apple/Google.
+- economy: GET /economy/payos/packages — Chỉ packageRepo.find các PayosPackage active theo amountVnd tăng dần trong DB economy rồi map view; không gọi payOS.
+- economy: GET /economy/vip/plans — Chỉ planRepo.find VipPlan active sắp theo priceDiamond trong DB economy, rồi map view.
+- economy: GET /economy/transactions — Chỉ SELECT ledger_transactions/ledger_entries/ledger_accounts của economy với cursor pagination; read-only, không ghi l…
+- mini-game: POST /mini-game/sessions/:id/cancel — Chỉ đọc MiniGameSession qua sessionRepo rồi trong một transaction update status=Cancelled và xoá MiniGameActiveParticip…
+- mini-game: GET /mini-game/sessions/:id — Chỉ đọc một dòng mini_game_sessions bằng sessionRepo.findOneBy rồi kiểm tra participant; 404 gộp nếu không phải thành v…
+- notification: GET /notifications — Query builder trên bảng notifications của user, phân trang cursor theo seq, giải mã cursor bằng helper thuần. Chỉ đọc D…
+- notification: GET /notifications/unread-count — Chỉ đếm Notification có readAt IS NULL của user bằng query builder trên bảng của notification; read-only.
+- notification: DELETE /notifications/web-push/subscription — Chỉ xoá hàng WebPushSubscription theo userId+endpoint trong DB của notification; không gửi push hay gọi provider.
+- notification: POST /notifications/:notificationId/read — Đọc bảng notifications theo id, kiểm tra chủ sở hữu rồi update readAt; idempotent. Chỉ chạm bảng của module notificatio…
+- avatar: GET /avatar/catalog — Chỉ find AvatarAsset active theo slot tuỳ chọn, sắp sortOrder/code; read-only trên bảng của avatar, không gọi EconomySe…
+- avatar: GET /avatar/me/items — Đọc user_avatar_items của user rồi avatar_assets theo id (findBy + find). Chỉ bảng của module avatar, không gọi Economy…
+- avatar: GET /avatar/me — Đọc user_avatar_config và avatar_assets của chính module avatar; lần đầu lazy-init ghi user_avatar_items + user_avatar_…
+- avatar: GET /avatar/users/:userId — Chỉ đọc user_avatar_config và avatar_assets (resolveLayers) của module avatar; chưa có config thì trả layers rỗng tại c…
+- signaling-gateway: GET /health — Liveness thuần: trả status ok và process.uptime(), không chạm Redis hay service nào.
+- signaling-gateway: GET /health/live — Liveness chỉ trả { status: ok, uptimeSeconds } từ process.uptime(), không chạm Redis, DB hay service nào khác.
+- signaling-gateway: GET /health/ready — Chỉ đọc cờ in-memory signaling.isReady() và redisAdapter.isReady() của chính gateway rồi trả 200/503; không gọi I/O hay…
+
+
+<!-- FILE: https://ducmanh001.github.io/litmatch-service-map/service-map/findings.md -->
+
+# Observations raised while reading the code (service map)
+
+id: service-map:findings
+status updated for fixes through commit d3cb28c
+
+### V1: Relay realtime có thể nhân bản event khi chạy nhiều pod?
+
+status: fixed; services: signaling-gateway
+
+ĐÃ SỬA (commit 40e2aa3): relay() giờ emit bằng server.local.to(room) nên mỗi pod chỉ phát cho socket của mình; test hai pod chạy @socket.io/redis-adapter thật. Đánh đổi: pod mất subscription thì socket của pod đó không nhận (ghi trong docs/services/realtime-gateway.md). Quan sát gốc ngày 09/10: Trùng event có thể xảy ra: mỗi pod PSUBSCRIBE realtime:user:* rồi relay() gọi server.to(userRoom(userId)).emit (không phải server.local) trong khi redis-adapter gắn vào cùng Server qua CorsIoAdapter, nên N pod emit N lần và client có thể nhận N lần. Không test nào assert số lần nhận qua relay; docs § 6 nói "chỉ emit cho room cục bộ" lệch với code.
+
+evidence: apps/signaling-gateway/src/app/signaling.gateway.ts:332, apps/signaling-gateway/src/main.ts:46, docs/services/realtime-gateway.md:87
+
+### V6: Đếm view video có race khi hai request song song?
+
+status: fixed; services: short-video
+
+ĐÃ SỬA (commit 4f0ae66): Đếm view dùng INSERT ... ON CONFLICT DO NOTHING rồi khoá hàng (pessimistic_write), không còn đường save()+catch unique violation. Quan sát gốc ngày 09/10: Insert video_views được unique (videoId, viewerId) chặn, nhưng cộng viewCount không có guard: transaction đọc view bằng findOne không khoá, tính shouldQualifyNow = nowQualifies && !view.qualified, update không điều kiện qualified=false rồi increment. Hai request song song của cùng viewer cùng đọc qualified=false đều tăng viewCount, nên có race.
+
+evidence: apps/core-api/src/modules/short-video/short-video.service.ts:288, apps/core-api/src/modules/short-video/short-video.service.ts:298, apps/core-api/src/modules/short-video/entities/video-view.entity.ts:16
+
+### V7: Sweeper video failed có thể bỏ đói video mới?
+
+status: fixed; services: short-video
+
+ĐÃ SỬA (commit 4f0ae66): Thêm cột videos.storage_cleaned_at: hàng đã dọn xong rời hàng đợi, hàng xoá lỗi bị đẩy về cuối nên không còn lặp 200 hàng cũ nhất. Quan sát gốc ngày 09/10: Mỗi tick lấy tối đa VIDEO_SWEEP_BATCH = 200 video failed, ORDER BY updated_at ASC, id ASC, và chỉ gọi storagePort.delete; không có cờ, không xoá, không đổi status hay updated_at sau khi xử lý. Vậy cùng 200 hàng cũ nhất bị đọc lại mỗi tick; nếu backlog failed >200 thì hàng mới hơn không bao giờ vào batch này (chỉ được thử một lần ở nhánh expired lúc chuyển sang failed).
+
+evidence: apps/core-api/src/modules/short-video/jobs/video-sweeper.service.ts:91, apps/core-api/src/modules/short-video/jobs/video-sweeper.service.ts:101
+
+### V8: sort=ranked loại video chưa có rankScore dù comment nói fallback
+
+status: confirmed; services: short-video
+
+Lệch giữa comment và code: VideoRankingService nói fallback sort=recent khi rankScore IS NULL, nhưng listing với sort=ranked thêm qb.andWhere('v.rankScore IS NOT NULL') và chỉ order theo rankScore, nên video mới chưa được job tính điểm bị loại khỏi danh sách ranked thay vì rơi về thứ tự recent.
+
+evidence: apps/core-api/src/modules/short-video/jobs/video-ranking.service.ts:23, apps/core-api/src/modules/short-video/short-video.service.ts:221
+
+### V10: Hủy mini-game có thể ghi đè kết quả đã chốt?
+
+status: fixed; services: mini-game
+
+ĐÃ SỬA (commit 8799483): Huỷ ván là UPDATE có điều kiện status = waiting_moves; thua race thì trả 409 hoặc trạng thái cancelled idempotent, không ghi đè ván đã resolved. Quan sát gốc ngày 09/10: cancelSession đọc session và kiểm tra status ngoài transaction (getSessionForParticipant), rồi trong transaction chỉ update theo id, không WHERE status và không khoá dòng. Cancel đua với resolve có thể ghi đè 'resolved' bằng 'cancelled'. Chiều submitMove thì có WHERE status = WaitingMoves.
+
+evidence: apps/core-api/src/modules/mini-game/mini-game.service.ts:252, apps/core-api/src/modules/mini-game/mini-game.service.ts:194, apps/core-api/src/modules/mini-game/mini-game.service.ts:160
+
+### V11: Kiểm bundleId Apple bị bỏ qua khi biến môi trường rỗng?
+
+status: fixed; services: economy
+
+ĐÃ SỬA (commit 03ab95e/fb29385): Env validation bắt buộc ECONOMY_APPLE_BUNDLE_ID khi IAP verifier là store, hoặc khi webhook verifier là store và đã điền Apple Root CA; để trống ở các chế độ còn lại vẫn bỏ qua kiểm bundleId. Docs ghi rõ kiểm receipt hiện chưa so bundle_id. Quan sát gốc ngày 09/10: Controller bỏ qua việc đối chiếu bundleId khi ECONOMY_APPLE_BUNDLE_ID rỗng (if (expectedBundleId && ...)). Mặc định rỗng: Joi default(''), .env.example và k8s/base configmap đều để ''. deploy/production/compose.yml không set biến này nên cũng ra mặc định ''. Giá trị thật ngoài repo không biết được.
+
+evidence: apps/core-api/src/modules/economy/webhooks/economy-webhooks.controller.ts:69, apps/core-api/src/config/env.validation.ts:439, k8s/base/core-api/configmap.yaml:94
+
+### V12: getHiddenUserIds đọc mọi report vĩnh viễn?
+
+status: confirmed; services: safety
+
+getHiddenUserIds lấy mọi report 2 chiều trong bảng reports không có điều kiện thời gian (comment ghi ẩn vĩnh viễn). canPair dùng cutoff = now - SAFETY_REMATCH_COOLDOWN_DAYS và lọc createdAt >= cutoff cho report gần đây. Hai hàm khác cửa sổ thời gian.
+
+evidence: apps/core-api/src/modules/safety/safety.service.ts:273, apps/core-api/src/modules/safety/safety.service.ts:262, apps/core-api/src/modules/safety/safety.service.ts:301
+
+### V13: Lazy-expire lời mời có thể không được lưu?
+
+status: confirmed; services: matching
+
+assertNotExpired chỉ gán invite.status = Expired trong bộ nhớ rồi throw DomainException (409); decline/cancel/accept gọi nó bên trong dataSource.transaction nên throw làm rollback, Expired không được lưu. Chỉ InviteSweeperService (UPDATE ... SET status = Expired) ghi DB và giải phóng uq_match_invites_pending_pair.
+
+evidence: apps/core-api/src/modules/matching/services/invite.service.ts:625, apps/core-api/src/modules/matching/services/invite.service.ts:245, apps/core-api/src/modules/matching/jobs/invite-sweeper.service.ts:65
+
+### M1: Chú thích đầu file k8s của media-server lỗi thời so với cấu hình
+
+status: confirmed; services: media-server
+
+Đầu k8s/base/media-server/deployment.yaml vẫn viết 'CHƯA chọn phương án nào ở đây vì cần ADR', nhưng thân file đã đặt hostNetwork: true theo ADR 0005. Chú thích đầu file cần cập nhật để khỏi gây hiểu nhầm là mạng RTC chưa được chốt.
+
+evidence: k8s/base/media-server/deployment.yaml:11, k8s/base/media-server/deployment.yaml:58
+
+### M2: Sự kiện match.matched được khai báo nhưng không có nơi nào phát
+
+status: confirmed; services: matching, signaling-gateway
+
+RealtimeEvents.MatchMatched (match.matched) và kiểu MatchMatchedEventData có trong libs/common-dtos nhưng không có chỗ phát nào trong core-api và web không lắng nghe; luồng thật phát match.confirmed. Comment trong matching.metrics.ts vẫn nhắc match.matched. 25 sự kiện còn lại đều có chỗ phát.
+
+evidence: libs/common-dtos/src/lib/realtime-events.ts:42, apps/core-api/src/modules/matching/matching.metrics.ts:31
+
+### M3: Movie Match ẩn danh phát realtime bên trong transaction, trái với tài liệu
+
+status: confirmed; services: movie-match, signaling-gateway
+
+updateAnonState và endAnonWatch gọi publishAnonPlayback ngay trong dataSource.transaction (sau manager.save, trước COMMIT), còn docs/services/realtime-gateway.md ghi publish luôn chạy sau khi transaction commit. Hậu quả thực tế nhỏ vì đây là bước cuối của transaction và event là best-effort, nhưng quy tắc publish-sau-commit không được giữ ở đây.
+
+evidence: apps/core-api/src/modules/movie-match/movie-match.service.ts:438, apps/core-api/src/modules/movie-match/movie-match.service.ts:459, docs/services/realtime-gateway.md:35
+
+### M4: AUTH_MIN_AGE và DEPLOY_ENVIRONMENT có trong .env.example nhưng không có schema hay mã đọc
+
+status: confirmed; services: auth, app-shell
+
+Hai biến được đặt trong .env.example (AUTH_MIN_AGE còn được nhắc ở dòng chú thích phía dưới) nhưng không có trong schema Joi của core-api hay signaling-gateway và không có mã nào đọc; có thể là cấu hình mồ côi hoặc chưa nối dây.
+
+evidence: .env.example:121, .env.example:75
+
+### M5: Đặc tả AsyncAPI trong repo chỉ liệt kê 8 trong 26 sự kiện realtime
+
+status: confirmed; services: signaling-gateway
+
+specs/realtime.asyncapi.yaml khai 8 message và không có schema payload (ghi rõ payload nằm ở kiểu nguồn), trong khi libs/common-dtos khai 26 sự kiện kèm kiểu payload đầy đủ.
+
+evidence: specs/realtime.asyncapi.yaml:18, libs/common-dtos/src/lib/realtime-events.ts:37
+
+
+<!-- FILE: https://ducmanh001.github.io/litmatch-service-map/lookup/entrypoint-to-flow.md -->
+
+# Lookup: entrypoint to flow
+
+id: lookup:entrypoint-to-flow
+
+Every REST endpoint, webhook, job and consumer of the service map and the cross-service flow(s) that cover it. "local" means the entrypoint is handled inside one service.
+
+| service | entrypoint | kind | status | flows |
+|---|---|---|---|---|
+| auth | POST /auth/guest | rest | flow | ../flows/auth-guest-login-and-socket.md |
+| auth | POST /auth/otp/request | rest | flow | ../flows/auth-otp-login.md |
+| auth | POST /auth/otp/verify | rest | flow | ../flows/auth-otp-login.md |
+| auth | POST /auth/social | rest | flow | ../flows/auth-social-login.md |
+| auth | POST /auth/refresh | rest | flow | ../flows/auth-refresh-and-logout.md |
+| auth | POST /auth/logout | rest | flow | ../flows/auth-refresh-and-logout.md |
+| auth | POST /auth/upgrade/otp | rest | flow | ../flows/auth-guest-upgrade.md |
+| auth | POST /auth/upgrade/social | rest | flow | ../flows/auth-guest-upgrade.md |
+| auth | GET /auth/search-by-phone | rest | flow | ../flows/auth-search-by-phone.md |
+| user | GET /users/me | rest | local |  |
+| user | PATCH /users/me | rest | local |  |
+| user | GET /users/me/privacy | rest | local |  |
+| user | PUT /users/me/privacy | rest | local |  |
+| user | GET /users/:id/presence | rest | flow | ../flows/user-presence-read.md |
+| user | GET /users/:id | rest | local |  |
+| support | POST /support/tickets | rest | flow | ../flows/admin-support-tickets.md |
+| support | GET /support/tickets/me | rest | flow | ../flows/admin-support-tickets.md |
+| app-shell | GET /health | rest | local |  |
+| app-shell | GET /health/live | rest | local |  |
+| app-shell | GET /health/ready | rest | flow | ../flows/app-shell-health-and-readiness.md |
+| app-shell | GET /capabilities | rest | local |  |
+| admin | GET /admin/dashboard | rest | flow | ../flows/admin-dashboard.md |
+| admin | GET /admin/users | rest | flow | ../flows/admin-user-lookup-and-unban.md |
+| admin | GET /admin/users/:id | rest | flow | ../flows/admin-user-lookup-and-unban.md |
+| admin | POST /admin/users/:id/ban | rest | flow | ../flows/admin-ban-and-refund.md |
+| admin | POST /admin/users/:id/unban | rest | flow | ../flows/admin-user-lookup-and-unban.md |
+| admin | GET /admin/reports | rest | flow | ../flows/admin-report-resolution.md |
+| admin | POST /admin/reports/:id/resolve | rest | flow | ../flows/admin-report-resolution.md |
+| admin | POST /admin/reports/:id/dismiss | rest | flow | ../flows/admin-report-resolution.md |
+| admin | GET /admin/videos/pending | rest | flow | ../flows/admin-video-moderation-queue.md |
+| admin | GET /admin/videos/published | rest | flow | ../flows/admin-video-moderation-queue.md |
+| admin | POST /admin/videos/:id/approve | rest | flow | ../flows/short-video-publish-moderation.md |
+| admin | POST /admin/videos/:id/reject | rest | flow | ../flows/admin-video-moderation-queue.md |
+| admin | POST /admin/videos/:id/remove | rest | flow | ../flows/admin-video-moderation-queue.md |
+| admin | POST /admin/rooms/:id/close | rest | flow | ../flows/admin-room-management.md |
+| admin | GET /admin/rooms | rest | flow | ../flows/admin-room-management.md |
+| admin | GET /admin/support/tickets | rest | flow | ../flows/admin-support-tickets.md |
+| admin | PATCH /admin/support/tickets/:id | rest | flow | ../flows/admin-support-tickets.md |
+| admin | GET /admin/gifts | rest | flow | ../flows/admin-gift-catalog.md |
+| admin | POST /admin/gifts | rest | flow | ../flows/admin-gift-catalog.md |
+| admin | PATCH /admin/gifts/:id | rest | flow | ../flows/admin-gift-catalog.md |
+| admin | GET /admin/economy/wallet/:userId | rest | flow | ../flows/admin-economy-inspect-and-config.md |
+| admin | GET /admin/economy/users/:userId/transactions | rest | flow | ../flows/admin-economy-inspect-and-config.md |
+| admin | POST /admin/economy/transactions/:id/refund | rest | flow | ../flows/admin-ban-and-refund.md |
+| admin | GET /admin/config/economy-catalog | rest | flow | ../flows/admin-economy-inspect-and-config.md |
+| admin | PATCH /admin/config/iap-products/:productId | rest | flow | ../flows/admin-economy-inspect-and-config.md |
+| admin | PATCH /admin/config/vip-plans/:id | rest | flow | ../flows/admin-economy-inspect-and-config.md |
+| admin | POST /admin/notifications/broadcast | rest | flow | ../flows/admin-broadcast-notification.md |
+| admin | GET /admin/permissions | rest | flow | ../flows/admin-staff-and-permissions.md |
+| admin | PATCH /admin/permissions/:role/:permission | rest | flow | ../flows/admin-staff-and-permissions.md |
+| admin | GET /admin/staff | rest | flow | ../flows/admin-staff-and-permissions.md |
+| admin | PATCH /admin/staff/:id/role | rest | flow | ../flows/admin-staff-and-permissions.md |
+| economy | GET /economy/wallet | rest | local |  |
+| economy | GET /economy/iap/products | rest | local |  |
+| economy | GET /economy/payos/packages | rest | local |  |
+| economy | POST /economy/payos/orders | rest | flow | ../flows/payos-topup-webhook.md |
+| economy | GET /economy/payos/orders/:orderId | rest | flow | ../flows/payos-topup-webhook.md |
+| economy | GET /economy/vip/plans | rest | local |  |
+| economy | POST /economy/iap/verify | rest | flow | ../flows/vip-purchase-iap.md |
+| economy | POST /economy/vip/purchase | rest | flow | ../flows/vip-purchase-iap.md |
+| economy | GET /economy/transactions | rest | local |  |
+| economy | POST /economy/webhooks/apple | webhook | flow | ../flows/iap-store-notifications-and-refund-poll.md |
+| economy | POST /economy/webhooks/google/rtdn | webhook | flow | ../flows/iap-store-notifications-and-refund-poll.md |
+| economy | POST /economy/webhooks/payos | webhook | flow | ../flows/payos-topup-webhook.md |
+| economy | IapRefundPollService.onApplicationBootstrap | job | flow | ../flows/iap-store-notifications-and-refund-poll.md |
+| economy | OutboxRelayService.onApplicationBootstrap | job | flow | ../flows/economy-outbox-relay.md |
+| economy | ReconciliationService.onApplicationBootstrap | job | flow | ../flows/economy-reconciliation-and-startup-guards.md |
+| economy | DevIapVerifier.onApplicationBootstrap | job | flow | ../flows/economy-reconciliation-and-startup-guards.md |
+| economy | DevAppleNotificationVerifier.onApplicationBootstrap | job | flow | ../flows/economy-reconciliation-and-startup-guards.md |
+| economy | DevGoogleRtdnVerifier.onApplicationBootstrap | job | flow | ../flows/economy-reconciliation-and-startup-guards.md |
+| gift | GET /gifts | rest | flow | ../flows/admin-gift-catalog.md |
+| gift | POST /party/rooms/:roomId/gifts | rest | flow | ../flows/gift-in-party-room.md |
+| gift | POST /videos/:videoId/gifts | rest | flow | ../flows/gift-on-video.md |
+| gift | POST /profiles/:profileUserId/gifts | rest | flow | ../flows/gift-to-profile-chat-gate.md |
+| matching | POST /matching/invites | rest | flow | ../flows/matching-invite-create.md |
+| matching | GET /matching/invites | rest | flow | ../flows/matching-invite-create.md |
+| matching | GET /matching/invites/:id | rest | flow | ../flows/matching-invite-create.md |
+| matching | POST /matching/invites/:id/accept | rest | flow | ../flows/matching-invite-accept.md |
+| matching | POST /matching/invites/:id/decline | rest | flow | ../flows/matching-invite-decline-cancel.md |
+| matching | POST /matching/invites/:id/cancel | rest | flow | ../flows/matching-invite-decline-cancel.md |
+| matching | POST /matching/tickets | rest | flow | ../flows/matching-to-call.md |
+| matching | GET /matching/tickets/current | rest | flow | ../flows/matching-ticket-status-cancel-speedup.md |
+| matching | GET /matching/tickets/:id | rest | flow | ../flows/matching-ticket-status-cancel-speedup.md |
+| matching | DELETE /matching/tickets/:id | rest | flow | ../flows/matching-ticket-status-cancel-speedup.md |
+| matching | POST /matching/tickets/:id/confirm | rest | flow | ../flows/matching-to-call.md |
+| matching | POST /matching/tickets/:id/speedup | rest | flow | ../flows/matching-ticket-status-cancel-speedup.md |
+| matching | InviteSweeperService.onApplicationBootstrap | job | flow | ../flows/matching-sweeper-jobs.md |
+| matching | MatcherWorkerService.onApplicationBootstrap | job | flow | ../flows/matching-to-call.md |
+| matching | TicketSweeperService.onApplicationBootstrap | job | flow | ../flows/matching-sweeper-jobs.md |
+| calling | POST /calling/match-sessions/:matchSessionId/join | rest | flow | ../flows/matching-to-call.md |
+| calling | POST /calling/friends/:friendUserId/join | rest | flow | ../flows/friend-direct-call.md |
+| calling | GET /calling/calls/:id | rest | flow | ../flows/calling-end-and-ticker.md |
+| calling | POST /calling/calls/:id/end | rest | flow | ../flows/matching-to-call.md |
+| calling | POST /calling/match-sessions/:matchSessionId/end | rest | flow | ../flows/calling-end-and-ticker.md |
+| calling | POST /calling/calls/:id/like | rest | flow | ../flows/calling-like-after-call.md |
+| calling | POST /calling/webhooks/livekit | webhook | flow | ../flows/matching-to-call.md |
+| calling | CallTickerService.onApplicationBootstrap | job | flow | ../flows/calling-end-and-ticker.md |
+| soul-match | GET /soul-match/sessions/:id | rest | flow | ../flows/soul-match-room-reads-and-reveal.md |
+| soul-match | GET /soul-match/sessions/:id/messages | rest | flow | ../flows/soul-match-room-reads-and-reveal.md |
+| soul-match | POST /soul-match/sessions/:id/messages | rest | flow | ../flows/soul-match-send-message.md |
+| soul-match | POST /soul-match/sessions/:id/rating | rest | flow | ../flows/soul-match-session.md |
+| soul-match | POST /soul-match/sessions/:id/end | rest | flow | ../flows/soul-match-session.md |
+| soul-match | GET /soul-match/sessions/:id/partner | rest | flow | ../flows/soul-match-room-reads-and-reveal.md |
+| palm-match | GET /palm-match/reading | rest | flow | ../flows/palm-match-queue-and-rating.md |
+| palm-match | POST /palm-match/queue | rest | flow | ../flows/palm-match-queue-and-rating.md |
+| palm-match | GET /palm-match/current | rest | flow | ../flows/palm-match-queue-and-rating.md |
+| palm-match | POST /palm-match/sessions/:id/flip | rest | flow | ../flows/palm-match-queue-and-rating.md |
+| palm-match | POST /palm-match/sessions/:id/rating | rest | flow | ../flows/palm-match-queue-and-rating.md |
+| palm-match | DELETE /palm-match/current | rest | flow | ../flows/palm-match-queue-and-rating.md |
+| mood | GET /mood/presets | rest | flow | ../flows/mood-status-visibility.md |
+| mood | GET /mood/status/me | rest | flow | ../flows/mood-status-visibility.md |
+| mood | GET /mood/status/:userId | rest | flow | ../flows/mood-status-visibility.md |
+| mood | POST /mood/status | rest | flow | ../flows/mood-status-visibility.md |
+| mood | DELETE /mood/status | rest | flow | ../flows/mood-status-visibility.md |
+| movie-match | POST /movie-match/sessions | rest | flow | ../flows/movie-match-friend-session.md |
+| movie-match | PATCH /movie-match/sessions/:id/state | rest | flow | ../flows/movie-match-friend-session.md |
+| movie-match | POST /movie-match/sessions/:id/end | rest | flow | ../flows/movie-match-friend-session.md |
+| movie-match | GET /movie-match/sessions/:id | rest | flow | ../flows/movie-match-friend-session.md |
+| movie-match | POST /movie-match/anon/queue | rest | flow | ../flows/movie-match-anonymous.md |
+| movie-match | GET /movie-match/anon/current | rest | flow | ../flows/movie-match-anon-chat-finish-reactions.md |
+| movie-match | DELETE /movie-match/anon/current | rest | flow | ../flows/movie-match-anon-chat-finish-reactions.md |
+| movie-match | PATCH /movie-match/anon/sessions/:id/state | rest | flow | ../flows/movie-match-anonymous.md |
+| movie-match | POST /movie-match/anon/sessions/:id/finish | rest | flow | ../flows/movie-match-anon-chat-finish-reactions.md |
+| movie-match | POST /movie-match/anon/sessions/:id/rating | rest | flow | ../flows/movie-match-anonymous.md |
+| movie-match | POST /movie-match/anon/sessions/:id/messages | rest | flow | ../flows/movie-match-anon-chat-finish-reactions.md |
+| movie-match | GET /movie-match/anon/sessions/:id/messages | rest | flow | ../flows/movie-match-anon-chat-finish-reactions.md |
+| movie-match | POST /movie-match/anon/sessions/:id/reactions | rest | flow | ../flows/movie-match-anon-chat-finish-reactions.md |
+| mini-game | POST /mini-game/sessions | rest | flow | ../flows/mini-game-session.md |
+| mini-game | POST /mini-game/sessions/:id/moves | rest | flow | ../flows/mini-game-session.md |
+| mini-game | POST /mini-game/sessions/:id/cancel | rest | local |  |
+| mini-game | GET /mini-game/sessions/:id | rest | local |  |
+| friend | GET /profiles/:profileUserId/actions | rest | flow | ../flows/friend-profile-follow-and-actions.md |
+| friend | POST /profiles/:profileUserId/follow | rest | flow | ../flows/friend-profile-follow-and-actions.md |
+| friend | DELETE /profiles/:profileUserId/follow | rest | flow | ../flows/friend-profile-follow-and-actions.md |
+| friend | POST /profiles/:profileUserId/conversation | rest | flow | ../flows/friend-open-conversation-from-profile.md |
+| friend | GET /friends | rest | flow | ../flows/friend-list-and-conversation-reads.md |
+| friend | GET /friends/:friendUserId/conversation | rest | flow | ../flows/friend-open-conversation-from-profile.md |
+| friend | GET /conversations/:id/messages | rest | flow | ../flows/friend-list-and-conversation-reads.md |
+| friend | GET /conversations/:id/streak | rest | flow | ../flows/friend-list-and-conversation-reads.md |
+| friend | POST /conversations/:id/read | rest | flow | ../flows/friend-list-and-conversation-reads.md |
+| friend | POST /conversations/:id/mute | rest | flow | ../flows/friend-list-and-conversation-reads.md |
+| friend | POST /conversations/:id/messages | rest | flow | ../flows/message-push-notification.md |
+| friend | StreakWarningJob.onApplicationBootstrap | job | flow | ../flows/friend-streak-warning-job.md |
+| notification | GET /notifications | rest | local |  |
+| notification | GET /notifications/unread-count | rest | local |  |
+| notification | POST /notifications/web-push/subscription | rest | flow | ../flows/message-push-notification.md |
+| notification | DELETE /notifications/web-push/subscription | rest | local |  |
+| notification | POST /notifications/:notificationId/read | rest | local |  |
+| discovery | GET /discovery/browse | rest | flow | ../flows/discovery-browse-and-nearby.md |
+| discovery | PUT /discovery/nearby/location | rest | flow | ../flows/discovery-browse-and-nearby.md |
+| discovery | PUT /discovery/nearby/visible | rest | flow | ../flows/discovery-browse-and-nearby.md |
+| discovery | GET /discovery/nearby | rest | flow | ../flows/discovery-browse-and-nearby.md |
+| avatar | GET /avatar/catalog | rest | local |  |
+| avatar | GET /avatar/me/items | rest | local |  |
+| avatar | POST /avatar/items/:assetId/claim | rest | flow | ../flows/avatar-buy-item.md |
+| avatar | POST /avatar/items/:assetId/buy | rest | flow | ../flows/avatar-buy-item.md |
+| avatar | PUT /avatar/me/equip | rest | flow | ../flows/avatar-buy-item.md |
+| avatar | GET /avatar/me | rest | local |  |
+| avatar | GET /avatar/users/:userId | rest | local |  |
+| media | POST /media/images/upload-intent | rest | flow | ../flows/feed-post-with-image.md |
+| feed | POST /stories | rest | flow | ../flows/story-create-with-image.md |
+| feed | GET /stories/ring | rest | flow | ../flows/story-ring-view-and-viewers.md |
+| feed | GET /stories/:storyId | rest | flow | ../flows/story-ring-view-and-viewers.md |
+| feed | GET /stories/:storyId/viewers | rest | flow | ../flows/story-ring-view-and-viewers.md |
+| feed | POST /stories/:storyId/reply | rest | flow | ../flows/story-reply-to-dm.md |
+| feed | POST /feed/posts | rest | flow | ../flows/feed-post-with-image.md |
+| feed | GET /feed/posts | rest | flow | ../flows/feed-read-posts.md |
+| feed | GET /feed/users/:userId/posts | rest | flow | ../flows/feed-read-posts.md |
+| feed | GET /feed/posts/:postId | rest | flow | ../flows/feed-read-posts.md |
+| feed | DELETE /feed/posts/:postId | rest | flow | ../flows/feed-delete-post.md |
+| feed | POST /feed/posts/:postId/comments | rest | flow | ../flows/feed-comment-with-notification.md |
+| feed | GET /feed/posts/:postId/comments | rest | flow | ../flows/feed-comment-with-notification.md |
+| feed | DELETE /feed/comments/:commentId | rest | flow | ../flows/feed-delete-post.md |
+| feed | POST /feed/posts/:postId/reactions | rest | flow | ../flows/feed-reaction-with-notification.md |
+| feed | DELETE /feed/posts/:postId/reactions | rest | flow | ../flows/feed-reaction-with-notification.md |
+| feed | GET /feed/posts/:postId/reactions | rest | flow | ../flows/feed-reaction-with-notification.md |
+| feed | StorySweeperService.onApplicationBootstrap | job | flow | ../flows/story-create-with-image.md |
+| short-video | POST /videos/upload-intent | rest | flow | ../flows/short-video-publish-moderation.md |
+| short-video | POST /videos/:id/finalize | rest | flow | ../flows/short-video-publish-moderation.md |
+| short-video | GET /videos | rest | flow | ../flows/short-video-browse-and-detail.md |
+| short-video | GET /videos/:id | rest | flow | ../flows/short-video-browse-and-detail.md |
+| short-video | POST /videos/:id/report | rest | flow | ../flows/short-video-report.md |
+| short-video | POST /videos/:id/views | rest | flow | ../flows/short-video-browse-and-detail.md |
+| short-video | POST /videos/:id/reactions | rest | flow | ../flows/short-video-browse-and-detail.md |
+| short-video | DELETE /videos/:id/reactions | rest | flow | ../flows/short-video-browse-and-detail.md |
+| short-video | POST /videos/:id/comments | rest | flow | ../flows/short-video-comments.md |
+| short-video | GET /videos/:id/comments | rest | flow | ../flows/short-video-comments.md |
+| short-video | DELETE /videos/:id/comments/:commentId | rest | flow | ../flows/short-video-comments.md |
+| short-video | VideoRankingService.onApplicationBootstrap | job | flow | ../flows/short-video-ranking-and-sweeper-jobs.md |
+| short-video | VideoSweeperService.onApplicationBootstrap | job | flow | ../flows/short-video-ranking-and-sweeper-jobs.md |
+| party-room | POST /party/rooms | rest | flow | ../flows/party-room-lifecycle.md |
+| party-room | GET /party/rooms | rest | flow | ../flows/party-room-detail-and-comments.md |
+| party-room | GET /party/rooms/:id | rest | flow | ../flows/party-room-detail-and-comments.md |
+| party-room | GET /party/rooms/:id/comments | rest | flow | ../flows/party-room-detail-and-comments.md |
+| party-room | POST /party/rooms/:id/comments | rest | flow | ../flows/party-room-detail-and-comments.md |
+| party-room | POST /party/rooms/:id/join | rest | flow | ../flows/party-room-lifecycle.md |
+| party-room | POST /party/rooms/:id/leave | rest | flow | ../flows/party-room-leave-and-role-change.md |
+| party-room | POST /party/rooms/:id/members/:userId/role | rest | flow | ../flows/party-room-leave-and-role-change.md |
+| party-room | POST /party/rooms/:id/members/:userId/speaker-invite | rest | flow | ../flows/party-room-speaker-invite.md |
+| party-room | POST /party/rooms/:id/speaker-invite/accept | rest | flow | ../flows/party-room-speaker-invite.md |
+| party-room | POST /party/rooms/:id/speaker-invite/decline | rest | flow | ../flows/party-room-speaker-invite.md |
+| party-room | POST /party/webhooks/livekit | webhook | flow | ../flows/party-room-lifecycle.md |
+| party-room | PartyRoomSweeperService.onApplicationBootstrap | job | flow | ../flows/party-room-lifecycle.md |
+| safety | POST /safety/reports | rest | flow | ../flows/safety-report-and-trust-score.md |
+| safety | POST /safety/blocks/:targetUserId | rest | flow | ../flows/safety-block-and-unblock.md |
+| safety | DELETE /safety/blocks/:targetUserId | rest | flow | ../flows/safety-block-and-unblock.md |
+| safety | GET /safety/blocks/:targetUserId | rest | flow | ../flows/safety-block-and-unblock.md |
+| signaling-gateway | GET /health | rest | local |  |
+| signaling-gateway | GET /health/live | rest | local |  |
+| signaling-gateway | GET /health/ready | rest | local |  |
+| friend | GET /friends/connections | rest | flow | ../flows/friend-follow-lists-and-connections.md |
+| friend | GET /profiles/:profileUserId/follow-counts | rest | flow | ../flows/friend-follow-lists-and-connections.md |
+| friend | GET /profiles/:profileUserId/followers | rest | flow | ../flows/friend-follow-lists-and-connections.md |
+| friend | GET /profiles/:profileUserId/following | rest | flow | ../flows/friend-follow-lists-and-connections.md |
+
+
+<!-- FILE: https://ducmanh001.github.io/litmatch-service-map/lookup/flows.md -->
+
+# Lookup: cross-service flows
+
+id: lookup:flows
+
+Flow id to its file.
+
+| id | file | note |
+|---|---|---|
+| flow:admin-ban-and-refund | ../flows/admin-ban-and-refund.md | Admin khoá một người dùng và hoàn một giao dịch diamond. AdminModule chỉ điều phối: dữ liệu users do user sở … |
+| flow:admin-broadcast-notification | ../flows/admin-broadcast-notification.md | Admin broadcast thông báo tới mọi user active: Admin điều phối, User cấp danh sách người nhận, Economy cấp da… |
+| flow:admin-dashboard | ../flows/admin-dashboard.md | Admin mở dashboard: dữ liệu nằm ở ba module khác nhau (người dùng, kinh tế, phòng party) cộng nhật ký audit, … |
+| flow:admin-economy-inspect-and-config | ../flows/admin-economy-inspect-and-config.md | Admin xem ví, lịch sử giao dịch và catalog kinh tế rồi bật/tắt IAP product hoặc VIP plan; Admin chỉ điều phối… |
+| flow:admin-gift-catalog | ../flows/admin-gift-catalog.md | Admin xem, tạo và sửa quà trong catalog; giá kim cương là dữ liệu trong bảng gifts do Gift sở hữu, còn Admin … |
+| flow:admin-report-resolution | ../flows/admin-report-resolution.md | Admin xem hàng đợi báo cáo rồi đánh dấu đã xử lý hoặc bác bỏ. AdminModule kiểm quyền và điều phối, SafetyModu… |
+| flow:admin-room-management | ../flows/admin-room-management.md | Admin liệt kê phòng party đang live rồi đóng một phòng. Việc này chạm nhiều dịch vụ: AdminModule kiểm quyền v… |
+| flow:admin-staff-and-permissions | ../flows/admin-staff-and-permissions.md | Admin xem và bật/tắt quyền theo vai trò, liệt kê nhân sự và đổi vai trò. AdminModule giữ ma trận quyền và aud… |
+| flow:admin-support-tickets | ../flows/admin-support-tickets.md | Người dùng gửi ticket kèm Idempotency-Key để không bị tạo trùng khi gọi lại, rồi xem lại ticket của mình. Sup… |
+| flow:admin-user-lookup-and-unban | ../flows/admin-user-lookup-and-unban.md | Admin xem danh sách, xem chi tiết rồi mở khoá một tài khoản. Module Admin chỉ điều phối: dữ liệu users thuộc … |
+| flow:admin-video-moderation-queue | ../flows/admin-video-moderation-queue.md | Moderator xem video chờ duyệt và video đã đăng, rồi từ chối hoặc gỡ video. AdminModule kiểm quyền và ghi audi… |
+| flow:app-shell-health-and-readiness | ../flows/app-shell-health-and-readiness.md | Probe Docker/k8s gọi /health/ready để biết core-api có nhận traffic được không; app-shell phải hỏi thật Postg… |
+| flow:auth-guest-login-and-socket | ../flows/auth-guest-login-and-socket.md | Người dùng mới lấy phiên khách từ core-api (auth + user + PostgreSQL), rồi mở Socket.IO tới signaling-gateway… |
+| flow:auth-guest-upgrade | ../flows/auth-guest-upgrade.md | Người dùng đang là guest gắn danh tính OTP điện thoại hoặc social (Google/Apple/Facebook) vào chính userId hi… |
+| flow:auth-otp-login | ../flows/auth-otp-login.md | Người dùng xin mã OTP rồi xác minh để nhận phiên đăng nhập. Auth giữ danh tính (auth_identities), OTP và refr… |
+| flow:auth-refresh-and-logout | ../flows/auth-refresh-and-logout.md | Web giữ refresh token trong cookie httpOnly; khi access token hết hạn web gọi /auth/refresh để xoay vòng toke… |
+| flow:auth-search-by-phone | ../flows/auth-search-by-phone.md | Người dùng đã đăng nhập tìm hồ sơ người khác bằng số điện thoại. Module auth giữ danh tính điện thoại còn mod… |
+| flow:auth-social-login | ../flows/auth-social-login.md | Client gửi ID token (Google/Apple) hoặc access token (Facebook) lên POST /auth/social. Server không tin token… |
+| flow:avatar-buy-item | ../flows/avatar-buy-item.md | Người dùng nhận item miễn phí, mua item trả phí bằng DIA với Idempotency-Key rồi trang bị. Avatar sở hữu cata… |
+| flow:calling-end-and-ticker | ../flows/calling-end-and-ticker.md | Một cuộc gọi Voice Match có thể kết thúc từ nhiều phía (poll GET, nút kết thúc, ticker nền). Calling chốt Cal… |
+| flow:calling-like-after-call | ../flows/calling-like-after-call.md | Sau Voice Match, mỗi bên bấm like; khi cả hai đã like thì Calling ghi reaction và nhờ Friend mở Friendship cù… |
+| flow:discovery-browse-and-nearby | ../flows/discovery-browse-and-nearby.md | Người dùng duyệt danh sách theo giới tính/tuổi và tìm người gần bằng vị trí đã quantize. Discovery sở hữu vị … |
+| flow:economy-outbox-relay | ../flows/economy-outbox-relay.md | Economy ghi OutboxEvent cùng giao dịch sổ cái; một job nền định kỳ đọc các dòng chưa gửi, publish lên Kafka r… |
+| flow:economy-reconciliation-and-startup-guards | ../flows/economy-reconciliation-and-startup-guards.md | Khi core-api khởi động, economy đăng ký hai job đối soát chỉ đọc (fast và deep) để tự phát hiện lệch Nợ/Có, v… |
+| flow:feed-comment-with-notification | ../flows/feed-comment-with-notification.md | Người dùng bình luận lên bài đăng: feed phải hỏi safety (block hai chiều), friend (audience bạn bè) và user (… |
+| flow:feed-delete-post | ../flows/feed-delete-post.md | Người dùng xoá mềm bài viết hoặc bình luận của chính mình trong feed; feed phải hỏi safety, friend, user về q… |
+| flow:feed-post-with-image | ../flows/feed-post-with-image.md | Client không gửi file qua API: xin presigned URL từ media, upload thẳng lên object storage, rồi đăng bài chỉ … |
+| flow:feed-reaction-with-notification | ../flows/feed-reaction-with-notification.md | Người dùng thả tim, bỏ tim và xem trạng thái reaction của một bài đăng. Feed sở hữu Reaction nhưng quyền xem … |
+| flow:feed-read-posts | ../flows/feed-read-posts.md | Người dùng đọc feed công khai, timeline của một tác giả và chi tiết một bài. Feed chỉ sở hữu Post, nên mọi qu… |
+| flow:friend-direct-call | ../flows/friend-direct-call.md | Hai người đã follow nhau gọi voice lâu dài không qua ghép đôi: Calling phải hỏi Friend (và Safety bên trong F… |
+| flow:friend-follow-lists-and-connections | ../flows/friend-follow-lists-and-connections.md | Trang hồ sơ và trang Bạn bè đọc số follow, danh sách follower/following theo cursor và danh sách bạn bè (ghép… |
+| flow:friend-list-and-conversation-reads | ../flows/friend-list-and-conversation-reads.md | Màn chat cần danh sách hội thoại kèm hồ sơ đối phương, lịch sử tin nhắn, streak, mốc đã đọc và trạng thái tắt… |
+| flow:friend-open-conversation-from-profile | ../flows/friend-open-conversation-from-profile.md | Người xem bấm nhắn tin trên hồ sơ của người lạ. friend phải hỏi user (hồ sơ có tồn tại) và safety (có block k… |
+| flow:friend-profile-follow-and-actions | ../flows/friend-profile-follow-and-actions.md | Khi người dùng mở hồ sơ người khác, module friend phải xác nhận hồ sơ tồn tại (user) và không bị block hai ch… |
+| flow:friend-streak-warning-job | ../flows/friend-streak-warning-job.md | Job nền của module friend chạy theo chu kỳ, chỉ một replica được chạy nhờ advisory lock trong Postgres. Nó tì… |
+| flow:gift-in-party-room | ../flows/gift-in-party-room.md | Người dùng tặng quà trong phòng party đang diễn ra. Gift giữ catalog và GiftEvent, Economy là nơi duy nhất gh… |
+| flow:gift-on-video | ../flows/gift-on-video.md | Người xem tặng quà cho tác giả video: Gift tra catalog và người nhận, Economy trừ DIA người tặng và cộng PTS … |
+| flow:gift-to-profile-chat-gate | ../flows/gift-to-profile-chat-gate.md | Người dùng tặng quà từ profile người khác để mở chat 1-1. Gift tính điểm, Economy ghi sổ kép, Friend tạo conv… |
+| flow:iap-store-notifications-and-refund-poll | ../flows/iap-store-notifications-and-refund-poll.md | Khi Apple/Google hoàn tiền một giao dịch IAP, economy phải xác minh chữ ký webhook, rồi ghi bút toán đảo vào … |
+| flow:matching-invite-accept | ../flows/matching-invite-accept.md | Invitee chấp nhận lời mời ghép: matching phải khoá invite, nhờ safety kiểm tra block/báo cáo, đọc trạng thái … |
+| flow:matching-invite-create | ../flows/matching-invite-create.md | Người dùng mời trực tiếp một người khác chơi Voice/Soul Match. Module matching sở hữu MatchInvite nhưng phải … |
+| flow:matching-invite-decline-cancel | ../flows/matching-invite-decline-cancel.md | Invitee từ chối hoặc inviter huỷ một MatchInvite. matching khoá dòng invite và kiểm tra hết hạn tại thời điểm… |
+| flow:matching-sweeper-jobs | ../flows/matching-sweeper-jobs.md | Hai worker nền của matching chạy theo timer trên mọi replica, nên phải dùng advisory lock Postgres để chỉ một… |
+| flow:matching-ticket-status-cancel-speedup | ../flows/matching-ticket-status-cancel-speedup.md | Người dùng đọc trạng thái vé và giá tăng tốc theo hạng VIP, huỷ vé đang xếp hàng, hoặc trả DIA để tăng ưu tiê… |
+| flow:matching-to-call | ../flows/matching-to-call.md | Hai người xếp hàng ghép đôi, worker ghép cặp và hai bên xác nhận, sau đó vào cuộc gọi LiveKit. Matching sở hữ… |
+| flow:message-push-notification | ../flows/message-push-notification.md | Một người gửi tin nhắn 1-1; module friend lưu tin, cập nhật streak, rồi báo cho người nhận qua realtime (Redi… |
+| flow:mini-game-session | ../flows/mini-game-session.md | Một bạn mời bạn bè chơi oẳn tù tì, hai bên nộp move ẩn theo lượt; mini-game phải hỏi friend xem hai người có … |
+| flow:mood-status-visibility | ../flows/mood-status-visibility.md | Người dùng đặt và xoá mood theo preset với Idempotency-Key, rồi người khác xem mood đó. Mood sở hữu log sự ki… |
+| flow:movie-match-anon-chat-finish-reactions | ../flows/movie-match-anon-chat-finish-reactions.md | Trong phiên xem phim ẩn danh, hai người chat có Idempotency-Key, gửi reaction tạm thời, bấm kết thúc và dọn t… |
+| flow:movie-match-anonymous | ../flows/movie-match-anonymous.md | Người lạ xếp hàng xem phim chung. movie-match ghép cặp (hỏi safety có được ghép không), đồng bộ playback qua … |
+| flow:movie-match-friend-session | ../flows/movie-match-friend-session.md | Hai người bạn xem chung một video YouTube: movie-match phải kiểm tra quan hệ bạn bè với friend, ghi phiên và … |
+| flow:palm-match-queue-and-rating | ../flows/palm-match-queue-and-rating.md | Người dùng vào hàng đợi ghép cặp ẩn danh, lật bài rồi like/skip. Palm Match sở hữu hàng đợi và phiên nhưng kh… |
+| flow:party-room-detail-and-comments | ../flows/party-room-detail-and-comments.md | Client xem danh sách phòng, chi tiết phòng (kèm hồ sơ member lấy từ module user), đọc comment rồi gửi comment… |
+| flow:party-room-leave-and-role-change | ../flows/party-room-leave-and-role-change.md | Member rời phòng party hoặc host thu quyền speaker: party-room đổi trạng thái trong PostgreSQL dưới lock phòn… |
+| flow:party-room-lifecycle | ../flows/party-room-lifecycle.md | Phòng party có DB (party-room) là nguồn sự thật về thành viên, còn âm thanh chạy qua LiveKit SFU (media-serve… |
+| flow:party-room-speaker-invite | ../flows/party-room-speaker-invite.md | Host mời một khán giả lên speaker; khán giả chấp nhận hoặc từ chối. Chấp nhận phải đổi role trong PostgreSQL … |
+| flow:payos-topup-webhook | ../flows/payos-topup-webhook.md | Người dùng tạo đơn nạp PayOS rồi thanh toán trên trang của PayOS; tiền chỉ được cộng vào ví khi webhook có ch… |
+| flow:safety-block-and-unblock | ../flows/safety-block-and-unblock.md | Người dùng chặn, bỏ chặn hoặc kiểm tra trạng thái chặn một người khác. Safety sở hữu log Block append-only nh… |
+| flow:safety-report-and-trust-score | ../flows/safety-report-and-trust-score.md | Khi một người dùng báo cáo người khác, safety phải ghi Report append-only và trừ trust score của người bị báo… |
+| flow:short-video-browse-and-detail | ../flows/short-video-browse-and-detail.md | Người dùng duyệt danh sách video published (recent hoặc ranked, hoặc tab following), mở chi tiết, ghi watch-t… |
+| flow:short-video-comments | ../flows/short-video-comments.md | Người dùng thêm, xem và xoá comment của video ngắn. short-video sở hữu video và comment (kèm commentCount), n… |
+| flow:short-video-publish-moderation | ../flows/short-video-publish-moderation.md | Người dùng xin URL upload, upload video rồi finalize; tuỳ VIDEO_MODERATION_MODE video sang pending_review hoặ… |
+| flow:short-video-ranking-and-sweeper-jobs | ../flows/short-video-ranking-and-sweeper-jobs.md | Hai worker nền của short-video chạy theo setInterval: một job tính lại rank_score cho video published, một jo… |
+| flow:short-video-report | ../flows/short-video-report.md | Người xem báo cáo một video ngắn; short-video phải xác nhận video tồn tại và hiển thị được trước, Safety ghi … |
+| flow:soul-match-room-reads-and-reveal | ../flows/soul-match-room-reads-and-reveal.md | Phòng chat ẩn danh Soul Match thuộc soul-match nhưng MatchSession do matching sở hữu và Friendship do friend … |
+| flow:soul-match-send-message | ../flows/soul-match-send-message.md | Thành viên gửi tin nhắn ẩn danh trong phòng Soul Match. Soul Match không sở hữu MatchSession và quan hệ bạn b… |
+| flow:soul-match-session | ../flows/soul-match-session.md | Hai người đã được Matching ghép đôi chat ẩn danh rồi đánh giá lẫn nhau; khi cả hai like thì Soul Match phải n… |
+| flow:story-create-with-image | ../flows/story-create-with-image.md | Story chỉ được lưu khi ảnh đã được Media xác nhận là của đúng chủ, đúng purpose Story và đã upload hợp lệ; sa… |
+| flow:story-reply-to-dm | ../flows/story-reply-to-dm.md | Người xem trả lời một story: Feed không có chat riêng nên phải hỏi Safety/Friend/User xem có được xem story k… |
+| flow:story-ring-view-and-viewers | ../flows/story-ring-view-and-viewers.md | Feed sở hữu Story/StoryView nhưng không sở hữu quan hệ bạn bè, block hay quyền riêng tư, nên mỗi lần liệt kê … |
+| flow:user-presence-read | ../flows/user-presence-read.md | Khi một người dùng xem trạng thái online của người khác, User đọc cài đặt riêng tư trong PostgreSQL rồi đọc k… |
+| flow:vip-purchase-iap | ../flows/vip-purchase-iap.md | Hai luồng tiền chạy qua cùng một sổ cái: mua VIP bằng diamond với Idempotency-Key, và nạp diamond qua IAP chỉ… |
+
+
+<!-- FILE: https://ducmanh001.github.io/litmatch-service-map/lookup/index.md -->
+
+# Lookup index
+
+id: lookup:index
+
+One line per name so a single fetch answers "which file documents X". Paths are relative to this folder.
+
+- [entrypoint-to-flow.md](entrypoint-to-flow.md): Lookup: entrypoint to flow (214 rows)
+- [flows.md](flows.md): Lookup: cross-service flows (72 rows)
+
+For free text use search.html (humans) or search-index.json (machines).
+
+
+<!-- FILE: https://ducmanh001.github.io/litmatch-service-map/service-map/qa-api-contract.md -->
+
+# Hợp đồng API và dữ liệu: OpenAPI, validate, phân trang, schema?
+
+id: qa:api-contract
+category: data
+services: module:matching, module:feed, module:admin
+
+Hợp đồng REST sinh từ chính controller (OpenAPI) rồi sinh client TypeScript; DTO validate bằng class-validator; phân trang bằng cursor; schema DB chỉ đổi bằng migration (synchronize tắt).
+
+### OpenAPI và client sinh
+
+Mỗi route mô tả bằng @ApiOperation; core-api xuất openapi/core-api.json và client TypeScript được sinh từ đó nên frontend không lệch hợp đồng.
+
+services: matching, feed, admin; evidence: apps/core-api/src/modules/matching/controllers/invite.controller.ts:54
+
+### Validate và phân trang
+
+Dữ liệu vào được validate bằng class-validator ở biên; danh sách phân trang bằng cursor (keyset) thay vì offset.
+
+services: matching, feed; evidence: apps/core-api/src/modules/matching/controllers/invite.controller.ts:74, apps/core-api/src/main.ts:80
+
+### Schema chỉ qua migration
+
+synchronize luôn tắt; mọi thay đổi schema đi qua migration có version.
+
+services: admin; evidence: apps/core-api/src/app/app.module.ts:81
+
+## Alternatives not chosen
+
+- Phân trang offset: Lệch khi dữ liệu thêm hoặc xoá giữa hai trang và chậm ở trang sâu.
+- synchronize tự đồng bộ schema: Có thể xoá hoặc đổi cột ngoài ý muốn trên production; docs/03 § 3.10 yêu cầu schema do migration sở hữu.
+
+
+<!-- FILE: https://ducmanh001.github.io/litmatch-service-map/service-map/qa-authn-model.md -->
+
+# Xác thực người dùng bằng mô hình nào?
+
+id: qa:authn-model
+category: authn
+services: module:auth, module:user, module:signaling-gateway
+
+JWT bearer không trạng thái, kiểm bằng JwtAuthGuard đăng ký toàn cục: route nào muốn mở phải gắn @Public(). Có ba đường vào (khách kèm token thiết bị, OTP điện thoại, ID token Apple/Google/Facebook) và gateway WebSocket xác minh đúng token đó bằng chung khoá.
+
+### Guard toàn cục
+
+ThrottlerGuard, JwtAuthGuard rồi RolesGuard được đăng ký làm APP_GUARD theo đúng thứ tự: chặn spam trước, xác thực sau, kiểm vai trò cuối. Quên cấu hình thì route bị chặn chứ không bị mở.
+
+services: auth, user; evidence: apps/core-api/src/app/app.module.ts:154
+
+### Ký và xác minh token
+
+core-api ký access token (payload gồm sub, isGuest, role, jti) bằng JWT_SECRET và tự xác minh ở mọi request; không có kho phiên phía server.
+
+services: auth; evidence: apps/core-api/src/modules/auth/services/token.service.ts:27
+
+### Ba đường đăng nhập
+
+Khách nhận token thiết bị ký HMAC để tính hạn mức; OTP điện thoại chỉ lưu dạng băm HMAC kèm giới hạn thử; Apple, Google, Facebook thì server tự xác minh ID token với nhà cung cấp.
+
+services: auth; evidence: apps/core-api/src/modules/auth/services/otp.service.ts:15, apps/core-api/src/modules/auth/auth.module.ts:41, apps/core-api/src/modules/auth/services/guest-device-token.service.ts:11
+
+### WebSocket
+
+signaling-gateway xác minh cùng access token lúc handshake bằng chung JWT_SECRET; gateway không bao giờ ký token và không gọi core-api để hỏi. [10/10] Có thể xoay khoá không đăng xuất mọi người nhờ JWT_SECRET_PREVIOUS (chỉ thử khi chữ ký không khớp).
+
+services: signaling-gateway, auth; evidence: apps/signaling-gateway/src/app/signaling.gateway.ts:157
+
+## Alternatives not chosen
+
+- Session phía server (cookie + kho phiên): Suy luận: cần kho phiên dùng chung và gateway tách riêng phải hỏi lại core-api; JWT cho hai deployable chỉ cần chung khoá để xác minh.
+- IdP/OAuth server riêng (Keycloak, Auth0): Suy luận: thêm một thành phần vận hành; hệ thống chỉ cần danh tính nội bộ và đã tự xác minh ID token của bên thứ ba.
+
+## Caveats
+
+- Access token không thu hồi tức thì: trạng thái bị ban chỉ được kiểm lại ở refresh/đăng nhập, nên thao tác nhạy cảm tự kiểm lại (ví dụ soul-match kiểm UserStatus.Banned lúc gửi tin).
+
+
+<!-- FILE: https://ducmanh001.github.io/litmatch-service-map/service-map/qa-authz-model.md -->
+
+# Phân quyền dùng RBAC, ABAC hay kết hợp?
+
+id: qa:authz-model
+category: authz
+services: module:admin, module:matching, module:safety, module:friend, module:party-room
+
+Kết hợp nhiều lớp và không có policy engine (không CASL, Casbin hay OPA trong package.json): RBAC cho vai trò (RolesGuard toàn cục + ma trận quyền admin lưu DB), ABAC theo thuộc tính (guest, bị ban, hạng VIP, chính sách ghép đôi), ReBAC theo quan hệ (bạn bè, block), kiểm tra chủ sở hữu từng tài nguyên và capability token cho media.
+
+### RBAC
+
+RolesGuard đăng ký toàn cục đọc @Roles; khu admin còn có AdminPermissionGuard và bảng admin_role_permissions nên đổi quyền của một vai trò không cần deploy lại.
+
+services: admin; evidence: apps/core-api/src/app/app.module.ts:154, apps/core-api/src/modules/admin/admin.controller.ts:64
+
+### ABAC
+
+Quyết định dựa trên thuộc tính: tài khoản bị ban bị chặn ngay lúc thao tác, hạng VIP được tra khi dựng thông tin ghép đôi, và MATCH_INTERACTION_POLICY quyết định hai người có được ghép với nhau không.
+
+services: matching, soul-match; evidence: apps/core-api/src/modules/matching/matching.service.ts:109, apps/core-api/src/modules/soul-match/soul-match.service.ts:138
+
+### ReBAC
+
+Cho phép hoặc chặn theo quan hệ giữa hai người: canPair khi ghép đôi, kiểm block khi nhắn hay xem hồ sơ, areFriends khi mở phòng hoặc chat.
+
+services: matching, friend, safety; evidence: apps/core-api/src/modules/matching/jobs/matcher-worker.service.ts:277, apps/core-api/src/modules/friend/friend.service.ts:181
+
+### Chủ sở hữu và capability
+
+Mỗi tài nguyên kiểm chủ sở hữu (ví dụ ticket.userId so với người gọi) để chặn IDOR; quyền trong phòng media là capability token LiveKit do core-api cấp theo vai trò.
+
+services: matching, party-room; evidence: apps/core-api/src/modules/matching/matching.service.ts:650, apps/core-api/src/modules/party-room/clients/livekit-party-room.adapter.ts:24
+
+## Alternatives not chosen
+
+- Policy engine (OPA, Casbin, CASL): Suy luận: số vai trò ít và quy tắc gắn chặt dữ liệu nghiệp vụ nằm sẵn trong từng service, nên thêm engine là thêm vận hành mà chưa có lợi rõ rệt.
+- ABAC thuần cho cả khu admin: RBAC dễ kiểm toán hơn cho vài vai trò và ma trận quyền sửa được lúc chạy.
+
+## Caveats
+
+- Suy luận: chính sách nằm rải trong mã từng module nên không có một nơi để xem toàn bộ quy tắc; muốn kiểm toán phải đọc từng service.
+
+
+<!-- FILE: https://ducmanh001.github.io/litmatch-service-map/service-map/qa-consistency-concurrency.md -->
+
+# Nhất quán và đồng thời: transaction, khoá, sổ cái?
+
+id: qa:consistency-concurrency
+category: consistency
+services: module:economy, module:gift, module:soul-match, module:movie-match, module:matching
+
+Một PostgreSQL chung nên atomicity xuyên module dùng chung một transaction (truyền EntityManager), không saga hay 2PC. Race được chặn bằng khoá bi quan (SELECT FOR UPDATE), advisory lock và ràng buộc unique làm chốt cuối; tiền đi qua sổ cái kép append-only và sửa sai bằng bút toán đảo.
+
+### Chung transaction
+
+Gift gọi Economy kèm EntityManager của giao dịch đang chạy nên trừ tiền người tặng, cộng người nhận và ghi GiftEvent cùng commit hoặc cùng rollback.
+
+services: gift, economy; evidence: apps/core-api/src/modules/gift/gift.service.ts:104
+
+### Khoá chống race
+
+Ledger khoá ví rồi mới ghi; soul-match khoá hàng match_sessions để hai rating like song song không cùng kết luận chưa đủ hai like; movie-match dùng advisory xact lock cho matcher ẩn danh.
+
+services: economy, soul-match, movie-match; evidence: apps/core-api/src/modules/economy/services/ledger.service.ts:420, apps/core-api/src/modules/soul-match/soul-match.service.ts:165, apps/core-api/src/modules/movie-match/movie-match.service.ts:680
+
+### Sổ cái kép
+
+Mỗi giao dịch tiền tạo ít nhất hai LedgerEntry nợ và có, append-only; Wallet.balance chỉ là snapshot cập nhật trong cùng transaction; correction là reversal.
+
+services: economy; evidence: apps/core-api/src/modules/economy/economy.module.ts:58
+
+## Alternatives not chosen
+
+- Saga hoặc outbox giữa các module: Chỉ cần khi tách thành deployable riêng (docs/03 § 3.6); trong cùng process thì thừa.
+- 2PC xuyên deployable: docs/03 § 3.6 chủ động không dùng 2PC xuyên deployable.
+
+
+<!-- FILE: https://ducmanh001.github.io/litmatch-service-map/service-map/qa-idempotency.md -->
+
+# Chống xử lý trùng (idempotency) làm thế nào?
+
+id: qa:idempotency
+category: consistency
+services: module:matching, module:support, module:economy, module:gift
+
+Hai lớp: client gửi Idempotency-Key (decorator @IdempotencyKey) và DB giữ chốt cuối bằng unique trên cột idempotency_key, nên retry mạng nhận lại kết quả cũ thay vì tạo bản ghi hoặc trừ tiền hai lần.
+
+### Header và decorator
+
+Controller nhận Idempotency-Key qua một decorator dùng chung rồi truyền xuống service.
+
+services: matching, gift, support; evidence: apps/core-api/src/common/decorators/idempotency-key.decorator.ts:18
+
+### Unique ở DB
+
+Ticket ghép đôi có idempotencyKey unique, ticket support có unique (userId, idempotencyKey), Transaction của Economy có idempotencyKey unique nên kiểm-rồi-ghi không bị race.
+
+services: matching, support, economy; evidence: apps/core-api/src/modules/matching/entities/match-ticket.entity.ts:127, apps/core-api/src/modules/support/entities/support-ticket.entity.ts:21
+
+## Alternatives not chosen
+
+- Chỉ check-rồi-insert ở tầng code: Vẫn dính race khi hai request chạy song song; docs/03 yêu cầu unique ở tầng DB.
+
+
+<!-- FILE: https://ducmanh001.github.io/litmatch-service-map/service-map/qa-media-access.md -->
+
+# Kiểm soát truy cập media: LiveKit và upload file?
+
+id: qa:media-access
+category: authz
+services: module:party-room, module:calling, module:media, module:short-video, module:media-server
+
+Quyền vào phòng media là capability token ngắn hạn do core-api ký (LiveKit grants theo vai trò); đổi vai trò giữa chừng thì core-api đẩy quyền xuống SFU chứ không tin client. File ảnh hoặc video upload bằng presigned URL thẳng lên object storage, ảnh còn qua quarantine rồi mới promote.
+
+### Capability token
+
+Người nghe nhận token canPublish=false nên tự bật mic bị LiveKit chặn; cấp hoặc thu quyền nói phải đẩy xuống SFU bằng updateParticipant.
+
+services: party-room, calling, media-server; evidence: apps/core-api/src/modules/party-room/clients/livekit-party-room.adapter.ts:24, apps/core-api/src/modules/calling/calling.service.ts:191
+
+### Presigned upload
+
+core-api chỉ cấp URL ký sẵn nên body ảnh hoặc video không đi qua; ảnh còn nằm ở key quarantine tới khi kiểm MIME và kích thước rồi mới promote sang key công khai.
+
+services: media, short-video; evidence: apps/core-api/src/modules/media/media.controller.ts:24, apps/core-api/src/modules/media/media.service.ts:114, apps/core-api/src/modules/short-video/dto/short-video.dtos.ts:19
+
+## Alternatives not chosen
+
+- Cho client giữ quyền và tự khai trong phòng: Client có thể bị sửa; quyền phải được enforce ở SFU bằng grant do server ký.
+
+
+<!-- FILE: https://ducmanh001.github.io/litmatch-service-map/service-map/qa-observability.md -->
+
+# Quan sát và vận hành: metrics, log, trace, health, audit?
+
+id: qa:observability
+category: observability
+services: module:app-shell, module:admin, module:matching
+
+Metrics và tracing qua OpenTelemetry, log JSON bằng pino, probe liveness/readiness cho Kubernetes và audit log cho hành động nhạy cảm của admin.
+
+### Metrics và tracing
+
+Module định nghĩa Histogram/Meter qua @opentelemetry/api và có tracing.ts khởi tạo OpenTelemetry cho core-api.
+
+services: matching; evidence: libs/observability/src/lib/tracing.ts:108
+
+### Log có cấu trúc
+
+Log JSON bằng nestjs-pino để truy vết và tìm kiếm.
+
+services: app-shell; evidence: apps/core-api/src/app/app.module.ts:55
+
+### Health và audit
+
+Có endpoint liveness/readiness cho K8s; hành động của admin ghi audit log.
+
+services: app-shell, admin; evidence: apps/core-api/src/app/health.controller.ts:14, apps/core-api/src/modules/admin/admin.service.ts:49
+
+
+
+<!-- FILE: https://ducmanh001.github.io/litmatch-service-map/service-map/qa-queues-and-workers.md -->
+
+# Hàng đợi và worker nền: dùng gì, ở đâu?
+
+id: qa:queues-and-workers
+category: messaging
+services: module:matching, module:economy, module:friend, module:party-room
+
+Không có thư viện job queue chung (không BullMQ, Agenda hay pg-boss trong package.json). Ghép đôi dùng Redis sorted set chia shard (ZADD/ZPOPMIN) rồi xác minh lại trong PostgreSQL bằng SELECT FOR UPDATE; worker nền là vòng lặp ManagedInterval chạy singleton nhờ advisory lock; sự kiện nghiệp vụ bền đi qua outbox rồi Kafka (có DLQ).
+
+### Hàng đợi ghép đôi
+
+Mỗi shard là một sorted set: ZADD thêm vé, ZPOPMIN lấy vé theo điểm một cách nguyên tử nên hai pod không lấy trùng; Redis không phải nguồn sự thật nên matcher khoá hai ticket trong PostgreSQL (pessimistic_write) và verify lại trước khi tạo session.
+
+services: matching; evidence: apps/core-api/src/modules/matching/redis/redis-matching-queue.adapter.ts:18, apps/core-api/src/modules/matching/jobs/matcher-worker.service.ts:237
+
+### Worker nền singleton
+
+ManagedInterval chạy worker và sweeper theo chu kỳ trong process và dùng pg advisory lock để chỉ một replica chạy tại một thời điểm.
+
+services: matching, friend, party-room; evidence: apps/core-api/src/common/scheduling/managed-interval.ts:128
+
+### Outbox rồi Kafka
+
+Economy ghi OutboxEvent cùng transaction nghiệp vụ; OutboxRelayService lấy hàng bằng FOR UPDATE SKIP LOCKED rồi publish lên Kafka; adapter có DLQ cho tin lỗi.
+
+services: economy; evidence: apps/core-api/src/modules/economy/jobs/outbox-relay.service.ts:72, apps/core-api/src/common/events/event-bus.port.ts:23
+
+## Alternatives not chosen
+
+- BullMQ hoặc job queue trên Redis: Suy luận: thêm một lớp hạ tầng và trạng thái thứ hai khi trạng thái thật đã nằm ở PostgreSQL và worker chỉ là vòng lặp đơn giản.
+- Redis list làm hàng đợi ghép đôi: Không có điểm để lấy theo thứ tự ưu tiên; sorted set cho ZPOPMIN theo điểm.
+
+## Caveats
+
+- Trong profile hosted-free relay Kafka bị tắt nhưng outbox vẫn được ghi atomic (docs/03 § 3.9).
+
+
+<!-- FILE: https://ducmanh001.github.io/litmatch-service-map/service-map/qa-rate-limit-abuse.md -->
+
+# Giới hạn tốc độ và chống lạm dụng?
+
+id: qa:rate-limit-abuse
+category: abuse
+services: module:matching, module:signaling-gateway, module:gift, module:auth
+
+Nhiều lớp: ThrottlerGuard toàn cục đứng trước JWT và @Throttle riêng cho route nhạy cảm; rate limit nghiệp vụ bằng Redis (Lua) dùng chung nhiều instance; gateway giữ quota kết nối bằng lease Lua và fail-closed khi Redis lỗi; khách có hạn mức theo ngày lưu ở DB. [10/10] ThrottlerGuard đếm ở bộ nhớ từng pod mặc định; THROTTLE_STORAGE=redis (K8s) dùng RedisThrottlerStorage chung nhiều pod, khoá theo req.ip nên cần HTTP_TRUST_PROXY_HOPS đúng.
+
+### Throttler
+
+ThrottlerGuard toàn cục là guard đầu tiên; các route nhạy cảm như tạo invite hay tặng quà thêm @Throttle với hạn mức riêng.
+
+services: matching, gift; evidence: apps/core-api/src/app/app.module.ts:154, apps/core-api/src/modules/matching/controllers/invite.controller.ts:53
+
+### Redis Lua
+
+Bộ đếm nghiệp vụ chạy bằng script Lua trong Redis nên đúng khi có nhiều instance; gateway dùng Lua tương tự để lấy, gia hạn và trả lease quota kết nối.
+
+services: matching, signaling-gateway; evidence: apps/core-api/src/common/redis/redis-rate-limit.adapter.ts:79, apps/signaling-gateway/src/app/connection-quota.service.ts:126
+
+### Fail-closed và hạn mức ngày
+
+Redis hoặc quota lỗi thì handshake bị từ chối thay vì cho qua; khách có hạn mức ghép đôi theo ngày lưu ở DB và gắn với token thiết bị.
+
+services: signaling-gateway, matching; evidence: apps/signaling-gateway/src/app/signaling.gateway.ts:36, apps/core-api/src/modules/matching/entities/guest-match-quota.entity.ts:4
+
+## Alternatives not chosen
+
+- Chỉ rate limit ở ingress/gateway: Suy luận: ingress thấy IP chứ không thấy user hay nghiệp vụ; hạn mức theo user và theo hành động phải nằm ở ứng dụng.
+
+
+<!-- FILE: https://ducmanh001.github.io/litmatch-service-map/service-map/qa-realtime-delivery.md -->
+
+# Realtime dùng Redis Streams, queue hay pub/sub?
+
+id: qa:realtime-delivery
+category: messaging
+services: module:signaling-gateway, module:matching, module:gift, module:friend, module:party-room, module:soul-match
+
+Redis pub/sub fanout, at-most-once, không lưu và không replay, chỉ publish sau khi commit. Không dùng Redis Streams hay hàng đợi cho realtime vì sự kiện chỉ là gợi ý, REST polling mới là nguồn sự thật.
+
+### Đường đi
+
+core-api PUBLISH lên kênh realtime:user:{userId} với payload đã tính sẵn cho từng người nhận; signaling-gateway PSUBSCRIBE realtime:user:* rồi đẩy xuống room của user.
+
+services: signaling-gateway, gift, friend; evidence: apps/core-api/src/common/realtime/redis-realtime-publisher.adapter.ts:11, apps/signaling-gateway/src/app/signaling.gateway.ts:14
+
+### Ngữ nghĩa best-effort
+
+Publish bọc try/catch và chỉ log khi lỗi để không phá nghiệp vụ đã commit; client luôn còn REST polling làm đường dự phòng.
+
+services: matching, soul-match; evidence: apps/core-api/src/modules/matching/jobs/matcher-worker.service.ts:370, docs/services/realtime-gateway.md:38
+
+### Nhiều instance
+
+Socket.IO Redis adapter đồng bộ việc phát tin giữa nhiều instance gateway; client cố định transport websocket nên không cần sticky session.
+
+services: signaling-gateway; evidence: apps/signaling-gateway/src/app/redis-adapter.service.ts:46
+
+## Alternatives not chosen
+
+- Redis Streams: Bền, có consumer group và replay nhưng cần ack và quản lý offset; thừa với tin chỉ là gợi ý refetch.
+- Outbox + Kafka cho realtime: docs/services/realtime-gateway.md chọn không dùng outbox cho luồng này vì sự kiện ephemeral và đã có fallback.
+- Hàng đợi (list) theo từng user: Suy luận: không replay đúng nghĩa và phải dọn khi user offline.
+
+## Caveats
+
+- Đã quét toàn bộ apps/core-api/src và apps/signaling-gateway/src: không có lệnh XADD, XREAD, XREADGROUP, XACK hay LPUSH, BRPOP nào.
+
+
+<!-- FILE: https://ducmanh001.github.io/litmatch-service-map/service-map/qa-token-lifecycle.md -->
+
+# Vòng đời token và phiên: access, refresh, CSRF, cookie?
+
+id: qa:token-lifecycle
+category: authn
+services: module:auth
+
+Access token ngắn hạn kèm refresh token xoay vòng: mỗi lần refresh phát token mới, dùng lại token cũ bị coi là bị lộ và thu hồi cả họ token. Refresh token nằm trong cookie httpOnly nên cần thêm CSRF double-submit.
+
+### Xoay vòng và phát hiện tái sử dụng
+
+Mỗi refresh token chỉ dùng một lần; client gửi hai refresh song song thì request thua bị coi là tái sử dụng và cả family bị thu hồi, nên client phải single-flight.
+
+services: auth; evidence: apps/core-api/src/modules/auth/auth.controller.ts:113
+
+### Cookie httpOnly
+
+Refresh token nằm trong cookie httpOnly/SameSite nên JavaScript không đọc được, chặn XSS đánh cắp token (docs/adr/0007).
+
+services: auth; evidence: apps/core-api/src/modules/auth/auth.controller.ts:113
+
+### CSRF
+
+Vì cookie tự đính kèm nên CsrfGuard bắt header CSRF khớp token double-submit trên các route dùng cookie.
+
+services: auth; evidence: apps/core-api/src/common/csrf/csrf-token.ts:6
+
+## Alternatives not chosen
+
+- Lưu refresh token ở localStorage: Dễ dùng nhưng JavaScript đọc được nên XSS lấy được; repo đã chọn cookie httpOnly (docs/adr/0007).
+
+
+<!-- FILE: https://ducmanh001.github.io/litmatch-service-map/service-map/qa-webhook-security.md -->
+
+# Bảo mật webhook từ bên ngoài (thanh toán, LiveKit)?
+
+id: qa:webhook-security
+category: security
+services: module:economy, module:calling, module:party-room, module:media-server
+
+Mọi webhook công khai đều tự xác minh nguồn gửi trước khi làm gì: PayOS bằng HMAC-SHA256, Apple bằng JWS (kiểm chuỗi chứng chỉ x5c lên Apple Root CA), Google RTDN bằng OIDC token (kiểm issuer, audience, service account), LiveKit bằng chữ ký khoá chung (receiveWebhook).
+
+### PayOS
+
+Tính lại HMAC-SHA256 bằng checksum key rồi mới ghi ledger; idempotency key payos-credit:{orderCode} chặn cộng diamond lần hai khi payOS gửi lại.
+
+services: economy; evidence: apps/core-api/src/modules/economy/dto/payos-webhook.dto.ts:11
+
+### Apple và Google
+
+Apple gửi signedPayload JWS, server kiểm chuỗi x5c và bundleId; Google gửi Pub/Sub push kèm Bearer OIDC, server kiểm issuer, audience và email service account. Endpoint là @Public nên chữ ký là lớp xác thực duy nhất.
+
+services: economy; evidence: apps/core-api/src/modules/economy/webhooks/economy-webhooks.controller.ts:129
+
+### LiveKit
+
+Webhook phòng và cuộc gọi được xác minh bằng receiveWebhook với cùng cặp khoá API; không hợp lệ thì trả 401 nên call không bao giờ chuyển sang active.
+
+services: calling, party-room, media-server; evidence: apps/core-api/src/modules/calling/webhooks/livekit-webhook.controller.ts:51, apps/core-api/src/modules/party-room/webhooks/party-livekit-webhook.controller.ts:51
+
+## Alternatives not chosen
+
+- Tin returnUrl hoặc redirect từ trình duyệt: Trình duyệt có thể bị giả mạo; chỉ chữ ký server-to-server mới là bằng chứng đã trả tiền.
+
+## Caveats
+
+- Google RTDN chỉ được log (CANCELED không đồng nghĩa voided), hoàn tiền Google dựa vào job quét Voided Purchases API.

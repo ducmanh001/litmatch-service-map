@@ -1,0 +1,301 @@
+{
+ "id": "admin-video-moderation-queue",
+ "title": "Admin duyệt hàng chờ video",
+ "summary": "Moderator xem video chờ duyệt và video đã đăng, rồi từ chối hoặc gỡ video. AdminModule kiểm quyền và ghi audit log, còn Short Video là nơi sở hữu bảng videos và quy tắc chuyển trạng thái, nên hai module phải phối hợp trong cùng một transaction.",
+ "caption": "Admin-console gọi AdminModule, AdminModule gọi ShortVideoService để đọc hàng chờ hoặc đổi trạng thái video, và ghi audit log cùng transaction.",
+ "participants": [
+  {
+   "id": "admin-console",
+   "label": "Admin console",
+   "kind": "client"
+  },
+  {
+   "id": "admin",
+   "label": "Admin (RBAC, audit)",
+   "kind": "service"
+  },
+  {
+   "id": "short-video",
+   "label": "Short Video",
+   "kind": "service"
+  },
+  {
+   "id": "postgres",
+   "label": "PostgreSQL",
+   "kind": "infra"
+  }
+ ],
+ "steps": [
+  {
+   "from": "admin-console",
+   "to": "admin",
+   "label": "GET /admin/videos/pending: xem video chờ duyệt (cần quyền ResolveReports)",
+   "kind": "call",
+   "mechanism": "http",
+   "note": "Route yêu cầu @RequireAdminPermission(AdminPermission.ResolveReports); cả hai route danh sách và hai route hành động dùng cùng quyền này.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/admin/admin.controller.ts",
+     "line": 212,
+     "quote": "@Get('videos/pending')"
+    }
+   ]
+  },
+  {
+   "from": "admin",
+   "to": "short-video",
+   "label": "listPendingReview(query): lấy trang video chờ duyệt",
+   "kind": "call",
+   "mechanism": "di-call",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/admin/admin.service.ts",
+     "line": 151,
+     "quote": "return this.shortVideoService.listPendingReview(query);"
+    }
+   ]
+  },
+  {
+   "from": "short-video",
+   "to": "postgres",
+   "label": "Đọc videos có status = pending_review, phân trang cursor",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/short-video/short-video.service.ts",
+     "line": 431,
+     "quote": ".where('v.status = :status', { status: VideoStatus.PendingReview });"
+    }
+   ]
+  },
+  {
+   "from": "admin",
+   "to": "admin-console",
+   "label": "Trả trang video chờ duyệt (AdminVideosPageDto)",
+   "kind": "return",
+   "mechanism": "http"
+  },
+  {
+   "from": "admin-console",
+   "to": "admin",
+   "label": "GET /admin/videos/published: xem video đang published",
+   "kind": "call",
+   "mechanism": "http",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/admin/admin.controller.ts",
+     "line": 228,
+     "quote": "@Get('videos/published')"
+    }
+   ]
+  },
+  {
+   "from": "admin",
+   "to": "short-video",
+   "label": "listPublished({ ...query, sort: 'recent' }): lấy video published mới nhất",
+   "kind": "call",
+   "mechanism": "di-call",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/admin/admin.service.ts",
+     "line": 157,
+     "quote": "return this.shortVideoService.listPublished({ ...query, sort: 'recent' });"
+    }
+   ]
+  },
+  {
+   "from": "admin-console",
+   "to": "admin",
+   "label": "POST /admin/videos/:id/reject: từ chối video chờ duyệt",
+   "kind": "call",
+   "mechanism": "http",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/admin/admin.controller.ts",
+     "line": 260,
+     "quote": "@Post('videos/:id/reject')"
+    }
+   ]
+  },
+  {
+   "from": "admin",
+   "to": "postgres",
+   "label": "Mở transaction rejectVideo",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/admin/admin.service.ts",
+     "line": 177,
+     "quote": "return this.dataSource.transaction(async (manager) => {"
+    }
+   ]
+  },
+  {
+   "from": "admin",
+   "to": "short-video",
+   "label": "adminReject(videoId, manager): pending_review -> rejected",
+   "kind": "call",
+   "mechanism": "di-call",
+   "note": "UPDATE có điều kiện status = pending_review; 0 dòng bị ảnh hưởng thì ném VIDEO_INVALID_TRANSITION (409) hoặc 404 nếu không có video, transaction rollback.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/admin/admin.service.ts",
+     "line": 178,
+     "quote": "const video = await this.shortVideoService.adminReject(videoId, manager);"
+    }
+   ]
+  },
+  {
+   "from": "short-video",
+   "to": "postgres",
+   "label": "UPDATE videos SET status = rejected WHERE id và status = pending_review",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/short-video/short-video.service.ts",
+     "line": 542,
+     "quote": "const result = await repo.update("
+    }
+   ]
+  },
+  {
+   "from": "admin",
+   "to": "postgres",
+   "label": "auditLogService.record: ghi audit video.rejected cùng transaction",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/admin/admin.service.ts",
+     "line": 179,
+     "quote": "await this.auditLogService.record("
+    }
+   ]
+  },
+  {
+   "from": "admin",
+   "to": "admin-console",
+   "label": "Trả AdminVideoDto của video đã bị từ chối",
+   "kind": "return",
+   "mechanism": "http"
+  },
+  {
+   "from": "admin-console",
+   "to": "admin",
+   "label": "POST /admin/videos/:id/remove: gỡ thủ công video đang published",
+   "kind": "call",
+   "mechanism": "http",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/admin/admin.controller.ts",
+     "line": 276,
+     "quote": "@Post('videos/:id/remove')"
+    }
+   ]
+  },
+  {
+   "from": "admin",
+   "to": "postgres",
+   "label": "Mở transaction removeVideo",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/admin/admin.service.ts",
+     "line": 194,
+     "quote": "return this.dataSource.transaction(async (manager) => {"
+    }
+   ]
+  },
+  {
+   "from": "admin",
+   "to": "short-video",
+   "label": "adminRemove(videoId, manager): published -> removed",
+   "kind": "call",
+   "mechanism": "di-call",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/admin/admin.service.ts",
+     "line": 195,
+     "quote": "const video = await this.shortVideoService.adminRemove(videoId, manager);"
+    }
+   ]
+  },
+  {
+   "from": "short-video",
+   "to": "postgres",
+   "label": "UPDATE videos SET status = removed WHERE id và status = published",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/short-video/short-video.service.ts",
+     "line": 542,
+     "quote": "const result = await repo.update("
+    }
+   ]
+  },
+  {
+   "from": "admin",
+   "to": "postgres",
+   "label": "auditLogService.record: ghi audit video.removed cùng transaction",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/admin/admin.service.ts",
+     "line": 196,
+     "quote": "await this.auditLogService.record("
+    }
+   ]
+  },
+  {
+   "from": "admin",
+   "to": "admin-console",
+   "label": "Trả AdminVideoDto của video đã bị gỡ",
+   "kind": "return",
+   "mechanism": "http"
+  }
+ ],
+ "groups": [
+  {
+   "from": 8,
+   "to": 11,
+   "label": "Transaction từ chối video + audit",
+   "kind": "transaction"
+  },
+  {
+   "from": 14,
+   "to": 17,
+   "label": "Transaction gỡ video + audit",
+   "kind": "transaction"
+  }
+ ],
+ "invariants": [
+  "AdminModule không sở hữu bảng videos: nó phải gọi ShortVideoService để đổi trạng thái, nhưng truyền manager của mình vào để việc đổi trạng thái và audit log nằm trong cùng một transaction.",
+  "Chuyển trạng thái dùng UPDATE có điều kiện trên trạng thái nguồn (reject chỉ từ pending_review, remove chỉ từ published), nên hai moderator thao tác cùng video thì chỉ một bên thắng, bên kia nhận lỗi rõ ràng thay vì ghi đè."
+ ],
+ "failureModes": [
+  {
+   "when": "Video không còn ở trạng thái nguồn (đã được duyệt, từ chối hoặc gỡ bởi người khác)",
+   "effect": "transitionOrThrow ném VIDEO_INVALID_TRANSITION với HTTP 409; transaction rollback, không có audit log."
+  },
+  {
+   "when": "Không tìm thấy video theo id",
+   "effect": "Ném lỗi 404 'Không tìm thấy video'; không ghi audit."
+  },
+  {
+   "when": "Ghi audit log lỗi",
+   "effect": "Exception thoát khỏi callback transaction nên việc đổi trạng thái video cũng rollback."
+  },
+  {
+   "when": "Moderator lật sang trang 2 của hàng chờ pending_review bằng cursor",
+   "effect": "Suy luận: listPendingReview sắp createdAt tăng dần nhưng điều kiện cursor là (createdAt, id) < cursor nên trang sau có thể lặp lại hoặc bỏ sót video cũ; cần kiểm lại hướng so sánh."
+  }
+ ],
+ "dataIssues": [],
+ "uncertain": []
+}

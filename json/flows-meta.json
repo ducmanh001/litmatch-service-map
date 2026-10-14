@@ -1,0 +1,550 @@
+{
+ "gift-in-party-room": {
+  "group": "Tiền tệ & quà",
+  "covers": [
+   "gift|POST /api/v1/party/rooms/:roomId/gifts"
+  ]
+ },
+ "matching-to-call": {
+  "group": "Ghép đôi & gọi",
+  "covers": [
+   "matching|POST /api/v1/matching/tickets",
+   "matching|MatcherWorkerService.onApplicationBootstrap",
+   "matching|POST /api/v1/matching/tickets/:id/confirm",
+   "calling|POST /api/v1/calling/match-sessions/:matchSessionId/join",
+   "calling|POST /api/v1/calling/webhooks/livekit",
+   "calling|POST /api/v1/calling/calls/:id/end"
+  ]
+ },
+ "payos-topup-webhook": {
+  "group": "Tiền tệ & quà",
+  "covers": [
+   "economy|POST /api/v1/economy/payos/orders",
+   "economy|POST /api/v1/economy/webhooks/payos",
+   "economy|GET /api/v1/economy/payos/orders/:orderId"
+  ]
+ },
+ "party-room-lifecycle": {
+  "group": "Phòng party & an toàn",
+  "covers": [
+   "party-room|POST /api/v1/party/rooms",
+   "party-room|POST /api/v1/party/rooms/:id/join",
+   "party-room|POST /api/v1/party/webhooks/livekit",
+   "party-room|PartyRoomSweeperService.onApplicationBootstrap"
+  ]
+ },
+ "message-push-notification": {
+  "group": "Xã hội & nội dung",
+  "covers": [
+   "friend|POST /api/v1/conversations/:id/messages",
+   "notification|POST /api/v1/notifications/web-push/subscription"
+  ]
+ },
+ "auth-guest-login-and-socket": {
+  "group": "Danh tính",
+  "covers": [
+   "auth|POST /api/v1/auth/guest"
+  ]
+ },
+ "soul-match-session": {
+  "group": "Ghép đôi & gọi",
+  "covers": [
+   "soul-match|POST /api/v1/soul-match/sessions/:id/rating",
+   "soul-match|POST /api/v1/soul-match/sessions/:id/end"
+  ]
+ },
+ "feed-post-with-image": {
+  "group": "Xã hội & nội dung",
+  "covers": [
+   "media|POST /api/v1/media/images/upload-intent",
+   "feed|POST /api/v1/feed/posts"
+  ]
+ },
+ "short-video-publish-moderation": {
+  "group": "Xã hội & nội dung",
+  "covers": [
+   "short-video|POST /api/v1/videos/upload-intent",
+   "short-video|POST /api/v1/videos/:id/finalize",
+   "admin|POST /api/v1/admin/videos/:id/approve"
+  ]
+ },
+ "movie-match-anonymous": {
+  "group": "Ghép đôi & gọi",
+  "covers": [
+   "movie-match|POST /api/v1/movie-match/anon/queue",
+   "movie-match|PATCH /api/v1/movie-match/anon/sessions/:id/state",
+   "movie-match|POST /api/v1/movie-match/anon/sessions/:id/rating"
+  ]
+ },
+ "mini-game-session": {
+  "group": "Ghép đôi & gọi",
+  "covers": [
+   "mini-game|POST /api/v1/mini-game/sessions",
+   "mini-game|POST /api/v1/mini-game/sessions/:id/moves"
+  ]
+ },
+ "vip-purchase-iap": {
+  "group": "Tiền tệ & quà",
+  "covers": [
+   "economy|POST /api/v1/economy/vip/purchase",
+   "economy|POST /api/v1/economy/iap/verify"
+  ]
+ },
+ "admin-ban-and-refund": {
+  "group": "Vận hành (admin)",
+  "covers": [
+   "admin|POST /api/v1/admin/users/:id/ban",
+   "admin|POST /api/v1/admin/economy/transactions/:id/refund"
+  ]
+ },
+ "friend-direct-call": {
+  "group": "Ghép đôi & gọi",
+  "covers": [
+   "calling|POST /api/v1/calling/friends/:friendUserId/join"
+  ]
+ },
+ "auth-otp-login": {
+  "group": "Danh tính",
+  "covers": [
+   "auth|POST /api/v1/auth/otp/request",
+   "auth|POST /api/v1/auth/otp/verify"
+  ]
+ },
+ "auth-social-login": {
+  "group": "Danh tính",
+  "covers": [
+   "auth|POST /api/v1/auth/social"
+  ]
+ },
+ "auth-refresh-and-logout": {
+  "group": "Danh tính",
+  "covers": [
+   "auth|POST /api/v1/auth/refresh",
+   "auth|POST /api/v1/auth/logout"
+  ]
+ },
+ "auth-guest-upgrade": {
+  "group": "Danh tính",
+  "covers": [
+   "auth|POST /api/v1/auth/upgrade/otp",
+   "auth|POST /api/v1/auth/upgrade/social"
+  ]
+ },
+ "auth-search-by-phone": {
+  "group": "Danh tính",
+  "covers": [
+   "auth|GET /api/v1/auth/search-by-phone"
+  ]
+ },
+ "admin-user-lookup-and-unban": {
+  "group": "Vận hành (admin)",
+  "covers": [
+   "admin|GET /api/v1/admin/users",
+   "admin|GET /api/v1/admin/users/:id",
+   "admin|POST /api/v1/admin/users/:id/unban"
+  ]
+ },
+ "admin-report-resolution": {
+  "group": "Vận hành (admin)",
+  "covers": [
+   "admin|GET /api/v1/admin/reports",
+   "admin|POST /api/v1/admin/reports/:id/resolve",
+   "admin|POST /api/v1/admin/reports/:id/dismiss"
+  ]
+ },
+ "admin-video-moderation-queue": {
+  "group": "Vận hành (admin)",
+  "covers": [
+   "admin|GET /api/v1/admin/videos/pending",
+   "admin|GET /api/v1/admin/videos/published",
+   "admin|POST /api/v1/admin/videos/:id/reject",
+   "admin|POST /api/v1/admin/videos/:id/remove"
+  ]
+ },
+ "admin-room-management": {
+  "group": "Vận hành (admin)",
+  "covers": [
+   "admin|POST /api/v1/admin/rooms/:id/close",
+   "admin|GET /api/v1/admin/rooms"
+  ]
+ },
+ "admin-support-tickets": {
+  "group": "Vận hành (admin)",
+  "covers": [
+   "support|POST /api/v1/support/tickets",
+   "support|GET /api/v1/support/tickets/me",
+   "admin|GET /api/v1/admin/support/tickets",
+   "admin|PATCH /api/v1/admin/support/tickets/:id"
+  ]
+ },
+ "admin-gift-catalog": {
+  "group": "Vận hành (admin)",
+  "covers": [
+   "gift|GET /api/v1/gifts",
+   "admin|GET /api/v1/admin/gifts",
+   "admin|POST /api/v1/admin/gifts",
+   "admin|PATCH /api/v1/admin/gifts/:id"
+  ]
+ },
+ "admin-economy-inspect-and-config": {
+  "group": "Vận hành (admin)",
+  "covers": [
+   "admin|GET /api/v1/admin/economy/wallet/:userId",
+   "admin|GET /api/v1/admin/economy/users/:userId/transactions",
+   "admin|GET /api/v1/admin/config/economy-catalog",
+   "admin|PATCH /api/v1/admin/config/iap-products/:productId",
+   "admin|PATCH /api/v1/admin/config/vip-plans/:id"
+  ]
+ },
+ "admin-broadcast-notification": {
+  "group": "Vận hành (admin)",
+  "covers": [
+   "admin|POST /api/v1/admin/notifications/broadcast"
+  ]
+ },
+ "admin-staff-and-permissions": {
+  "group": "Vận hành (admin)",
+  "covers": [
+   "admin|GET /api/v1/admin/permissions",
+   "admin|PATCH /api/v1/admin/permissions/:role/:permission",
+   "admin|GET /api/v1/admin/staff",
+   "admin|PATCH /api/v1/admin/staff/:id/role"
+  ]
+ },
+ "admin-dashboard": {
+  "group": "Vận hành (admin)",
+  "covers": [
+   "admin|GET /api/v1/admin/dashboard"
+  ]
+ },
+ "economy-outbox-relay": {
+  "group": "Tiền tệ & quà",
+  "covers": [
+   "economy|OutboxRelayService.onApplicationBootstrap"
+  ]
+ },
+ "iap-store-notifications-and-refund-poll": {
+  "group": "Tiền tệ & quà",
+  "covers": [
+   "economy|POST /api/v1/economy/webhooks/apple",
+   "economy|POST /api/v1/economy/webhooks/google/rtdn",
+   "economy|IapRefundPollService.onApplicationBootstrap"
+  ]
+ },
+ "economy-reconciliation-and-startup-guards": {
+  "group": "Tiền tệ & quà",
+  "covers": [
+   "economy|ReconciliationService.onApplicationBootstrap",
+   "economy|DevIapVerifier.onApplicationBootstrap",
+   "economy|DevAppleNotificationVerifier.onApplicationBootstrap",
+   "economy|DevGoogleRtdnVerifier.onApplicationBootstrap"
+  ]
+ },
+ "gift-on-video": {
+  "group": "Tiền tệ & quà",
+  "covers": [
+   "gift|POST /api/v1/videos/:videoId/gifts"
+  ]
+ },
+ "gift-to-profile-chat-gate": {
+  "group": "Tiền tệ & quà",
+  "covers": [
+   "gift|POST /api/v1/profiles/:profileUserId/gifts"
+  ]
+ },
+ "avatar-buy-item": {
+  "group": "Tiền tệ & quà",
+  "covers": [
+   "avatar|POST /api/v1/avatar/items/:assetId/claim",
+   "avatar|POST /api/v1/avatar/items/:assetId/buy",
+   "avatar|PUT /api/v1/avatar/me/equip"
+  ]
+ },
+ "matching-invite-create": {
+  "group": "Ghép đôi & gọi",
+  "covers": [
+   "matching|POST /api/v1/matching/invites",
+   "matching|GET /api/v1/matching/invites",
+   "matching|GET /api/v1/matching/invites/:id"
+  ]
+ },
+ "matching-invite-accept": {
+  "group": "Ghép đôi & gọi",
+  "covers": [
+   "matching|POST /api/v1/matching/invites/:id/accept"
+  ]
+ },
+ "matching-invite-decline-cancel": {
+  "group": "Ghép đôi & gọi",
+  "covers": [
+   "matching|POST /api/v1/matching/invites/:id/decline",
+   "matching|POST /api/v1/matching/invites/:id/cancel"
+  ]
+ },
+ "matching-ticket-status-cancel-speedup": {
+  "group": "Ghép đôi & gọi",
+  "covers": [
+   "matching|GET /api/v1/matching/tickets/current",
+   "matching|GET /api/v1/matching/tickets/:id",
+   "matching|DELETE /api/v1/matching/tickets/:id",
+   "matching|POST /api/v1/matching/tickets/:id/speedup"
+  ]
+ },
+ "calling-end-and-ticker": {
+  "group": "Ghép đôi & gọi",
+  "covers": [
+   "calling|GET /api/v1/calling/calls/:id",
+   "calling|POST /api/v1/calling/match-sessions/:matchSessionId/end",
+   "calling|CallTickerService.onApplicationBootstrap"
+  ]
+ },
+ "calling-like-after-call": {
+  "group": "Ghép đôi & gọi",
+  "covers": [
+   "calling|POST /api/v1/calling/calls/:id/like"
+  ]
+ },
+ "soul-match-room-reads-and-reveal": {
+  "group": "Ghép đôi & gọi",
+  "covers": [
+   "soul-match|GET /api/v1/soul-match/sessions/:id",
+   "soul-match|GET /api/v1/soul-match/sessions/:id/messages",
+   "soul-match|GET /api/v1/soul-match/sessions/:id/partner"
+  ]
+ },
+ "soul-match-send-message": {
+  "group": "Ghép đôi & gọi",
+  "covers": [
+   "soul-match|POST /api/v1/soul-match/sessions/:id/messages"
+  ]
+ },
+ "palm-match-queue-and-rating": {
+  "group": "Ghép đôi & gọi",
+  "covers": [
+   "palm-match|GET /api/v1/palm-match/reading",
+   "palm-match|POST /api/v1/palm-match/queue",
+   "palm-match|GET /api/v1/palm-match/current",
+   "palm-match|POST /api/v1/palm-match/sessions/:id/flip",
+   "palm-match|POST /api/v1/palm-match/sessions/:id/rating",
+   "palm-match|DELETE /api/v1/palm-match/current"
+  ]
+ },
+ "mood-status-visibility": {
+  "group": "Ghép đôi & gọi",
+  "covers": [
+   "mood|GET /api/v1/mood/presets",
+   "mood|GET /api/v1/mood/status/me",
+   "mood|GET /api/v1/mood/status/:userId",
+   "mood|POST /api/v1/mood/status",
+   "mood|DELETE /api/v1/mood/status"
+  ]
+ },
+ "movie-match-friend-session": {
+  "group": "Ghép đôi & gọi",
+  "covers": [
+   "movie-match|POST /api/v1/movie-match/sessions",
+   "movie-match|PATCH /api/v1/movie-match/sessions/:id/state",
+   "movie-match|POST /api/v1/movie-match/sessions/:id/end",
+   "movie-match|GET /api/v1/movie-match/sessions/:id"
+  ]
+ },
+ "movie-match-anon-chat-finish-reactions": {
+  "group": "Ghép đôi & gọi",
+  "covers": [
+   "movie-match|GET /api/v1/movie-match/anon/current",
+   "movie-match|DELETE /api/v1/movie-match/anon/current",
+   "movie-match|POST /api/v1/movie-match/anon/sessions/:id/finish",
+   "movie-match|POST /api/v1/movie-match/anon/sessions/:id/messages",
+   "movie-match|GET /api/v1/movie-match/anon/sessions/:id/messages",
+   "movie-match|POST /api/v1/movie-match/anon/sessions/:id/reactions"
+  ]
+ },
+ "discovery-browse-and-nearby": {
+  "group": "Ghép đôi & gọi",
+  "covers": [
+   "discovery|GET /api/v1/discovery/browse",
+   "discovery|PUT /api/v1/discovery/nearby/location",
+   "discovery|PUT /api/v1/discovery/nearby/visible",
+   "discovery|GET /api/v1/discovery/nearby"
+  ]
+ },
+ "friend-profile-follow-and-actions": {
+  "group": "Xã hội & nội dung",
+  "covers": [
+   "friend|GET /api/v1/profiles/:profileUserId/actions",
+   "friend|POST /api/v1/profiles/:profileUserId/follow",
+   "friend|DELETE /api/v1/profiles/:profileUserId/follow"
+  ]
+ },
+ "friend-open-conversation-from-profile": {
+  "group": "Xã hội & nội dung",
+  "covers": [
+   "friend|POST /api/v1/profiles/:profileUserId/conversation",
+   "friend|GET /api/v1/friends/:friendUserId/conversation"
+  ]
+ },
+ "friend-list-and-conversation-reads": {
+  "group": "Xã hội & nội dung",
+  "covers": [
+   "friend|GET /api/v1/friends",
+   "friend|GET /api/v1/conversations/:id/messages",
+   "friend|GET /api/v1/conversations/:id/streak",
+   "friend|POST /api/v1/conversations/:id/read",
+   "friend|POST /api/v1/conversations/:id/mute"
+  ]
+ },
+ "friend-streak-warning-job": {
+  "group": "Xã hội & nội dung",
+  "covers": [
+   "friend|StreakWarningJob.onApplicationBootstrap"
+  ]
+ },
+ "story-create-with-image": {
+  "group": "Xã hội & nội dung",
+  "covers": [
+   "feed|POST /api/v1/stories",
+   "feed|StorySweeperService.onApplicationBootstrap"
+  ]
+ },
+ "story-ring-view-and-viewers": {
+  "group": "Xã hội & nội dung",
+  "covers": [
+   "feed|GET /api/v1/stories/ring",
+   "feed|GET /api/v1/stories/:storyId",
+   "feed|GET /api/v1/stories/:storyId/viewers"
+  ]
+ },
+ "story-reply-to-dm": {
+  "group": "Xã hội & nội dung",
+  "covers": [
+   "feed|POST /api/v1/stories/:storyId/reply"
+  ]
+ },
+ "feed-read-posts": {
+  "group": "Xã hội & nội dung",
+  "covers": [
+   "feed|GET /api/v1/feed/posts",
+   "feed|GET /api/v1/feed/users/:userId/posts",
+   "feed|GET /api/v1/feed/posts/:postId"
+  ]
+ },
+ "feed-delete-post": {
+  "group": "Xã hội & nội dung",
+  "covers": [
+   "feed|DELETE /api/v1/feed/posts/:postId",
+   "feed|DELETE /api/v1/feed/comments/:commentId"
+  ]
+ },
+ "feed-comment-with-notification": {
+  "group": "Xã hội & nội dung",
+  "covers": [
+   "feed|POST /api/v1/feed/posts/:postId/comments",
+   "feed|GET /api/v1/feed/posts/:postId/comments"
+  ]
+ },
+ "feed-reaction-with-notification": {
+  "group": "Xã hội & nội dung",
+  "covers": [
+   "feed|POST /api/v1/feed/posts/:postId/reactions",
+   "feed|DELETE /api/v1/feed/posts/:postId/reactions",
+   "feed|GET /api/v1/feed/posts/:postId/reactions"
+  ]
+ },
+ "short-video-browse-and-detail": {
+  "group": "Xã hội & nội dung",
+  "covers": [
+   "short-video|GET /api/v1/videos",
+   "short-video|GET /api/v1/videos/:id",
+   "short-video|POST /api/v1/videos/:id/views",
+   "short-video|POST /api/v1/videos/:id/reactions",
+   "short-video|DELETE /api/v1/videos/:id/reactions"
+  ]
+ },
+ "short-video-report": {
+  "group": "Xã hội & nội dung",
+  "covers": [
+   "short-video|POST /api/v1/videos/:id/report"
+  ]
+ },
+ "short-video-comments": {
+  "group": "Xã hội & nội dung",
+  "covers": [
+   "short-video|POST /api/v1/videos/:id/comments",
+   "short-video|GET /api/v1/videos/:id/comments",
+   "short-video|DELETE /api/v1/videos/:id/comments/:commentId"
+  ]
+ },
+ "short-video-ranking-and-sweeper-jobs": {
+  "group": "Xã hội & nội dung",
+  "covers": [
+   "short-video|VideoRankingService.onApplicationBootstrap",
+   "short-video|VideoSweeperService.onApplicationBootstrap"
+  ]
+ },
+ "party-room-detail-and-comments": {
+  "group": "Phòng party & an toàn",
+  "covers": [
+   "party-room|GET /api/v1/party/rooms",
+   "party-room|GET /api/v1/party/rooms/:id",
+   "party-room|GET /api/v1/party/rooms/:id/comments",
+   "party-room|POST /api/v1/party/rooms/:id/comments"
+  ]
+ },
+ "party-room-leave-and-role-change": {
+  "group": "Phòng party & an toàn",
+  "covers": [
+   "party-room|POST /api/v1/party/rooms/:id/leave",
+   "party-room|POST /api/v1/party/rooms/:id/members/:userId/role"
+  ]
+ },
+ "party-room-speaker-invite": {
+  "group": "Phòng party & an toàn",
+  "covers": [
+   "party-room|POST /api/v1/party/rooms/:id/members/:userId/speaker-invite",
+   "party-room|POST /api/v1/party/rooms/:id/speaker-invite/accept",
+   "party-room|POST /api/v1/party/rooms/:id/speaker-invite/decline"
+  ]
+ },
+ "safety-report-and-trust-score": {
+  "group": "Phòng party & an toàn",
+  "covers": [
+   "safety|POST /api/v1/safety/reports"
+  ]
+ },
+ "user-presence-read": {
+  "group": "Danh tính",
+  "covers": [
+   "user|GET /api/v1/users/:id/presence"
+  ]
+ },
+ "app-shell-health-and-readiness": {
+  "group": "Vận hành (admin)",
+  "covers": [
+   "app-shell|GET /health/ready"
+  ]
+ },
+ "matching-sweeper-jobs": {
+  "group": "Ghép đôi & gọi",
+  "covers": [
+   "matching|InviteSweeperService.onApplicationBootstrap",
+   "matching|TicketSweeperService.onApplicationBootstrap"
+  ]
+ },
+ "safety-block-and-unblock": {
+  "group": "Phòng party & an toàn",
+  "covers": [
+   "safety|POST /api/v1/safety/blocks/:targetUserId",
+   "safety|DELETE /api/v1/safety/blocks/:targetUserId",
+   "safety|GET /api/v1/safety/blocks/:targetUserId"
+  ]
+ },
+ "friend-follow-lists-and-connections": {
+  "group": "Xã hội & nội dung",
+  "covers": [
+   "friend|GET /api/v1/profiles/:profileUserId/follow-counts",
+   "friend|GET /api/v1/profiles/:profileUserId/followers",
+   "friend|GET /api/v1/profiles/:profileUserId/following",
+   "friend|GET /api/v1/friends/connections"
+  ]
+ }
+}

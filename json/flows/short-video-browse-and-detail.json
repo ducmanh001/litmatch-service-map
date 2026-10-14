@@ -1,0 +1,278 @@
+{
+ "id": "short-video-browse-and-detail",
+ "title": "Duyệt video ngắn, xem chi tiết, view và reaction",
+ "summary": "Người dùng duyệt danh sách video published (recent hoặc ranked, hoặc tab following), mở chi tiết, ghi watch-time và thả/bỏ tim. short-video sở hữu dữ liệu video nhưng phải gọi friend để lấy danh sách bạn bè và user để lấy hồ sơ tác giả.",
+ "caption": "short-video đọc/ghi PostgreSQL của chính nó, mượn friend và user để lọc theo bạn bè và dựng hồ sơ tác giả.",
+ "participants": [
+  {
+   "id": "web",
+   "label": "Web client",
+   "kind": "client"
+  },
+  {
+   "id": "short-video",
+   "label": "short-video",
+   "kind": "service"
+  },
+  {
+   "id": "friend",
+   "label": "friend",
+   "kind": "service"
+  },
+  {
+   "id": "user",
+   "label": "user",
+   "kind": "service"
+  },
+  {
+   "id": "postgres",
+   "label": "PostgreSQL",
+   "kind": "infra"
+  }
+ ],
+ "steps": [
+  {
+   "from": "web",
+   "to": "short-video",
+   "label": "GET /videos?sort=recent|ranked&feed=following",
+   "kind": "call",
+   "mechanism": "http"
+  },
+  {
+   "from": "short-video",
+   "to": "friend",
+   "label": "Chỉ khi feed=following: lấy danh sách id bạn bè",
+   "kind": "call",
+   "mechanism": "di-call",
+   "note": "Nếu không có bạn nào thì trả trang rỗng ngay, không truy vấn video.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/short-video/short-video.service.ts",
+     "line": 206,
+     "quote": "friendIds = await this.friendService.listFriendIds(user.userId);"
+    }
+   ]
+  },
+  {
+   "from": "short-video",
+   "to": "postgres",
+   "label": "Truy vấn video published, sắp theo createdAt hoặc rankScore, phân trang cursor",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/short-video/short-video.service.ts",
+     "line": 213,
+     "quote": "const qb = this.videoRepo"
+    }
+   ]
+  },
+  {
+   "from": "short-video",
+   "to": "user",
+   "label": "Nạp hàng loạt hồ sơ tác giả của cả trang",
+   "kind": "call",
+   "mechanism": "di-call",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/short-video/short-video.controller.ts",
+     "line": 216,
+     "quote": "const users = await this.userService.findByIds("
+    }
+   ]
+  },
+  {
+   "from": "short-video",
+   "to": "web",
+   "label": "Trang video kèm tác giả và nextCursor",
+   "kind": "return",
+   "mechanism": "http"
+  },
+  {
+   "from": "web",
+   "to": "short-video",
+   "label": "GET /videos/:id",
+   "kind": "call",
+   "mechanism": "http"
+  },
+  {
+   "from": "short-video",
+   "to": "postgres",
+   "label": "Đọc video; tác giả thấy mọi status, người khác chỉ published",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/short-video/short-video.service.ts",
+     "line": 174,
+     "quote": "const video = await this.videoRepo.findOneBy({ id: videoId });"
+    }
+   ]
+  },
+  {
+   "from": "short-video",
+   "to": "user",
+   "label": "Lấy hồ sơ công khai của tác giả video",
+   "kind": "call",
+   "mechanism": "di-call",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/short-video/short-video.controller.ts",
+     "line": 209,
+     "quote": "return PublicProfileDto.from(await this.userService.getByIdOrThrow(userId));"
+    }
+   ]
+  },
+  {
+   "from": "short-video",
+   "to": "web",
+   "label": "Chi tiết video kèm tác giả",
+   "kind": "return",
+   "mechanism": "http"
+  },
+  {
+   "from": "web",
+   "to": "short-video",
+   "label": "POST /videos/:id/views với watchTimeMs",
+   "kind": "call",
+   "mechanism": "http"
+  },
+  {
+   "from": "short-video",
+   "to": "postgres",
+   "label": "Kiểm tra video hiển thị được (getVideoOrThrow)",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/short-video/short-video.service.ts",
+     "line": 174,
+     "quote": "const video = await this.videoRepo.findOneBy({ id: videoId });"
+    }
+   ]
+  },
+  {
+   "from": "short-video",
+   "to": "postgres",
+   "label": "Upsert VideoView, cập nhật watchTime, tăng viewCount một lần khi qualified",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "note": "Self-view bị bỏ qua trước khi mở transaction.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/short-video/short-video.service.ts",
+     "line": 268,
+     "quote": "await this.dataSource.transaction(async (manager) => {"
+    }
+   ]
+  },
+  {
+   "from": "short-video",
+   "to": "web",
+   "label": "204 No Content",
+   "kind": "return",
+   "mechanism": "http"
+  },
+  {
+   "from": "web",
+   "to": "short-video",
+   "label": "POST /videos/:id/reactions (thả tim)",
+   "kind": "call",
+   "mechanism": "http"
+  },
+  {
+   "from": "short-video",
+   "to": "postgres",
+   "label": "Lưu VideoReaction và tăng likeCount; trùng unique thì coi như đã tim",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/short-video/short-video.service.ts",
+     "line": 310,
+     "quote": "await this.dataSource.transaction(async (manager) => {"
+    }
+   ]
+  },
+  {
+   "from": "short-video",
+   "to": "web",
+   "label": "liked=true cùng likeCount",
+   "kind": "return",
+   "mechanism": "http"
+  },
+  {
+   "from": "web",
+   "to": "short-video",
+   "label": "DELETE /videos/:id/reactions (bỏ tim)",
+   "kind": "call",
+   "mechanism": "http"
+  },
+  {
+   "from": "short-video",
+   "to": "postgres",
+   "label": "Xoá VideoReaction, giảm likeCount nếu có bản ghi bị xoá",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/short-video/short-video.service.ts",
+     "line": 328,
+     "quote": "const affected = await this.dataSource.transaction(async (manager) => {"
+    }
+   ]
+  },
+  {
+   "from": "short-video",
+   "to": "web",
+   "label": "liked=false cùng likeCount",
+   "kind": "return",
+   "mechanism": "http"
+  }
+ ],
+ "groups": [
+  {
+   "from": 12,
+   "to": 12,
+   "label": "Transaction ghi view",
+   "kind": "transaction"
+  },
+  {
+   "from": 15,
+   "to": 15,
+   "label": "Transaction thả tim",
+   "kind": "transaction"
+  },
+  {
+   "from": 18,
+   "to": 18,
+   "label": "Transaction bỏ tim",
+   "kind": "transaction"
+  }
+ ],
+ "invariants": [
+  "getVideoOrThrow chạy trước mọi thao tác view/reaction: video không tồn tại, bị removed/rejected hoặc chưa published (với người không phải tác giả) trả cùng mã VIDEO_NOT_FOUND.",
+  "Bản ghi VideoView/VideoReaction và bộ đếm viewCount/likeCount nằm trong cùng một transaction để bộ đếm không lệch với bản ghi.",
+  "Hồ sơ tác giả luôn do module user cung cấp và danh sách bạn bè do module friend cung cấp; short-video không đọc trực tiếp bảng của hai module đó."
+ ],
+ "failureModes": [
+  {
+   "when": "Video không tồn tại hoặc không hiển thị với người gọi",
+   "effect": "getVideoOrThrow ném VIDEO_NOT_FOUND (404), không có ghi DB nào xảy ra."
+  },
+  {
+   "when": "Thả tim trùng (unique violation)",
+   "effect": "Giao dịch bị rollback, API vẫn trả liked=true với likeCount hiện tại (idempotent)."
+  },
+  {
+   "when": "Ghi view đồng thời lần đầu bị unique violation",
+   "effect": "Code bắt lỗi unique, đọc lại VideoView rồi cập nhật; lỗi khác được ném ra. Suy luận: Postgres huỷ transaction sau lỗi unique nên lệnh đọc lại trong cùng transaction có thể vẫn lỗi."
+  },
+  {
+   "when": "feed=following nhưng người dùng chưa có bạn",
+   "effect": "Trả trang rỗng với nextCursor null, không lỗi."
+  }
+ ],
+ "dataIssues": [],
+ "uncertain": []
+}

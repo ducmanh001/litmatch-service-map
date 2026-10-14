@@ -1,0 +1,45 @@
+<!doctype html><html lang="vi"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Tìm kiếm · Litmatch Service Map</title><meta name="description" content="Bản đồ 25 service của Litmatch: ai gọi ai và vì sao, 72 luồng xuyên service đã kiểm toán, kỹ thuật áp dụng, điểm đáng chú ý và trạng thái xử lý."><meta name="robots" content="index,follow"><link rel="canonical" href="https://ducmanh001.github.io/litmatch-service-map/"><link rel="sitemap" type="application/xml" href="sitemap.xml"><link rel="alternate" type="text/plain" href="llms.txt" title="llms.txt"><link rel="alternate" type="application/json" href="search-index.json" title="search index"><script type="application/ld+json">{"@context":"https://schema.org","@type":"Dataset","name":"Litmatch Service Map","description":"Bản đồ 25 service của Litmatch: ai gọi ai và vì sao, 72 luồng xuyên service đã kiểm toán, kỹ thuật áp dụng, điểm đáng chú ý và trạng thái xử lý.","url":"https://ducmanh001.github.io/litmatch-service-map/","inLanguage":"vi","dateModified":"2026-10-14","isBasedOn":"https://github.com/ducmanh001/litmatch","license":"https://github.com/ducmanh001/litmatch","distribution":[{"@type":"DataDownload","encodingFormat":"text/plain","contentUrl":"https://ducmanh001.github.io/litmatch-service-map/llms.txt"},{"@type":"DataDownload","encodingFormat":"application/json","contentUrl":"https://ducmanh001.github.io/litmatch-service-map/search-index.json"},{"@type":"DataDownload","encodingFormat":"application/xml","contentUrl":"https://ducmanh001.github.io/litmatch-service-map/sitemap.xml"}],"potentialAction":{"@type":"SearchAction","target":"https://ducmanh001.github.io/litmatch-service-map/search.html?q={query}","query-input":"required name=query"}}</script><style>body{margin:0;background:#eef2ee;color:#14201b;font:15px/1.6 system-ui,-apple-system,"Segoe UI",sans-serif}main{max-width:980px;margin:0 auto;padding:20px 16px 60px}h1{font-size:28px;line-height:1.2}h2{margin-top:28px;border-top:1px solid #97a89f;padding-top:12px}code{background:#e6ece7;border:1px solid #ced8d1;border-radius:4px;padding:0 .3em;font-size:.88em;overflow-wrap:anywhere}pre{background:#e6ece7;border:1px solid #ced8d1;border-radius:6px;padding:10px;overflow-x:auto}pre code{border:0;padding:0}table{border-collapse:collapse;display:block;overflow-x:auto;font-size:13px}td,th{border:1px solid #ced8d1;padding:4px 8px;text-align:left;vertical-align:top}blockquote{margin:8px 0;padding:2px 12px;border-left:3px solid #97a89f}a{color:#0d6a50}input[type=search]{width:100%;box-sizing:border-box;padding:10px 12px;font:inherit;border:1px solid #97a89f;border-radius:6px;background:#fff;color:#14201b}@media(prefers-color-scheme:dark){body{background:#0e1511;color:#e3ece7}code,pre{background:#1b2822;border-color:#26342d}td,th{border-color:#26342d}a{color:#5fd1a8}input[type=search]{background:#16211b;color:#e3ece7;border-color:#3a4d43}}</style></head><body><nav class="site-strip" aria-label="Điều hướng và dữ liệu máy đọc" style="margin:0;padding:8px 16px;font:13px/1.6 system-ui,sans-serif;background:#d6ebe3;color:#14201b;border-bottom:1px solid #97a89f;display:flex;flex-wrap:wrap;gap:4px 14px;align-items:center"><b>Litmatch Service Map</b> <a href="index.html">Trang chính</a> <a href="sitemap.html">Sitemap</a> <a href="roadmap.html">Roadmap</a> <a href="search.html" aria-current="page">Tìm kiếm</a> <a href="llms.txt">llms.txt</a> <a href="search-index.json">search-index.json</a> <a href="index.json">index.json</a> <a href="service-map/index.md">service-map</a> <a href="flows/index.md">flows</a> <a href="lookup/index.md">lookup</a> <span style="opacity:.6">|</span> <a href="https://ducmanh001.github.io/litmatch-atlas-demo/">Litmatch System Atlas</a> <a href="https://ducmanh001.github.io/litmatch-error-history/">Litmatch Error History</a></nav><main><h1>Tìm kiếm</h1><p>Tìm theo id hoặc từ khoá: endpoint (<code>POST /auth/guest</code>), bảng (<code>wallet_accounts</code>), biến môi trường (<code>ECONOMY_</code>), mã lỗi, sự kiện realtime (<code>match.confirmed</code>), vấn đề (<code>P075</code>), luồng, tính năng. Không dấu cũng được. AI không chạy JavaScript nên đọc thẳng <a href="search-index.json">search-index.json</a> hoặc <a href="lookup/index.md">lookup</a>.</p><form id="f" onsubmit="return false"><input id="q" type="search" placeholder="gõ để tìm…" autofocus autocomplete="off"></form><div id="types" style="margin:10px 0"></div><p id="status" style="font-size:13px;opacity:.75">Đang tải chỉ mục…</p><div id="res"></div></main><script>// Client-side search over search-index.json (same folder). No dependencies.
+(function () {
+  var norm = function (s) { return String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/đ/g, 'd').replace(/Đ/g, 'd').toLowerCase(); };
+  var esc = function (s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); };
+  var input = document.getElementById('q'), box = document.getElementById('res'), chips = document.getElementById('types'), status = document.getElementById('status');
+  var data = [], activeType = '';
+  var viewHref = function (u) { return /\.(md|json|txt)$/.test(u) ? 'view.html?f=' + encodeURIComponent(u) : u; };
+  function run() {
+    var q = norm(input.value).trim();
+    try { var p = new URLSearchParams(location.search); if (q) p.set('q', input.value.trim()); else p.delete('q'); if (activeType) p.set('type', activeType); else p.delete('type'); history.replaceState(null, '', location.pathname + (p.toString() ? '?' + p.toString() : '')); } catch (e) {}
+    if (!data.length) { return; }
+    var toks = q.split(/\s+/).filter(Boolean), res = [], counts = {};
+    for (var i = 0; i < data.length; i++) {
+      var d = data[i], score = 0, ok = true;
+      if (!toks.length) { score = d.e.type === 'module' || d.e.type === 'slice' || d.e.type === 'roadmap' ? 2 : 1; }
+      else {
+        for (var k = 0; k < toks.length; k++) {
+          var t = toks[k], here = 0;
+          if (d.id === t) here += 100; else if (d.id.indexOf(t) === 0) here += 30; else if (d.id.indexOf(t) >= 0) here += 15;
+          if (d.n.indexOf(t) >= 0) here += 8;
+          if (d.s.indexOf(t) >= 0) here += 2;
+          if (!here) { ok = false; break; }
+          score += here;
+        }
+      }
+      if (!ok) continue;
+      counts[d.e.type] = (counts[d.e.type] || 0) + 1;
+      if (activeType && d.e.type !== activeType) continue;
+      res.push([score, d]);
+    }
+    res.sort(function (a, b) { return b[0] - a[0] || (a[1].e.id < b[1].e.id ? -1 : 1); });
+    var total = res.length; res = res.slice(0, 80);
+    chips.innerHTML = Object.keys(counts).sort().map(function (t) { return '<button type="button" data-t="' + esc(t) + '" style="margin:2px 6px 2px 0;padding:2px 10px;border-radius:12px;border:1px solid #97a89f;background:' + (t === activeType ? '#0d6a50;color:#fff' : 'transparent;color:inherit') + ';font:inherit;cursor:pointer">' + esc(t) + ' ' + counts[t] + '</button>'; }).join('');
+    status.textContent = total + ' kết quả' + (total > 80 ? ' (hiện 80 đầu)' : '') + (toks.length ? '' : ' (chưa nhập từ khoá: hiện các mục chính)');
+    box.innerHTML = res.map(function (r) { var e = r[1].e; return '<div style="margin:0 0 12px"><a href="' + esc(viewHref(e.url)) + '"><b>' + esc(e.title || e.id) + '</b></a> <span style="opacity:.65;font-size:12px">[' + esc(e.type) + '] ' + esc(e.id) + '</span><div style="font-size:13px;opacity:.85">' + esc(e.summary || '') + '</div><div style="font-size:12px;opacity:.6"><a href="' + esc(e.url) + '">' + esc(e.url) + '</a></div></div>'; }).join('');
+  }
+  chips.addEventListener('click', function (ev) { var t = ev.target && ev.target.getAttribute && ev.target.getAttribute('data-t'); if (t === null || t === undefined) return; activeType = activeType === t ? '' : t; run(); });
+  input.addEventListener('input', run);
+  fetch('search-index.json').then(function (r) { return r.json(); }).then(function (j) {
+    data = j.entries.map(function (e) { return { e: e, id: norm(e.id), n: norm(e.title), s: norm(e.summary) }; });
+    try { var p = new URLSearchParams(location.search); if (p.get('q')) input.value = p.get('q'); if (p.get('type')) activeType = p.get('type'); } catch (e) {}
+    run();
+  }).catch(function (e) { status.textContent = 'Không tải được search-index.json: ' + e; });
+})();
+</script></body></html>

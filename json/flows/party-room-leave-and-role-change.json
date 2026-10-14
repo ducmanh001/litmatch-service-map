@@ -1,0 +1,352 @@
+{
+ "id": "party-room-leave-and-role-change",
+ "title": "Rời phòng và đổi vai trò thành viên",
+ "summary": "Member rời phòng party hoặc host thu quyền speaker: party-room đổi trạng thái trong PostgreSQL dưới lock phòng, rồi đẩy quyền publish xuống LiveKit (SFU) và báo roster cho các member qua Redis và signaling-gateway, vì quyền audio phải được enforce ở SFU chứ không chỉ ở DB.",
+ "caption": "Hình cho thấy leave (member thường hoặc host) và changeRole: DB commit trước, sau đó LiveKit và fanout realtime.",
+ "participants": [
+  {
+   "id": "web",
+   "label": "Web client",
+   "kind": "client"
+  },
+  {
+   "id": "party-room",
+   "label": "Party room",
+   "kind": "service"
+  },
+  {
+   "id": "postgres",
+   "label": "PostgreSQL",
+   "kind": "infra"
+  },
+  {
+   "id": "media-server",
+   "label": "LiveKit SFU",
+   "kind": "service"
+  },
+  {
+   "id": "redis",
+   "label": "Redis pub/sub",
+   "kind": "infra"
+  },
+  {
+   "id": "signaling-gateway",
+   "label": "Signaling gateway",
+   "kind": "service"
+  }
+ ],
+ "steps": [
+  {
+   "from": "web",
+   "to": "party-room",
+   "label": "POST /party/rooms/:id/leave (JWT) để rời phòng",
+   "kind": "call",
+   "mechanism": "http",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/party-room/party-room.controller.ts",
+     "line": 149,
+     "quote": "@Post(':id/leave')"
+    }
+   ]
+  },
+  {
+   "from": "party-room",
+   "to": "postgres",
+   "label": "Transaction: khóa phòng, đọc membership, member thường thì set leftAt",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "note": "Lock pessimistic_write cả với member thường để tuần tự với changeRole đang đếm speaker; không còn membership active thì no-op.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/party-room/party-room.service.ts",
+     "line": 378,
+     "quote": "const left = await this.dataSource.transaction(async (manager) => {"
+    }
+   ]
+  },
+  {
+   "from": "party-room",
+   "to": "postgres",
+   "label": "Nhánh host rời: closeRoomById đóng phòng, set leftAt mọi member",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "note": "Chỉ chạy khi membership là Host (left.isHost); sau đó leaveRoom return.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/party-room/party-room.service.ts",
+     "line": 1014,
+     "quote": "const result = await this.dataSource.transaction(async (manager) => {"
+    }
+   ]
+  },
+  {
+   "from": "party-room",
+   "to": "media-server",
+   "label": "Host rời: deleteRoom trên SFU, lỗi chỉ log debug",
+   "kind": "async",
+   "mechanism": "sdk",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/party-room/party-room.service.ts",
+     "line": 1046,
+     "quote": "this.livekit.deleteRoom(partyRoomName(roomId))"
+    }
+   ]
+  },
+  {
+   "from": "party-room",
+   "to": "redis",
+   "label": "Publish PartyRoomClosed cho từng member đã active",
+   "kind": "async",
+   "mechanism": "redis-pubsub",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/party-room/party-room.service.ts",
+     "line": 1058,
+     "quote": "publishRealtimeEvent(this.redis, this.logger, uid, envelope),"
+    }
+   ]
+  },
+  {
+   "from": "party-room",
+   "to": "redis",
+   "label": "Member thường rời: đọc roster còn lại, publish PartyMemberLeft",
+   "kind": "async",
+   "mechanism": "redis-pubsub",
+   "note": "publishToRoomMembers đọc memberRepo (leftAt IS NULL) rồi publish từng user; chạy ngay sau commit. Chỉ lệnh publish bị bọc try/catch, lỗi đọc roster không bị nuốt.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/party-room/party-room.service.ts",
+     "line": 1326,
+     "quote": "publishRealtimeEvent(this.redis, this.logger, m.userId, envelope),"
+    }
+   ]
+  },
+  {
+   "from": "party-room",
+   "to": "media-server",
+   "label": "Member thường rời: removeParticipant kick khỏi SFU, lỗi bị bỏ qua",
+   "kind": "async",
+   "mechanism": "sdk",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/party-room/party-room.service.ts",
+     "line": 417,
+     "quote": ".removeParticipant(partyRoomName(roomId), user.userId)"
+    }
+   ]
+  },
+  {
+   "from": "redis",
+   "to": "signaling-gateway",
+   "label": "Gateway PSUBSCRIBE realtime:user:* nhận envelope",
+   "kind": "async",
+   "mechanism": "redis-pubsub",
+   "evidence": [
+    {
+     "file": "apps/signaling-gateway/src/app/signaling.gateway.ts",
+     "line": 346,
+     "quote": ".psubscribe(REALTIME_USER_CHANNEL_PATTERN)"
+    }
+   ]
+  },
+  {
+   "from": "signaling-gateway",
+   "to": "web",
+   "label": "Emit sự kiện xuống socket room của từng member",
+   "kind": "async",
+   "mechanism": "socket",
+   "evidence": [
+    {
+     "file": "apps/signaling-gateway/src/app/signaling.gateway.ts",
+     "line": 332,
+     "quote": "this.server.local.to(userRoom(userId)).emit(envelope.event, envelope.data);"
+    }
+   ]
+  },
+  {
+   "from": "party-room",
+   "to": "web",
+   "label": "Trả { ok: true } (leave idempotent)",
+   "kind": "return",
+   "mechanism": "http"
+  },
+  {
+   "from": "web",
+   "to": "party-room",
+   "label": "POST /party/rooms/:id/members/:userId/role: host thu quyền speaker",
+   "kind": "call",
+   "mechanism": "http",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/party-room/party-room.controller.ts",
+     "line": 163,
+     "quote": "@Post(':id/members/:userId/role')"
+    }
+   ]
+  },
+  {
+   "from": "party-room",
+   "to": "postgres",
+   "label": "Transaction: khóa phòng, kiểm tra caller là host, đổi role target",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "note": "Không phải host thì NOT_HOST 403; target là Host thì CONFLICT; role không đổi thì trả luôn, không đụng SFU.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/party-room/party-room.service.ts",
+     "line": 432,
+     "quote": "const result = await this.dataSource.transaction("
+    }
+   ]
+  },
+  {
+   "from": "party-room",
+   "to": "media-server",
+   "label": "Sau commit: updateParticipantPublish canPublish=false, chờ ACK",
+   "kind": "call",
+   "mechanism": "sdk",
+   "note": "Gọi LiveKit sau khi transaction đã commit, không giữ lock row trong lúc gọi provider.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/party-room/party-room.service.ts",
+     "line": 1083,
+     "quote": "await this.livekit.updateParticipantPublish("
+    }
+   ]
+  },
+  {
+   "from": "party-room",
+   "to": "postgres",
+   "label": "Nhánh lỗi LiveKit: transaction hoàn tác role nếu chưa có transition mới",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "note": "Chỉ chạy khi updateParticipantPublish throw; sau đó cố khôi phục grant cũ và trả 503 PARTY_MEDIA_PERMISSION_UPDATE_FAILED.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/party-room/party-room.service.ts",
+     "line": 1092,
+     "quote": "compensated = await this.dataSource.transaction(async (manager) => {"
+    }
+   ]
+  },
+  {
+   "from": "party-room",
+   "to": "redis",
+   "label": "Publish PartyRoleChanged cho mọi member còn trong phòng",
+   "kind": "async",
+   "mechanism": "redis-pubsub",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/party-room/party-room.service.ts",
+     "line": 1326,
+     "quote": "publishRealtimeEvent(this.redis, this.logger, m.userId, envelope),"
+    }
+   ]
+  },
+  {
+   "from": "redis",
+   "to": "signaling-gateway",
+   "label": "Gateway PSUBSCRIBE realtime:user:* nhận PartyRoleChanged",
+   "kind": "async",
+   "mechanism": "redis-pubsub",
+   "evidence": [
+    {
+     "file": "apps/signaling-gateway/src/app/signaling.gateway.ts",
+     "line": 346,
+     "quote": ".psubscribe(REALTIME_USER_CHANNEL_PATTERN)"
+    }
+   ]
+  },
+  {
+   "from": "signaling-gateway",
+   "to": "web",
+   "label": "Emit PartyRoleChanged xuống socket room của từng member",
+   "kind": "async",
+   "mechanism": "socket",
+   "evidence": [
+    {
+     "file": "apps/signaling-gateway/src/app/signaling.gateway.ts",
+     "line": 332,
+     "quote": "this.server.local.to(userRoom(userId)).emit(envelope.event, envelope.data);"
+    }
+   ]
+  },
+  {
+   "from": "party-room",
+   "to": "web",
+   "label": "Trả PartyRoomMemberDto với role mới",
+   "kind": "return",
+   "mechanism": "http"
+  }
+ ],
+ "groups": [
+  {
+   "from": 2,
+   "to": 2,
+   "label": "Transaction rời phòng",
+   "kind": "transaction"
+  },
+  {
+   "from": 3,
+   "to": 3,
+   "label": "Transaction đóng phòng",
+   "kind": "transaction"
+  },
+  {
+   "from": 4,
+   "to": 7,
+   "label": "SFU và fanout best-effort",
+   "kind": "besteffort"
+  },
+  {
+   "from": 12,
+   "to": 12,
+   "label": "Transaction đổi role",
+   "kind": "transaction"
+  },
+  {
+   "from": 13,
+   "to": 13,
+   "label": "LiveKit đổi grant",
+   "kind": "external"
+  },
+  {
+   "from": 14,
+   "to": 14,
+   "label": "Transaction hoàn tác role",
+   "kind": "transaction"
+  }
+ ],
+ "invariants": [
+  "Lock row phòng (pessimistic_write) được lấy cả khi member thường rời để tuần tự với changeRole đang đếm speaker, nên số speaker không bị đếm lệch.",
+  "Gọi LiveKit chỉ sau khi transaction commit: lệnh provider không nằm trong tính nguyên tử của PostgreSQL, nên không giữ lock hay để DB rollback làm SFU lệch.",
+  "updateParticipantPublish chờ ACK của SFU rồi mới trả, vì quyền publish phải được enforce ở SFU chứ không tin client.",
+  "Fanout realtime chạy sau commit qua Redis rồi gateway: core-api không nói chuyện trực tiếp với socket, gateway chỉ relay envelope."
+ ],
+ "failureModes": [
+  {
+   "when": "LiveKit updateParticipantPublish lỗi khi đổi role",
+   "effect": "Hoàn tác role trong DB nếu chưa có transition mới, cố khôi phục grant cũ, trả 503 PARTY_MEDIA_PERMISSION_UPDATE_FAILED, không publish PartyRoleChanged."
+  },
+  {
+   "when": "removeParticipant hoặc deleteRoom trên SFU lỗi",
+   "effect": "Lỗi bị bắt và chỉ log debug; DB đã rời/đóng vẫn giữ nguyên."
+  },
+  {
+   "when": "Publish Redis realtime lỗi",
+   "effect": "publishRealtimeEvent bắt lỗi và log warn, request vẫn thành công; client còn polling fallback."
+  },
+  {
+   "when": "Người gọi không phải host khi đổi role",
+   "effect": "Transaction ném NOT_HOST 403, không có thay đổi nào."
+  },
+  {
+   "when": "Transaction hoàn tác role cũng lỗi sau khi LiveKit lỗi",
+   "effect": "Chỉ log error, không khôi phục grant; vẫn ném 503 PARTY_MEDIA_PERMISSION_UPDATE_FAILED nên DB có thể giữ role Audience trong khi SFU chưa đổi quyền."
+  }
+ ],
+ "dataIssues": [],
+ "uncertain": []
+}

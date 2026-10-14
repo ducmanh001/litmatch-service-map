@@ -1,0 +1,52 @@
+{
+ "id": "auth-otp-login",
+ "title": "Đăng nhập bằng OTP điện thoại",
+ "summary": "Người dùng xin mã OTP rồi xác minh để nhận phiên đăng nhập. Auth giữ danh tính (auth_identities), OTP và refresh session, còn hồ sơ người dùng do User sở hữu nên Auth phải gọi UserService để đọc hoặc tạo user.",
+ "caption": "Hai endpoint OTP: xin mã (Auth ghi phone_otp), rồi xác minh, tìm hoặc tạo user qua User và cấp token.",
+ "participants": [
+  {"id": "web", "label": "Web client", "kind": "client"},
+  {"id": "auth", "label": "Auth", "kind": "service"},
+  {"id": "user", "label": "User", "kind": "service"},
+  {"id": "postgres", "label": "PostgreSQL", "kind": "infra"}
+ ],
+ "steps": [
+  {"from": "web", "to": "auth", "label": "POST /auth/otp/request với số điện thoại (throttle 5/phút theo IP)", "kind": "call", "mechanism": "http", "note": "Controller có @Throttle limit 5 mỗi phút theo IP; giới hạn theo số điện thoại nằm trong OtpService.",
+   "evidence": [{"file": "apps/core-api/src/modules/auth/auth.controller.ts", "line": 64, "quote": "@Post('otp/request')"}]},
+  {"from": "auth", "to": "postgres", "label": "Đếm OTP trong 1 giờ, vô hiệu mã cũ, lưu hash mã mới vào phone_otp", "kind": "call", "mechanism": "shared-db", "note": "Không gửi SMS: mã được trả thẳng trong response. Quá giới hạn mỗi giờ thì ném OTP_REQUEST_RATE_LIMITED (429).",
+   "evidence": [{"file": "apps/core-api/src/modules/auth/services/otp.service.ts", "line": 32, "quote": "const recentCount = await this.otpRepo.countBy({"}]},
+  {"from": "auth", "to": "web", "label": "Trả code và ttlSeconds để client hiển thị và tự điền", "kind": "return", "mechanism": "http"},
+  {"from": "web", "to": "auth", "label": "POST /auth/otp/verify với phone và code (throttle 10/phút)", "kind": "call", "mechanism": "http",
+   "evidence": [{"file": "apps/core-api/src/modules/auth/auth.controller.ts", "line": 75, "quote": "@Post('otp/verify')"}]},
+  {"from": "auth", "to": "postgres", "label": "Đọc OTP mới nhất, tăng attempt_count có điều kiện, so hash", "kind": "call", "mechanism": "shared-db", "note": "UPDATE có điều kiện attempt_count < max nên request song song không vượt giới hạn; sai mã ném OTP_INVALID.",
+   "evidence": [{"file": "apps/core-api/src/modules/auth/services/otp.service.ts", "line": 74, "quote": "const otp = await this.otpRepo.findOne({"}]},
+  {"from": "auth", "to": "postgres", "label": "Đánh dấu consumed_at (UPDATE có điều kiện consumed_at IS NULL)", "kind": "call", "mechanism": "shared-db", "note": "Một mã chỉ dùng được đúng một lần, request song song thua sẽ bị OTP_INVALID.",
+   "evidence": [{"file": "apps/core-api/src/modules/auth/services/otp.service.ts", "line": 119, "quote": "const consumed = await this.otpRepo.update("}]},
+  {"from": "auth", "to": "postgres", "label": "Tìm auth_identities theo (phone, số điện thoại)", "kind": "call", "mechanism": "shared-db",
+   "evidence": [{"file": "apps/core-api/src/modules/auth/auth.service.ts", "line": 156, "quote": "const existing = await this.identityRepo.findOneBy({"}]},
+  {"from": "auth", "to": "user", "label": "Đã có identity: getByIdOrThrow rồi kiểm tra user còn Active", "kind": "call", "mechanism": "di-call", "note": "Nhánh user cũ: assertActive ném USER_BANNED (403) nếu tài khoản bị khóa.",
+   "evidence": [{"file": "apps/core-api/src/modules/auth/auth.service.ts", "line": 162, "quote": "await this.userService.getByIdOrThrow(existing.userId),"}]},
+  {"from": "auth", "to": "user", "label": "Chưa có identity: createWithManager tạo user mới trong transaction", "kind": "call", "mechanism": "di-call", "note": "Nhánh user mới: bảng users thuộc User nên Auth phải nhờ UserService tạo bằng cùng manager.",
+   "evidence": [{"file": "apps/core-api/src/modules/auth/auth.service.ts", "line": 170, "quote": "const user = await this.userService.createWithManager(manager, {"}]},
+  {"from": "auth", "to": "postgres", "label": "Lưu AuthIdentity (phone) cùng transaction với user mới", "kind": "call", "mechanism": "shared-db", "note": "Unique (provider, providerUid) là chốt cuối khi hai request đầu tiên chạy song song; bên thua đọc lại identity của bên kia.",
+   "evidence": [{"file": "apps/core-api/src/modules/auth/auth.service.ts", "line": 174, "quote": "await manager.save("}]},
+  {"from": "auth", "to": "postgres", "label": "Ký JWT access token, lưu hash refresh token (family mới) vào refresh session", "kind": "call", "mechanism": "shared-db", "note": "RefreshSessionPort được nối vào TypeOrmRefreshSessionAdapter trong auth.module.ts.",
+   "evidence": [{"file": "apps/core-api/src/modules/auth/services/token.service.ts", "line": 53, "quote": "await this.refreshSessions.issue({"}]},
+  {"from": "auth", "to": "web", "label": "Set cookie httpOnly refresh và CSRF, trả accessToken và userId", "kind": "return", "mechanism": "http", "note": "finalizeSession bóc refreshToken khỏi body, chỉ đặt vào cookie."}
+ ],
+ "groups": [
+  {"from": 9, "to": 10, "label": "Tạo user và identity trong một transaction", "kind": "transaction"}
+ ],
+ "invariants": [
+  "Hồ sơ user thuộc module User nên Auth không ghi bảng users trực tiếp mà gọi UserService.createWithManager với cùng EntityManager, để user và identity cùng commit hoặc cùng rollback.",
+  "OTP phải được consume (UPDATE có điều kiện consumed_at IS NULL) trước khi tìm hoặc tạo user, nên một mã không thể đổi lấy hai phiên dù có request song song.",
+  "Token chỉ được cấp sau khi user được xác nhận Active, vì Auth cần trạng thái user từ User ngay tại thời điểm đăng nhập."
+ ],
+ "failureModes": [
+  {"when": "Số lần xin OTP của một số điện thoại vượt AUTH_OTP_REQUESTS_PER_HOUR", "effect": "Auth ném OTP_REQUEST_RATE_LIMITED (429), không tạo mã mới."},
+  {"when": "OTP hết hạn hoặc chưa được yêu cầu, nhập sai mã, hoặc vượt AUTH_OTP_MAX_ATTEMPTS", "effect": "OTP_EXPIRED (400), OTP_INVALID (400) hoặc OTP_TOO_MANY_ATTEMPTS (429), không tạo phiên."},
+  {"when": "User gắn với identity đã bị khóa", "effect": "assertActive ném USER_BANNED (403) nên không cấp token; OTP đã bị consume nên phải xin mã mới."},
+  {"when": "Hai request đầu tiên tạo cùng số điện thoại song song", "effect": "Một bên dính unique violation, đọc lại identity của bên kia và tiếp tục đăng nhập vào cùng user."}
+ ],
+ "dataIssues": [],
+ "uncertain": []
+}

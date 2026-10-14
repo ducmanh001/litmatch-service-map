@@ -1,0 +1,359 @@
+{
+ "id": "message-push-notification",
+ "title": "Tin nhắn bạn bè: realtime và Web Push",
+ "summary": "Một người gửi tin nhắn 1-1; module friend lưu tin, cập nhật streak, rồi báo cho người nhận qua realtime (Redis tới signaling-gateway) và qua thông báo lưu DB kèm Web Push tới trình duyệt đã đăng ký.",
+ "caption": "Web Push được đăng ký trước ở Notification; sau đó friend lưu tin, phát realtime qua Redis và gateway, rồi nhờ notification ghi thông báo và đẩy Web Push tới các subscription đã đăng ký.",
+ "participants": [
+  {
+   "id": "web",
+   "label": "Web client",
+   "kind": "client"
+  },
+  {
+   "id": "friend",
+   "label": "Friend",
+   "kind": "service"
+  },
+  {
+   "id": "safety",
+   "label": "Safety",
+   "kind": "service"
+  },
+  {
+   "id": "notification",
+   "label": "Notification",
+   "kind": "service"
+  },
+  {
+   "id": "signaling-gateway",
+   "label": "Signaling gateway",
+   "kind": "service"
+  },
+  {
+   "id": "postgres",
+   "label": "PostgreSQL",
+   "kind": "infra"
+  },
+  {
+   "id": "redis",
+   "label": "Redis",
+   "kind": "infra"
+  },
+  {
+   "id": "external:browser-push",
+   "label": "Dịch vụ Web Push",
+   "kind": "external"
+  }
+ ],
+ "steps": [
+  {
+   "from": "web",
+   "to": "notification",
+   "label": "POST /notifications/web-push/subscription đăng ký browser push subscription",
+   "kind": "call",
+   "mechanism": "http",
+   "note": "Chạy trước các tin nhắn: đây là cách các dòng subscription mà bước đẩy push đọc về sau được tạo ra.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/notification/notification.controller.ts",
+     "line": 65,
+     "quote": "@Post('web-push/subscription')"
+    }
+   ]
+  },
+  {
+   "from": "notification",
+   "to": "postgres",
+   "label": "Upsert subscription theo endpoint (userId, endpoint, p256dh, auth)",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "note": "Chỉ ghi bảng subscription của Notification; xung đột trên cột endpoint thì cập nhật dòng cũ.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/notification/services/web-push-subscription.service.ts",
+     "line": 20,
+     "quote": "await this.subscriptionRepo.upsert("
+    },
+    {
+     "file": "apps/core-api/src/modules/notification/services/web-push-subscription.service.ts",
+     "line": 27,
+     "quote": "['endpoint'],"
+    }
+   ]
+  },
+  {
+   "from": "notification",
+   "to": "web",
+   "label": "Trả 204 No Content",
+   "kind": "return",
+   "mechanism": "http"
+  },
+  {
+   "from": "web",
+   "to": "friend",
+   "label": "POST /conversations/:id/messages gửi tin nhắn",
+   "kind": "call",
+   "mechanism": "http"
+  },
+  {
+   "from": "friend",
+   "to": "safety",
+   "label": "Kiểm tra hai chiều người gửi/nhận có chặn nhau không",
+   "kind": "call",
+   "mechanism": "di-call",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/friend/friend.service.ts",
+     "line": 346,
+     "quote": "(await this.safetyService.isBlocked(userId, partnerId)) ||"
+    }
+   ],
+   "note": "Hai lời gọi isBlocked chạy tuần tự (toán tử ||); block bất kỳ chiều nào thì ném 404 CONVERSATION_NOT_FOUND trước khi lưu tin."
+  },
+  {
+   "from": "friend",
+   "to": "postgres",
+   "label": "Lưu Message và cập nhật Conversation",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/friend/services/conversation.service.ts",
+     "line": 162,
+     "quote": "message = await this.messageRepo.save("
+    }
+   ],
+   "note": "messageRepo.save rồi conversationRepo.update(lastMessageAt) là hai lệnh riêng, không cùng transaction (lastMessageAt chỉ để sort danh sách). Idempotency-Key trùng cùng conversation và cùng nội dung thì trả lại tin cũ (bỏ qua update); khác nội dung thì ném 409 MESSAGE_IDEMPOTENCY_CONFLICT."
+  },
+  {
+   "from": "friend",
+   "to": "postgres",
+   "label": "Ghi streak trong transaction riêng (lỗi streak bị bỏ qua, tin vẫn gửi)",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/friend/services/streak.service.ts",
+     "line": 59,
+     "quote": "return this.dataSource.transaction(async (manager) => {"
+    }
+   ],
+   "note": "recordActivity tự mở transaction khoá row streak; FriendService bọc trong try/catch nên lỗi streak chỉ log error. Đạt mốc thì publish thêm FriendStreakIncreased tới cả hai bên."
+  },
+  {
+   "from": "friend",
+   "to": "redis",
+   "label": "Publish envelope friend.message cho cả người gửi lẫn người nhận",
+   "kind": "async",
+   "mechanism": "redis-pubsub",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/friend/friend.service.ts",
+     "line": 425,
+     "quote": "publishRealtimeEvent(this.redis, this.logger, uid, envelope),"
+    }
+   ]
+  },
+  {
+   "from": "redis",
+   "to": "signaling-gateway",
+   "label": "Gateway PSUBSCRIBE realtime:user:* nhận envelope",
+   "kind": "async",
+   "mechanism": "redis-pubsub",
+   "evidence": [
+    {
+     "file": "apps/signaling-gateway/src/app/signaling.gateway.ts",
+     "line": 346,
+     "quote": ".psubscribe(REALTIME_USER_CHANNEL_PATTERN)"
+    }
+   ]
+  },
+  {
+   "from": "signaling-gateway",
+   "to": "web",
+   "label": "Relay envelope xuống socket của hai bên đang online",
+   "kind": "async",
+   "mechanism": "socket",
+   "evidence": [
+    {
+     "file": "apps/signaling-gateway/src/app/signaling.gateway.ts",
+     "line": 332,
+     "quote": "this.server.local.to(userRoom(userId)).emit(envelope.event, envelope.data);"
+    }
+   ]
+  },
+  {
+   "from": "friend",
+   "to": "notification",
+   "label": "Tạo thông báo in-app cho người nhận",
+   "kind": "call",
+   "mechanism": "di-call",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/friend/friend.service.ts",
+     "line": 440,
+     "quote": "const notification = await this.notificationService.create({"
+    }
+   ]
+  },
+  {
+   "from": "notification",
+   "to": "postgres",
+   "label": "Lưu bản ghi Notification in-app",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/notification/notification.service.ts",
+     "line": 60,
+     "quote": "manager.create(Notification, { ...input, readAt: null }),"
+    }
+   ]
+  },
+  {
+   "from": "friend",
+   "to": "notification",
+   "label": "Yêu cầu đẩy push cho thông báo vừa tạo",
+   "kind": "call",
+   "mechanism": "di-call",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/friend/friend.service.ts",
+     "line": 449,
+     "quote": "await this.notificationService.sendPush(notification);"
+    }
+   ],
+   "note": "sendPush chạy sau create; bên trong còn gọi pushPort.send (push chung, lỗi chỉ log warn) trước phần Web Push, không vẽ riêng ở đây."
+  },
+  {
+   "from": "notification",
+   "to": "postgres",
+   "label": "Đọc các web push subscription của người nhận",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/notification/services/web-push-subscription.service.ts",
+     "line": 36,
+     "quote": "return this.subscriptionRepo.find({ where: { userId } });"
+    }
+   ]
+  },
+  {
+   "from": "notification",
+   "to": "external:browser-push",
+   "label": "Gửi Web Push tới từng subscription",
+   "kind": "async",
+   "mechanism": "sdk",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/notification/notification.service.ts",
+     "line": 124,
+     "quote": "const result = await webPushPort.send({"
+    }
+   ]
+  },
+  {
+   "from": "notification",
+   "to": "postgres",
+   "label": "Xoá subscription khi push provider báo 404/410 (removeSubscription)",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "note": "removeById chỉ chạy khi result.removeSubscription true; adapter đặt cờ này khi statusCode 404 hoặc 410.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/notification/notification.service.ts",
+     "line": 134,
+     "quote": "if (result.removeSubscription)"
+    },
+    {
+     "file": "apps/core-api/src/common/platform/web-push-notification.adapter.ts",
+     "line": 63,
+     "quote": "removeSubscription: statusCode === 404 || statusCode === 410,"
+    }
+   ]
+  },
+  {
+   "from": "friend",
+   "to": "web",
+   "label": "Trả kết quả tin nhắn đã gửi",
+   "kind": "return",
+   "mechanism": "http"
+  }
+ ],
+ "groups": [
+  {
+   "from": 7,
+   "to": 7,
+   "label": "Transaction cập nhật streak",
+   "kind": "transaction"
+  },
+  {
+   "from": 8,
+   "to": 10,
+   "label": "Phát realtime sau khi lưu tin",
+   "kind": "besteffort"
+  },
+  {
+   "from": 11,
+   "to": 16,
+   "label": "Thông báo và Web Push best-effort (try/catch ở friend và sendPush)",
+   "kind": "besteffort"
+  }
+ ],
+ "invariants": [
+  "Tin nhắn được lưu vào PostgreSQL trước khi friend ghi streak, phát realtime và gọi notification, nên người nhận không nhận tín hiệu về tin chưa lưu; streak ghi trong try/catch riêng nên chỉ là phụ, lỗi streak không chặn tin.",
+  "friend không tự gửi push: chỉ gọi NotificationService.create rồi sendPush, còn bảng subscription và nhà cung cấp push do notification sở hữu.",
+  "Realtime đi hai chặng: core-api chỉ publish lên Redis, signaling-gateway mới giữ socket và relay xuống người dùng, nên friend không biết socket.",
+  "Subscription chỉ được tạo qua POST /notifications/web-push/subscription (upsert theo endpoint); đường gửi tin nhắn chỉ đọc chúng và xoá khi push provider báo 404/410."
+ ],
+ "failureModes": [
+  {
+   "when": "Người nhận offline hoặc mất envelope pub/sub",
+   "effect": "Realtime không tới socket; thông báo đã lưu và Web Push vẫn là kênh còn lại, client đọc lại bằng REST."
+  },
+  {
+   "when": "Push provider hoặc gửi Web Push lỗi",
+   "effect": "sendPush bắt lỗi và chỉ log warn; tin nhắn và thông báo in-app đã lưu vẫn giữ. Subscription chỉ bị xoá khi provider báo 404/410, lỗi khác thì giữ lại."
+  },
+  {
+   "when": "Một trong hai người chặn người kia",
+   "effect": "isBlocked ở friend.service chạy trước khi lưu tin và ném DomainException CONVERSATION_NOT_FOUND (404), nên bước lưu, streak, phát và thông báo đều không chạy."
+  },
+  {
+   "when": "Người nhận đã mute hội thoại",
+   "effect": "friend return sớm sau khi phát realtime: không tạo thông báo in-app và không gửi push."
+  },
+  {
+   "when": "Client gửi lại cùng Idempotency-Key (replay sau timeout)",
+   "effect": "ConversationService.sendMessage trả lại Message cũ nhưng FriendService vẫn chạy tiếp phần streak, realtime và tạo thông báo/push, nên người nhận có thể nhận lặp envelope và thông báo; streak thì không tăng đôi nhờ guard lastConfirmedDate."
+  }
+ ],
+ "dataIssues": [],
+ "uncertain": [
+  "Gateway-to-web relay dùng chung fact line 330 làm bằng chứng, không có trích dẫn riêng cho emit xuống socket."
+ ],
+ "resolved": [
+  {
+   "id": "message-push-notification#1",
+   "status": "corrected",
+   "finding": "removeById chỉ chạy khi result.removeSubscription true, adapter đặt cờ khi statusCode 404/410 (không phải mọi lỗi gửi). Đã sửa label/note step và failureMode."
+  },
+  {
+   "id": "message-push-notification#3",
+   "status": "corrected",
+   "finding": "NotificationService.create thực ra ghi DB (manager.save Notification) nên đã thêm hop notification->postgres vào flow và cập nhật group."
+  },
+  {
+   "id": "message-push-notification#4",
+   "status": "confirmed",
+   "finding": "Đúng best-effort: publishRealtimeEvent bắt lỗi và warn; notification.create + sendPush nằm trong try/catch của friend, sendPush tự bắt lỗi. Đã mở rộng group bao cả bước tạo thông báo."
+  },
+  {
+   "id": "message-push-notification#5",
+   "status": "confirmed",
+   "finding": "isBlocked hai chiều ném DomainException CONVERSATION_NOT_FOUND (404) trước khi gọi conversationService.sendMessage, nên lưu/phát/thông báo không chạy. Đã bỏ nhãn suy luận."
+  }
+ ],
+ "resolutionApplied": true
+}

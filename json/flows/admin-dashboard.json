@@ -1,0 +1,35 @@
+{
+ "id": "admin-dashboard",
+ "title": "Bảng điều khiển admin",
+ "summary": "Admin mở dashboard: dữ liệu nằm ở ba module khác nhau (người dùng, kinh tế, phòng party) cộng nhật ký audit, nên AdminService phải gom qua public API của từng module thay vì tự đọc bảng của họ.",
+ "caption": "AdminService gọi song song User, Economy, PartyRoom và audit, rồi tra nickname người thực hiện trước khi trả về dashboard.",
+ "participants": [
+  {"id": "admin-console", "label": "Admin console", "kind": "client"},
+  {"id": "admin", "label": "Admin", "kind": "service"},
+  {"id": "user", "label": "User", "kind": "service"},
+  {"id": "economy", "label": "Economy", "kind": "service"},
+  {"id": "party-room", "label": "Party Room", "kind": "service"},
+  {"id": "postgres", "label": "PostgreSQL", "kind": "infra"}
+ ],
+ "steps": [
+  {"from": "admin-console", "to": "admin", "label": "GET /admin/dashboard (role Admin/Moderator + quyền ViewUsers)", "kind": "call", "mechanism": "http", "note": "Controller đặt @RequireRoles(Admin, Moderator) ở cấp class, route thêm @RequireAdminPermission(ViewUsers); mọi route REST đều qua JwtAuthGuard.", "evidence": []},
+  {"from": "admin", "to": "user", "label": "Lấy số liệu người dùng: getAdminStats()", "kind": "call", "mechanism": "di-call", "note": "Bốn lời gọi nằm trong một Promise.all nên chạy song song.", "evidence": [{"file": "apps/core-api/src/modules/admin/admin.service.ts", "line": 635, "quote": "this.userService.getAdminStats(),"}]},
+  {"from": "admin", "to": "economy", "label": "Lấy phân tích kim cương và VIP: getAdminAnalytics()", "kind": "call", "mechanism": "di-call", "evidence": [{"file": "apps/core-api/src/modules/admin/admin.service.ts", "line": 636, "quote": "this.economyService.getAdminAnalytics(),"}]},
+  {"from": "admin", "to": "party-room", "label": "Đếm phòng đang hoạt động: countActiveRooms()", "kind": "call", "mechanism": "di-call", "evidence": [{"file": "apps/core-api/src/modules/admin/admin.service.ts", "line": 637, "quote": "this.partyRoomService.countActiveRooms(),"}]},
+  {"from": "admin", "to": "postgres", "label": "Đọc 10 dòng audit gần nhất: listRecent(10)", "kind": "call", "mechanism": "shared-db", "evidence": [{"file": "apps/core-api/src/modules/admin/admin.service.ts", "line": 638, "quote": "this.auditLogService.listRecent(10),"}]},
+  {"from": "admin", "to": "user", "label": "Tra nickname người thực hiện: findByIds(actorUserId)", "kind": "call", "mechanism": "di-call", "note": "Chạy sau Promise.all vì cần actorUserId từ kết quả audit.", "evidence": [{"file": "apps/core-api/src/modules/admin/admin.service.ts", "line": 640, "quote": "const actors = await this.userService.findByIds("}]},
+  {"from": "user", "to": "admin", "label": "Trả danh sách user để ghép nickname vào hoạt động", "kind": "return", "mechanism": "di-call", "evidence": []},
+  {"from": "admin", "to": "admin-console", "label": "Trả dashboard gộp: người dùng, kim cương, phòng, hoạt động", "kind": "return", "mechanism": "http", "note": "Nếu không tìm thấy nickname thì dùng actorUserId; userTiers.free = max(0, activeUsers - VIP - SVIP).", "evidence": []}
+ ],
+ "groups": [],
+ "invariants": [
+  "AdminService không đọc bảng của module khác mà gọi UserService, EconomyService, PartyRoomService, vì mỗi module sở hữu dữ liệu của mình.",
+  "Việc tra nickname phải chạy sau khi có danh sách audit, vì cần actorUserId của 10 dòng gần nhất."
+ ],
+ "failureModes": [
+  {"when": "Một trong bốn lời gọi trong Promise.all bị lỗi", "effect": "Promise.all từ chối nên getDashboard ném lỗi và dashboard không trả về."},
+  {"when": "Không tìm thấy nickname của người thực hiện", "effect": "actorNickname rơi về actorUserId."}
+ ],
+ "dataIssues": [],
+ "uncertain": []
+}

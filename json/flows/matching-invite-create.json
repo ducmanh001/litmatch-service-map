@@ -1,0 +1,66 @@
+{
+ "id": "matching-invite-create",
+ "title": "Mời chơi có chủ đích: tạo và xem lời mời",
+ "summary": "Người dùng mời trực tiếp một người khác chơi Voice/Soul Match. Module matching sở hữu MatchInvite nhưng phải hỏi Safety (hidden-set), User (trạng thái invitee), ghi thông báo và push qua Notification, nên nhiều service cùng tham gia; hộp thư và chi tiết lời mời cũng kiểm lại hidden-set và đọc hồ sơ người mời.",
+ "caption": "Luồng tạo lời mời (throttle, rate limit Redis, kiểm hidden-set, lưu, thông báo + push) rồi xem hộp thư và chi tiết lời mời.",
+ "participants": [
+  {"id": "web", "label": "Web client", "kind": "client"},
+  {"id": "matching", "label": "Matching", "kind": "service"},
+  {"id": "safety", "label": "Safety", "kind": "service"},
+  {"id": "user", "label": "User", "kind": "service"},
+  {"id": "notification", "label": "Notification", "kind": "service"},
+  {"id": "redis", "label": "Redis", "kind": "infra"},
+  {"id": "postgres", "label": "PostgreSQL", "kind": "infra"}
+ ],
+ "steps": [
+  {"from": "web", "to": "matching", "label": "POST /matching/invites (inviteeUserId, matchType)", "kind": "call", "mechanism": "http", "note": "Route yêu cầu JWT (APP_GUARD) và bị Throttle 10 request/phút.",
+   "evidence": [{"file": "apps/core-api/src/modules/matching/controllers/invite.controller.ts", "line": 53, "quote": "@Throttle({ default: { limit: 10, ttl: minutes(1) } })"}]},
+  {"from": "matching", "to": "redis", "label": "Tiêu thụ rate limit lời mời theo inviter mỗi giờ", "kind": "call", "mechanism": "redis-state", "note": "Nếu vượt MATCHING_INVITE_RATE_LIMIT_PER_HOUR thì ném INVITE_RATE_LIMITED (429).",
+   "evidence": [{"file": "apps/core-api/src/modules/matching/services/invite.service.ts", "line": 109, "quote": "const consumed = await this.rateLimit.consume({"}]},
+  {"from": "matching", "to": "safety", "label": "Lấy hidden-set của inviter, loại invitee bị ẩn/block", "kind": "call", "mechanism": "di-call", "note": "Trùng hidden-set thì trả cùng mã lỗi INVITE_TARGET_UNAVAILABLE (422).",
+   "evidence": [{"file": "apps/core-api/src/modules/matching/services/invite.service.ts", "line": 581, "quote": "const hiddenIds = await this.safetyService.getHiddenUserIds(inviterId);"}]},
+  {"from": "matching", "to": "user", "label": "Đọc invitee, yêu cầu tồn tại và status Active", "kind": "call", "mechanism": "di-call", "note": "Không tồn tại hoặc không Active cũng trả INVITE_TARGET_UNAVAILABLE.",
+   "evidence": [{"file": "apps/core-api/src/modules/matching/services/invite.service.ts", "line": 589, "quote": "const invitee = await this.userService"}]},
+  {"from": "matching", "to": "postgres", "label": "Lưu MatchInvite trạng thái Pending kèm expiresAt", "kind": "call", "mechanism": "shared-db", "note": "Vi phạm unique (đã có lời mời Pending tới đúng người này) thì trả INVITE_ALREADY_PENDING (409).",
+   "evidence": [{"file": "apps/core-api/src/modules/matching/services/invite.service.ts", "line": 131, "quote": "invite = await this.inviteRepo.save("}]},
+  {"from": "matching", "to": "notification", "label": "Ghi thông báo MatchInviteReceived cho invitee", "kind": "call", "mechanism": "di-call", "note": "createInvite không mở transaction; thông báo được ghi sau khi invite đã lưu.",
+   "evidence": [{"file": "apps/core-api/src/modules/matching/services/invite.service.ts", "line": 153, "quote": "const notification = await this.notificationService.create({"}]},
+  {"from": "matching", "to": "notification", "label": "Đẩy push tới invitee (best-effort)", "kind": "async", "mechanism": "di-call", "note": "sendPush bắt mọi lỗi của push provider và web push, chỉ ghi log cảnh báo.",
+   "evidence": [{"file": "apps/core-api/src/modules/matching/services/invite.service.ts", "line": 162, "quote": "await this.notificationService.sendPush(notification);"}]},
+  {"from": "matching", "to": "user", "label": "Đọc hồ sơ inviter để dựng MatchInviteDto", "kind": "call", "mechanism": "di-call",
+   "evidence": [{"file": "apps/core-api/src/modules/matching/controllers/invite.controller.ts", "line": 138, "quote": "await this.userService.getByIdOrThrow(invite.inviterUserId),"}]},
+  {"from": "matching", "to": "web", "label": "201 MatchInviteDto của lời mời vừa tạo", "kind": "return", "mechanism": "http"},
+  {"from": "web", "to": "matching", "label": "GET /matching/invites (hộp thư lời mời đang chờ)", "kind": "call", "mechanism": "http"},
+  {"from": "matching", "to": "safety", "label": "Lấy lại hidden-set của người nhận mỗi lần đọc hộp thư", "kind": "call", "mechanism": "di-call", "note": "Block/report có thể phát sinh sau khi invite được tạo nên phải kiểm lại.",
+   "evidence": [{"file": "apps/core-api/src/modules/matching/services/invite.service.ts", "line": 199, "quote": "const hiddenInviterIds = await this.safetyService.getHiddenUserIds("}]},
+  {"from": "matching", "to": "postgres", "label": "Truy vấn invite Pending của invitee, loại inviter bị ẩn", "kind": "call", "mechanism": "shared-db",
+   "evidence": [{"file": "apps/core-api/src/modules/matching/services/invite.service.ts", "line": 202, "quote": "const qb = this.inviteRepo"}]},
+  {"from": "matching", "to": "user", "label": "Đọc hàng loạt hồ sơ các inviter của trang kết quả", "kind": "call", "mechanism": "di-call",
+   "evidence": [{"file": "apps/core-api/src/modules/matching/controllers/invite.controller.ts", "line": 145, "quote": "const inviters = await this.userService.findByIds("}]},
+  {"from": "matching", "to": "web", "label": "200 trang lời mời kèm thông tin người mời", "kind": "return", "mechanism": "http"},
+  {"from": "web", "to": "matching", "label": "GET /matching/invites/:id (chi tiết một lời mời)", "kind": "call", "mechanism": "http"},
+  {"from": "matching", "to": "postgres", "label": "Đọc MatchInvite theo id, chỉ inviter/invitee được xem", "kind": "call", "mechanism": "shared-db", "note": "Người ngoài cuộc nhận INVITE_FORBIDDEN (403), không tồn tại nhận INVITE_NOT_FOUND (404).",
+   "evidence": [{"file": "apps/core-api/src/modules/matching/services/invite.service.ts", "line": 171, "quote": "const invite = await this.inviteRepo.findOneBy({ id: inviteId });"}]},
+  {"from": "matching", "to": "user", "label": "Đọc hồ sơ inviter để dựng MatchInviteDto", "kind": "call", "mechanism": "di-call",
+   "evidence": [{"file": "apps/core-api/src/modules/matching/controllers/invite.controller.ts", "line": 138, "quote": "await this.userService.getByIdOrThrow(invite.inviterUserId),"}]},
+  {"from": "matching", "to": "web", "label": "200 MatchInviteDto của lời mời", "kind": "return", "mechanism": "http"}
+ ],
+ "groups": [
+  {"from": 7, "to": 7, "label": "Push best-effort sau khi đã ghi", "kind": "besteffort"}
+ ],
+ "invariants": [
+  "Rate limit Redis và Throttle chạy trước mọi truy vấn Safety/User/DB để chặn spam lời mời rẻ nhất trước.",
+  "Safety và User được hỏi trước khi lưu MatchInvite, và mọi lý do từ chối dùng cùng mã INVITE_TARGET_UNAVAILABLE để người gọi không dò được ai đã block mình.",
+  "Thông báo và push chỉ chạy sau khi MatchInvite đã lưu, nên invitee không bao giờ nhận thông báo về lời mời không tồn tại.",
+  "Hộp thư kiểm lại hidden-set ở mỗi lần đọc vì block/report có thể phát sinh sau khi invite được tạo."
+ ],
+ "failureModes": [
+  {"when": "Inviter vượt giới hạn lời mời mỗi giờ", "effect": "Ném INVITE_RATE_LIMITED (429), không lưu invite, không gửi thông báo."},
+  {"when": "Invitee nằm trong hidden-set, không tồn tại hoặc không Active", "effect": "Ném INVITE_TARGET_UNAVAILABLE (422) với cùng thông điệp cho mọi lý do."},
+  {"when": "Đã có lời mời Pending tới đúng người này (vi phạm unique)", "effect": "Ném INVITE_ALREADY_PENDING (409), không tạo thông báo."},
+  {"when": "Push provider hoặc web push lỗi", "effect": "sendPush nuốt lỗi và ghi log; invite và thông báo in-app vẫn còn, request vẫn thành công."},
+  {"when": "Người không phải inviter/invitee xem chi tiết lời mời", "effect": "Ném INVITE_FORBIDDEN (403)."}
+ ],
+ "dataIssues": [],
+ "uncertain": []
+}

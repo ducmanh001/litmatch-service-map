@@ -1,0 +1,44 @@
+{
+ "id": "auth-search-by-phone",
+ "title": "Tìm người theo số điện thoại",
+ "summary": "Người dùng đã đăng nhập tìm hồ sơ người khác bằng số điện thoại. Module auth giữ danh tính điện thoại còn module user giữ quyền riêng tư và hồ sơ, nên hai service phải phối hợp để chỉ lộ hồ sơ khi chủ hồ sơ cho phép.",
+ "caption": "Auth tra danh tính theo số điện thoại, hỏi user về quyền riêng tư và trạng thái rồi trả hồ sơ công khai hoặc null.",
+ "participants": [
+  {"id": "web", "label": "Web client", "kind": "client"},
+  {"id": "auth", "label": "Auth", "kind": "service"},
+  {"id": "user", "label": "User", "kind": "service"},
+  {"id": "postgres", "label": "PostgreSQL", "kind": "infra"}
+ ],
+ "steps": [
+  {"from": "web", "to": "auth", "label": "GET /auth/search-by-phone?phone=... (JWT, tối đa 10 lần/phút)", "kind": "call", "mechanism": "http", "note": "Route có @Throttle 10 request mỗi phút; mọi route REST cần JWT trừ khi @Public.", "evidence": [
+   {"file": "apps/core-api/src/modules/auth/controllers/phone-search.controller.ts", "line": 21, "quote": "@Throttle({ default: { limit: 10, ttl: minutes(1) } })"}
+  ]},
+  {"from": "auth", "to": "postgres", "label": "Tìm AuthIdentity theo provider=Phone và providerUid=phone", "kind": "call", "mechanism": "shared-db", "note": "Không có identity thì trả null ngay.", "evidence": [
+   {"file": "apps/core-api/src/modules/auth/services/phone-search.service.ts", "line": 24, "quote": "const identity = await this.identityRepo.findOne({"}
+  ]},
+  {"from": "auth", "to": "user", "label": "Hỏi isSearchableByPhone(identity.userId)", "kind": "call", "mechanism": "di-call", "note": "Nếu tắt quyền tìm theo số điện thoại thì trả null, giống trường hợp không có identity để không tạo oracle dò số.", "evidence": [
+   {"file": "apps/core-api/src/modules/auth/services/phone-search.service.ts", "line": 28, "quote": "if (!(await this.privacySettings.isSearchableByPhone(identity.userId))) {"}
+  ]},
+  {"from": "user", "to": "postgres", "label": "Đọc user_privacy_settings, lấy cờ searchableByPhone", "kind": "call", "mechanism": "shared-db", "note": "Chưa có dòng cài đặt thì dùng mặc định searchableByPhone=false, nên user chưa bật thì không tìm thấy.", "evidence": [
+   {"file": "apps/core-api/src/modules/user/services/privacy-settings.service.ts", "line": 59, "quote": "const settings = await this.getForUser(userId);"}
+  ]},
+  {"from": "user", "to": "auth", "label": "Trả true/false cho cờ searchableByPhone", "kind": "return", "mechanism": "di-call"},
+  {"from": "auth", "to": "user", "label": "getByIdOrThrow(identity.userId) để lấy hồ sơ user", "kind": "call", "mechanism": "di-call", "evidence": [
+   {"file": "apps/core-api/src/modules/auth/services/phone-search.service.ts", "line": 32, "quote": "const user = await this.userService.getByIdOrThrow(identity.userId);"}
+  ]},
+  {"from": "user", "to": "auth", "label": "Trả entity user (kèm status)", "kind": "return", "mechanism": "di-call"},
+  {"from": "auth", "to": "web", "label": "Trả PublicProfileDto nếu status Active, ngược lại trả null", "kind": "return", "mechanism": "http", "note": "Nhánh null gồm: không có identity, tắt quyền tìm kiếm, user không Active.", "evidence": []}
+ ],
+ "groups": [],
+ "invariants": [
+  "Danh tính điện thoại thuộc auth còn cờ searchableByPhone và hồ sơ thuộc user, nên auth phải gọi user qua PrivacySettingsService và UserService thay vì tự đọc bảng của user.",
+  "Phải kiểm quyền riêng tư trước khi đọc hồ sơ, và các nhánh không có identity, tắt tìm kiếm đều trả null như nhau để người gọi không dò được số nào đã đăng ký."
+ ],
+ "failureModes": [
+  {"when": "Số điện thoại không có AuthIdentity, hoặc chủ hồ sơ tắt/chưa bật searchableByPhone (mặc định false)", "effect": "API trả null, không phân biệt hai trường hợp"},
+  {"when": "User không ở trạng thái Active", "effect": "API trả null thay vì hồ sơ"},
+  {"when": "Gọi quá 10 lần mỗi phút", "effect": "Bị throttler chặn theo cấu hình @Throttle của route"}
+ ],
+ "dataIssues": [],
+ "uncertain": []
+}

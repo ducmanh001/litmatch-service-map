@@ -1,0 +1,282 @@
+{
+ "id": "story-ring-view-and-viewers",
+ "title": "Vòng story, xem story và người đã xem",
+ "summary": "Feed sở hữu Story/StoryView nhưng không sở hữu quan hệ bạn bè, block hay quyền riêng tư, nên mỗi lần liệt kê vòng story, xem một story hoặc liệt kê người xem đều phải hỏi friend, safety và user trước khi đọc hoặc ghi bảng của feed.",
+ "caption": "Ba endpoint story của feed lần lượt hỏi friend, safety, user để lọc bạn bè, block, hideProfile rồi mới đọc/ghi Story và StoryView.",
+ "participants": [
+  {
+   "id": "web",
+   "label": "Web client",
+   "kind": "client"
+  },
+  {
+   "id": "feed",
+   "label": "Feed",
+   "kind": "service"
+  },
+  {
+   "id": "friend",
+   "label": "Friend",
+   "kind": "service"
+  },
+  {
+   "id": "safety",
+   "label": "Safety",
+   "kind": "service"
+  },
+  {
+   "id": "user",
+   "label": "User",
+   "kind": "service"
+  },
+  {
+   "id": "postgres",
+   "label": "PostgreSQL",
+   "kind": "infra"
+  }
+ ],
+ "steps": [
+  {
+   "from": "web",
+   "to": "feed",
+   "label": "GET /stories/ring (JWT) lấy vòng story",
+   "kind": "call",
+   "mechanism": "http"
+  },
+  {
+   "from": "feed",
+   "to": "friend",
+   "label": "Lấy danh sách id bạn bè của người gọi",
+   "kind": "call",
+   "mechanism": "di-call",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/feed/services/story.service.ts",
+     "line": 89,
+     "quote": "this.friendService.listFriendIds(user.userId),"
+    }
+   ]
+  },
+  {
+   "from": "feed",
+   "to": "safety",
+   "label": "Lấy các id bị block (hai chiều) để loại khỏi vòng",
+   "kind": "call",
+   "mechanism": "di-call",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/feed/services/story.service.ts",
+     "line": 90,
+     "quote": "this.safetyService.getBlockedUserIds(user.userId),"
+    }
+   ]
+  },
+  {
+   "from": "feed",
+   "to": "user",
+   "label": "Đọc cài đặt riêng tư để bỏ tác giả hideProfile",
+   "kind": "call",
+   "mechanism": "di-call",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/feed/services/story.service.ts",
+     "line": 95,
+     "quote": "const settings = await this.privacySettings.findForUsers(visibleIds);"
+    }
+   ]
+  },
+  {
+   "from": "feed",
+   "to": "postgres",
+   "label": "Truy vấn Story còn hạn của các tác giả hợp lệ",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/feed/services/story.service.ts",
+     "line": 101,
+     "quote": "return this.storyRepo"
+    }
+   ]
+  },
+  {
+   "from": "feed",
+   "to": "web",
+   "label": "Trả danh sách story của mình và bạn bè",
+   "kind": "return",
+   "mechanism": "http"
+  },
+  {
+   "from": "web",
+   "to": "feed",
+   "label": "GET /stories/:storyId để xem một story",
+   "kind": "call",
+   "mechanism": "http"
+  },
+  {
+   "from": "feed",
+   "to": "postgres",
+   "label": "Đọc Story theo id, kiểm tra tồn tại và hết hạn",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/feed/services/story.service.ts",
+     "line": 119,
+     "quote": "const story = await this.storyRepo.findOneBy({ id: storyId });"
+    }
+   ]
+  },
+  {
+   "from": "feed",
+   "to": "safety",
+   "label": "Hỏi isBlocked theo cả hai chiều giữa người xem và tác giả",
+   "kind": "call",
+   "mechanism": "di-call",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/feed/services/story.service.ts",
+     "line": 129,
+     "quote": "(await this.safetyService.isBlocked(user.userId, story.authorUserId)) ||"
+    },
+    {
+     "file": "apps/core-api/src/modules/feed/services/story.service.ts",
+     "line": 130,
+     "quote": "(await this.safetyService.isBlocked(story.authorUserId, user.userId));"
+    }
+   ],
+   "note": "Chỉ chạy khi người xem không phải tác giả; isBlocked chiều thứ hai chỉ được hỏi nếu chiều đầu trả false, và areFriends bị bỏ qua khi story có audience public."
+  },
+  {
+   "from": "feed",
+   "to": "friend",
+   "label": "Kiểm tra audience: story không public thì phải là bạn bè",
+   "kind": "call",
+   "mechanism": "di-call",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/feed/services/story.service.ts",
+     "line": 133,
+     "quote": "(await this.friendService.areFriends(user.userId, story.authorUserId));"
+    }
+   ]
+  },
+  {
+   "from": "feed",
+   "to": "user",
+   "label": "Hỏi tác giả có đang ẩn hồ sơ (isHidden) không",
+   "kind": "call",
+   "mechanism": "di-call",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/feed/services/story.service.ts",
+     "line": 134,
+     "quote": "const hidden = await this.privacySettings.isHidden(story.authorUserId);"
+    }
+   ]
+  },
+  {
+   "from": "feed",
+   "to": "postgres",
+   "label": "Ghi StoryView (bỏ qua nếu tự xem hoặc đã xem trước đó)",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/feed/services/story.service.ts",
+     "line": 151,
+     "quote": "await this.viewRepo.save("
+    }
+   ]
+  },
+  {
+   "from": "feed",
+   "to": "web",
+   "label": "Trả story, hoặc 404 STORY_NOT_FOUND khi bị chặn",
+   "kind": "return",
+   "mechanism": "http"
+  },
+  {
+   "from": "web",
+   "to": "feed",
+   "label": "GET /stories/:storyId/viewers (tác giả xem người đã xem)",
+   "kind": "call",
+   "mechanism": "http"
+  },
+  {
+   "from": "feed",
+   "to": "postgres",
+   "label": "Đọc Story, chỉ tác giả được tiếp tục",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/feed/services/story.service.ts",
+     "line": 168,
+     "quote": "const story = await this.storyRepo.findOneBy({ id: storyId });"
+    }
+   ]
+  },
+  {
+   "from": "feed",
+   "to": "safety",
+   "label": "Lấy id bị block hiện tại để ẩn khỏi danh sách viewer",
+   "kind": "call",
+   "mechanism": "di-call",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/feed/services/story.service.ts",
+     "line": 176,
+     "quote": "const blockedIds = await this.safetyService.getBlockedUserIds(user.userId);"
+    }
+   ]
+  },
+  {
+   "from": "feed",
+   "to": "postgres",
+   "label": "Đọc StoryView của story theo thời gian giảm dần",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/feed/services/story.service.ts",
+     "line": 177,
+     "quote": "const views = await this.viewRepo.find({"
+    }
+   ]
+  },
+  {
+   "from": "feed",
+   "to": "web",
+   "label": "Trả viewerIds đã loại người bị block",
+   "kind": "return",
+   "mechanism": "http"
+  }
+ ],
+ "groups": [],
+ "invariants": [
+  "Feed chỉ sở hữu Story/StoryView nên mọi quyết định xem được hay không phải hỏi friend, safety và user trước khi đọc hoặc ghi dữ liệu của feed.",
+  "Block được lọc tại thời điểm đọc (cả ring lẫn viewers): viewer đã xem trước khi block vẫn bị ẩn khỏi danh sách nếu block xảy ra sau đó.",
+  "Story không tồn tại, hết hạn, bị block, bị ẩn hoặc audience không cho phép đều trả cùng mã STORY_NOT_FOUND (404) nên người gọi không dò được lý do."
+ ],
+ "failureModes": [
+  {
+   "when": "Story không tồn tại, hết hạn, bị block, tác giả ẩn hồ sơ hoặc người xem không phải bạn bè của story không public",
+   "effect": "viewStory ném DomainException STORY_NOT_FOUND (404), không ghi StoryView."
+  },
+  {
+   "when": "Người xem đã có StoryView của story này (vi phạm unique)",
+   "effect": "Lỗi unique bị bắt và bỏ qua nên việc ghi lượt xem là idempotent; lỗi khác vẫn được ném lại."
+  },
+  {
+   "when": "Người gọi /viewers không phải tác giả hoặc story không tồn tại",
+   "effect": "listViewers ném STORY_NOT_FOUND (404) trước khi đọc StoryView."
+  },
+  {
+   "when": "Danh sách tác giả hợp lệ rỗng (authorIds.length === 0)",
+   "effect": "getRing trả mảng rỗng mà không truy vấn bảng Story; thực tế hiếm xảy ra vì userId của chính người gọi luôn nằm trong visibleIds và không bị lọc hideProfile."
+  }
+ ],
+ "dataIssues": [],
+ "uncertain": []
+}

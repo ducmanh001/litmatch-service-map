@@ -1,0 +1,301 @@
+{
+ "id": "payos-topup-webhook",
+ "title": "Nạp kim cương qua PayOS và webhook",
+ "summary": "Người dùng tạo đơn nạp PayOS rồi thanh toán trên trang của PayOS; tiền chỉ được cộng vào ví khi webhook có chữ ký hợp lệ quay lại economy, ghi sổ cái kép và chống cộng hai lần. Economy phải phối hợp với PayOS (bên ngoài) và PostgreSQL.",
+ "caption": "Tạo đơn và link thanh toán PayOS, sau đó webhook đã xác thực được đối chiếu, ghi sổ cái kép và đánh dấu đơn Paid; client poll trạng thái đơn để biết khi nào Paid.",
+ "participants": [
+  {
+   "id": "web",
+   "label": "Web client",
+   "kind": "client"
+  },
+  {
+   "id": "economy",
+   "label": "Economy",
+   "kind": "service"
+  },
+  {
+   "id": "postgres",
+   "label": "PostgreSQL",
+   "kind": "infra"
+  },
+  {
+   "id": "external:payos",
+   "label": "PayOS",
+   "kind": "service"
+  }
+ ],
+ "steps": [
+  {
+   "from": "web",
+   "to": "economy",
+   "label": "POST /economy/payos/orders với gói nạp và Idempotency-Key",
+   "kind": "call",
+   "mechanism": "http"
+  },
+  {
+   "from": "economy",
+   "to": "postgres",
+   "label": "Tra đơn theo idempotencyKey, nếu chưa có thì lưu đơn từ gói đang bán",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/economy/services/payos.service.ts",
+     "line": 87,
+     "quote": "let order = await this.orderRepo.findOneBy({ idempotencyKey });"
+    },
+    {
+     "file": "apps/core-api/src/modules/economy/services/payos.service.ts",
+     "line": 92,
+     "quote": "const pkg = await this.packageRepo.findOneBy({ packageId, active: true });"
+    }
+   ]
+  },
+  {
+   "from": "economy",
+   "to": "external:payos",
+   "label": "Tạo payment link cho orderCode, số tiền VND và URL quay lại",
+   "kind": "call",
+   "mechanism": "http",
+   "note": "Lời gọi nằm ngoài khóa hàng và connection theo chú thích trong mã.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/economy/services/payos.service.ts",
+     "line": 239,
+     "quote": "const link = await this.client.createPaymentLink({"
+    }
+   ]
+  },
+  {
+   "from": "economy",
+   "to": "postgres",
+   "label": "Lưu link thanh toán vào đơn, chỉ ghi khi paymentLinkId còn trống",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/economy/services/payos.service.ts",
+     "line": 250,
+     "quote": "await this.orderRepo.update("
+    }
+   ]
+  },
+  {
+   "from": "economy",
+   "to": "web",
+   "label": "Trả thông tin đơn kèm checkoutUrl và qrCode",
+   "kind": "return",
+   "mechanism": "http"
+  },
+  {
+   "from": "external:payos",
+   "to": "economy",
+   "label": "POST /economy/webhooks/payos kèm chữ ký, HMAC được kiểm trước mọi truy vấn",
+   "kind": "call",
+   "mechanism": "webhook",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/economy/webhooks/economy-webhooks.controller.ts",
+     "line": 121,
+     "quote": "@Post('payos')"
+    },
+    {
+     "file": "apps/core-api/src/modules/economy/webhooks/economy-webhooks.controller.ts",
+     "line": 125,
+     "quote": "const event = this.payosClient.verifyWebhook({"
+    }
+   ]
+  },
+  {
+   "from": "economy",
+   "to": "postgres",
+   "label": "Tìm đơn theo orderCode và đối chiếu trạng thái, số tiền, tiền tệ, paymentLinkId",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/economy/services/payos.service.ts",
+     "line": 171,
+     "quote": "const order = await this.orderRepo.findOneBy({"
+    }
+   ]
+  },
+  {
+   "from": "economy",
+   "to": "postgres",
+   "label": "Mở giao dịch DB, ghi sổ cái kép payos-credit (Debit SystemIap, Credit UserWallet)",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/economy/services/payos.service.ts",
+     "line": 178,
+     "quote": "idempotencyKey: `payos-credit:${order.orderCode}`"
+    },
+    {
+     "file": "apps/core-api/src/modules/economy/services/payos.service.ts",
+     "line": 176,
+     "quote": "const result = await this.ledger.record({"
+    },
+    {
+     "file": "apps/core-api/src/modules/economy/services/ledger.service.ts",
+     "line": 74,
+     "quote": "const result = await this.dataSource.transaction((manager) =>"
+    }
+   ],
+   "note": "Giao dịch mở ở LedgerService.record bằng dataSource.transaction; callback withinTransaction chạy cuối cùng trong cùng manager."
+  },
+  {
+   "from": "economy",
+   "to": "postgres",
+   "label": "Trong withinTransaction: khóa đơn pessimistic_write, lệch snapshot thì rollback",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "note": "Khóa đơn nằm SAU khi sổ cái và ví đã ghi trong cùng giao dịch, không phải trước.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/economy/services/payos.service.ts",
+     "line": 316,
+     "quote": ".setLock('pessimistic_write')"
+    }
+   ]
+  },
+  {
+   "from": "economy",
+   "to": "postgres",
+   "label": "Đánh dấu đơn Paid và gắn transactionId của bút toán",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/economy/services/payos.service.ts",
+     "line": 208,
+     "quote": "await manager.update("
+    }
+   ]
+  },
+  {
+   "from": "economy",
+   "to": "external:payos",
+   "label": "Trả 200 {received: true} cho webhook",
+   "kind": "return",
+   "mechanism": "webhook"
+  },
+  {
+   "from": "web",
+   "to": "economy",
+   "label": "GET /economy/payos/orders/:orderId poll trạng thái đơn",
+   "kind": "call",
+   "mechanism": "http",
+   "note": "Client hỏi lại sau khi thanh toán để chờ webhook payOS; trạng thái Paid chỉ xuất hiện sau khi webhook đã được xác thực và ghi sổ (bước 6-10).",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/economy/economy.controller.ts",
+     "line": 98,
+     "quote": "@Get('payos/orders/:orderId')"
+    }
+   ]
+  },
+  {
+   "from": "economy",
+   "to": "postgres",
+   "label": "Đọc đơn theo id và userId, đơn Pending quá hạn thì chuyển Expired",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "note": "Chỉ đọc đơn của chính người gọi; không thấy đơn thì ném lỗi không tìm thấy đơn. Ghi duy nhất của đường này là UPDATE có điều kiện status Pending sang Expired khi expiresAt đã qua, rồi đọc lại đơn.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/economy/services/payos.service.ts",
+     "line": 145,
+     "quote": "let order = await this.orderRepo.findOneBy({ id: orderId, userId });"
+    },
+    {
+     "file": "apps/core-api/src/modules/economy/services/payos.service.ts",
+     "line": 151,
+     "quote": "await this.orderRepo.update("
+    }
+   ]
+  },
+  {
+   "from": "economy",
+   "to": "web",
+   "label": "Trả status, transactionId và số kim cương của đơn",
+   "kind": "return",
+   "mechanism": "http",
+   "note": "transactionId là null cho tới khi webhook gắn bút toán vào đơn (bước 10)."
+  }
+ ],
+ "groups": [
+  {
+   "from": 3,
+   "to": 3,
+   "label": "Gọi PayOS ngoài hệ thống",
+   "kind": "external"
+  },
+  {
+   "from": 8,
+   "to": 10,
+   "label": "Một giao dịch DB: sổ cái, ví, outbox, khóa đơn và đánh dấu Paid",
+   "kind": "transaction"
+  }
+ ],
+ "invariants": [
+  "Webhook là route public nên HMAC phải được kiểm trước mọi truy vấn hay ghi, nếu không ai cũng có thể giả lệnh cộng tiền.",
+  "Trong cùng giao dịch với sổ cái, đơn được khóa FOR UPDATE và đối chiếu lại số tiền, tiền tệ, paymentLinkId; nếu lệch thì ném lỗi và rollback toàn bộ, nên webhook đến trễ hay trùng không cộng sai.",
+  "Sổ cái dùng idempotencyKey payos-credit theo orderCode, nên webhook gửi lại chỉ replay chứ không cộng ví hai lần.",
+  "Đường poll GET /economy/payos/orders/:orderId chỉ đọc: nó không bao giờ tạo bút toán, chỉ có webhook đã xác thực mới ghi sổ và đánh dấu Paid; ghi duy nhất của poll là chuyển đơn Pending quá hạn sang Expired."
+ ],
+ "failureModes": [
+  {
+   "when": "Webhook không khớp snapshot đơn (sai số tiền, đơn đã Paid hoặc không tồn tại)",
+   "effect": "creditVerifiedWebhook trả false (không khớp trước giao dịch, hoặc PAYOS_WEBHOOK_MISMATCH trong callback làm rollback sổ cái), controller bỏ qua kết quả và vẫn trả received: true."
+  },
+  {
+   "when": "Webhook cùng orderCode được gửi lại",
+   "effect": "Ledger replay theo idempotencyKey, không cộng thêm kim cương; creditVerifiedWebhook trả false và controller vẫn trả received: true."
+  },
+  {
+   "when": "Lỗi khác khi ghi sổ hoặc cập nhật đơn",
+   "effect": "Ngoại lệ được ném lại, controller không trả received: true."
+  },
+  {
+   "when": "Client poll trước khi webhook payOS tới, hoặc webhook chưa được xử lý",
+   "effect": "Đơn vẫn Pending và transactionId null; client phải poll lại, endpoint không tự xác minh với payOS."
+  },
+  {
+   "when": "orderId không tồn tại hoặc thuộc user khác",
+   "effect": "findOneBy theo id và userId không thấy đơn nên ném lỗi không tìm thấy đơn, không lộ đơn của người khác."
+  }
+ ],
+ "dataIssues": [],
+ "uncertain": [],
+ "resolved": [
+  {
+   "id": "payos-topup-webhook#1",
+   "status": "corrected",
+   "finding": "Giao dịch mở ở LedgerService.record; thứ tự thật là ghi sổ cái, ví, outbox rồi mới chạy callback khóa đơn và đánh dấu Paid. Đã đảo thứ tự bước 8-9, thêm nhóm transaction 8-10 và sửa invariant."
+  },
+  {
+   "id": "payos-topup-webhook#2",
+   "status": "corrected",
+   "finding": "Ví được cập nhật trong cùng giao dịch ledger (applyWalletDeltas lưu wallet và outbox economy.diamond.credited); không có realtime từ luồng này. Đã ghi ví và outbox vào nhãn bước ghi sổ."
+  },
+  {
+   "id": "payos-topup-webhook#3",
+   "status": "confirmed",
+   "finding": "Các trích dẫn khớp mã thật: controller verifyWebhook rồi creditVerifiedWebhook, payos.service ghi sổ với idempotencyKey payos-credit."
+  },
+  {
+   "id": "payos-topup-webhook#4",
+   "status": "confirmed",
+   "finding": "Controller bỏ qua giá trị trả về của creditVerifiedWebhook và luôn trả received: true; mismatch được bắt và đổi thành false, lỗi khác ném lại."
+  },
+  {
+   "id": "payos-topup-webhook#5",
+   "status": "confirmed",
+   "finding": "PayOS là dịch vụ ngoài được gọi qua PayosClient.createPaymentLink và gọi lại webhook; vẽ là participant external:payos là phù hợp."
+  }
+ ],
+ "resolutionApplied": true
+}

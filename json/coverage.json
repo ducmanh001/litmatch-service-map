@@ -1,0 +1,2652 @@
+{
+ "stats": {
+  "total": 214,
+  "flow": 188,
+  "local": 26,
+  "cross-open": 0,
+  "unverified": 0
+ },
+ "entries": [
+  {
+   "service": "auth",
+   "id": "e1",
+   "kind": "rest",
+   "route": "POST /auth/guest",
+   "status": "flow",
+   "flows": [
+    "auth-guest-login-and-socket"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "auth",
+   "id": "e2",
+   "kind": "rest",
+   "route": "POST /auth/otp/request",
+   "status": "flow",
+   "flows": [
+    "auth-otp-login"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "auth",
+   "id": "e3",
+   "kind": "rest",
+   "route": "POST /auth/otp/verify",
+   "status": "flow",
+   "flows": [
+    "auth-otp-login"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "auth",
+   "id": "e4",
+   "kind": "rest",
+   "route": "POST /auth/social",
+   "status": "flow",
+   "flows": [
+    "auth-social-login"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "auth",
+   "id": "e5",
+   "kind": "rest",
+   "route": "POST /auth/refresh",
+   "status": "flow",
+   "flows": [
+    "auth-refresh-and-logout"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "auth",
+   "id": "e6",
+   "kind": "rest",
+   "route": "POST /auth/logout",
+   "status": "flow",
+   "flows": [
+    "auth-refresh-and-logout"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "auth",
+   "id": "e7",
+   "kind": "rest",
+   "route": "POST /auth/upgrade/otp",
+   "status": "flow",
+   "flows": [
+    "auth-guest-upgrade"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "auth",
+   "id": "e8",
+   "kind": "rest",
+   "route": "POST /auth/upgrade/social",
+   "status": "flow",
+   "flows": [
+    "auth-guest-upgrade"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "auth",
+   "id": "e9",
+   "kind": "rest",
+   "route": "GET /auth/search-by-phone",
+   "status": "flow",
+   "flows": [
+    "auth-search-by-phone"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "user",
+   "id": "e1",
+   "kind": "rest",
+   "route": "GET /users/me",
+   "status": "local",
+   "flows": [],
+   "reason": "Đọc một dòng users bằng userRepo.findOneBy trong UserService.getByIdOrThrow, 404 nếu không có. Chỉ bảng của module user, không side effect.",
+   "localEvidence": [
+    {
+     "file": "apps/core-api/src/modules/user/user.service.ts",
+     "line": 88,
+     "quote": "const user = await this.userRepo.findOneBy({ id });"
+    }
+   ],
+   "skeptic": "upheld",
+   "skepticReason": "getByIdOrThrow chỉ findOneBy bảng users của module user và ném 404 nếu thiếu; không gọi service khác, không side effect, không guard riêng."
+  },
+  {
+   "service": "user",
+   "id": "e2",
+   "kind": "rest",
+   "route": "PATCH /users/me",
+   "status": "local",
+   "flows": [],
+   "reason": "Đọc User theo id rồi gộp các trường hồ sơ, kiểm tra tuổi/khoảng seeking thuần hàm và userRepo.save vào bảng user của chính service; không gọi service khác hay realtime.",
+   "localEvidence": [
+    {
+     "file": "apps/core-api/src/modules/user/user.service.ts",
+     "line": 259,
+     "quote": "const user = await this.getByIdOrThrow(userId);"
+    },
+    {
+     "file": "apps/core-api/src/modules/user/user.service.ts",
+     "line": 291,
+     "quote": "return this.userRepo.save(user);"
+    }
+   ],
+   "skeptic": "upheld",
+   "skepticReason": "Đã đọc controller, updateProfile, getByIdOrThrow, assertBirthDateValid: chỉ findOneBy User, gộp trường, kiểm tra thuần hàm rồi userRepo.save. Không có service khác, realtime, provider, Redis hay guard riêng."
+  },
+  {
+   "service": "user",
+   "id": "e3",
+   "kind": "rest",
+   "route": "GET /users/me/privacy",
+   "status": "local",
+   "flows": [],
+   "reason": "Đọc một dòng privacy_settings của user (findOneBy) rồi dựng DTO với DEFAULT_PRIVACY_SETTINGS nếu chưa có. Chỉ bảng của module user, không side effect.",
+   "localEvidence": [
+    {
+     "file": "apps/core-api/src/modules/user/services/privacy-settings.service.ts",
+     "line": 21,
+     "quote": "(await this.settingRepo.findOneBy({ userId })) ?? undefined,"
+    }
+   ],
+   "skeptic": "upheld",
+   "skepticReason": "PrivacySettingsService.getForUser chỉ findOneBy privacy_settings rồi PrivacySettingsDto.from (có mặc định); service chỉ inject settingRepo, không cross-module, không realtime/Redis."
+  },
+  {
+   "service": "user",
+   "id": "e4",
+   "kind": "rest",
+   "route": "PUT /users/me/privacy",
+   "status": "local",
+   "flows": [],
+   "reason": "Chỉ upsert bảng PrivacySetting của user theo userId rồi đọc lại bằng findOneBy; không gọi module/provider khác, không publish realtime.",
+   "localEvidence": [
+    {
+     "file": "apps/core-api/src/modules/user/services/privacy-settings.service.ts",
+     "line": 29,
+     "quote": "await this.settingRepo.upsert("
+    }
+   ],
+   "skeptic": "upheld",
+   "skepticReason": "Controller gọi PrivacySettingsService.updateForUser: chỉ settingRepo.upsert rồi findOneBy trên bảng PrivacySetting của user. Đã kiểm tra: không inject service khác, không realtime/provider/Redis, không guard riêng."
+  },
+  {
+   "service": "user",
+   "id": "e5",
+   "kind": "rest",
+   "route": "GET /users/:id/presence",
+   "status": "flow",
+   "flows": [
+    "user-presence-read"
+   ],
+   "localEvidence": [
+    {
+     "file": "apps/core-api/src/modules/user/user.controller.ts",
+     "line": 92,
+     "quote": "settings.showOnlineStatus && (await this.presence.isOnline(id));"
+    },
+    {
+     "file": "apps/core-api/src/modules/user/redis/user-redis.provider.ts",
+     "line": 7,
+     "quote": "/** Capability token for reading derived presence written by the signaling lease adapter. */"
+    }
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "user",
+   "id": "e6",
+   "kind": "rest",
+   "route": "GET /users/:id",
+   "status": "local",
+   "flows": [],
+   "reason": "Chỉ findOneBy User theo id rồi map PublicProfileDto; chỉ đọc bảng của user.",
+   "localEvidence": [
+    {
+     "file": "apps/core-api/src/modules/user/user.service.ts",
+     "line": 88,
+     "quote": "const user = await this.userRepo.findOneBy({ id });"
+    }
+   ],
+   "skeptic": "upheld",
+   "skepticReason": "getByIdOrThrow chỉ userRepo.findOneBy({ id }) rồi map PublicProfileDto; không gọi privacy/presence hay module khác, không Redis/realtime, chỉ ParseUUIDPipe."
+  },
+  {
+   "service": "support",
+   "id": "e1",
+   "kind": "rest",
+   "route": "POST /support/tickets",
+   "status": "flow",
+   "flows": [
+    "admin-support-tickets"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "support",
+   "id": "e2",
+   "kind": "rest",
+   "route": "GET /support/tickets/me",
+   "status": "flow",
+   "flows": [
+    "admin-support-tickets"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "app-shell",
+   "id": "e1",
+   "kind": "rest",
+   "route": "GET /health",
+   "status": "local",
+   "flows": [],
+   "reason": "Alias gọi live() trả { status: 'ok', uptimeSeconds } từ process.uptime(); không chạm DB/Redis/dependency.",
+   "localEvidence": [
+    {
+     "file": "apps/core-api/src/app/health.controller.ts",
+     "line": 20,
+     "quote": "liveCompatibility(): { status: string; uptimeSeconds: number } {"
+    }
+   ],
+   "skeptic": "upheld",
+   "skepticReason": "liveCompatibility chỉ gọi live() trả status ok và process.uptime(); không dùng ReadinessService, không DB/Redis; chỉ @Public và @SkipThrottle."
+  },
+  {
+   "service": "app-shell",
+   "id": "e2",
+   "kind": "rest",
+   "route": "GET /health/live",
+   "status": "local",
+   "flows": [],
+   "reason": "Handler thuần trả status ok và uptime từ process.uptime(); không gọi ReadinessService, Postgres hay Redis.",
+   "localEvidence": [
+    {
+     "file": "apps/core-api/src/app/health.controller.ts",
+     "line": 31,
+     "quote": "return { status: 'ok', uptimeSeconds: Math.round(process.uptime()) };"
+    }
+   ],
+   "skeptic": "upheld",
+   "skepticReason": "Handler thuần trả { status: 'ok', uptimeSeconds } từ process.uptime(); không gọi ReadinessService, Postgres, Redis hay dependency nào."
+  },
+  {
+   "service": "app-shell",
+   "id": "e3",
+   "kind": "rest",
+   "route": "GET /health/ready",
+   "status": "flow",
+   "flows": [
+    "app-shell-health-and-readiness"
+   ],
+   "localEvidence": [
+    {
+     "file": "apps/core-api/src/app/health.controller.ts",
+     "line": 47,
+     "quote": "const result = await this.readiness.check();"
+    },
+    {
+     "file": "apps/core-api/src/app/readiness.service.ts",
+     "line": 57,
+     "quote": "await this.withTimeout(this.dataSource.query('SELECT 1'), 1_000);"
+    }
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "app-shell",
+   "id": "e4",
+   "kind": "rest",
+   "route": "GET /capabilities",
+   "status": "local",
+   "flows": [],
+   "reason": "Chỉ suy ra CapabilitiesDto từ ConfigService (env) và danh sách bảo trì trong bộ nhớ; không gọi provider thật, DB hay Redis.",
+   "localEvidence": [
+    {
+     "file": "apps/core-api/src/app/capabilities.controller.ts",
+     "line": 24,
+     "quote": "return this.capabilities.getCapabilities();"
+    },
+    {
+     "file": "apps/core-api/src/app/capabilities.service.ts",
+     "line": 63,
+     "quote": "const pushProvider = this.config.getOrThrow('NOTIFICATION_PUSH_PROVIDER', {"
+    }
+   ],
+   "skeptic": "upheld",
+   "skepticReason": "Đã đọc controller và CapabilitiesService.getCapabilities: chỉ đọc ConfigService (env) và tập maintenance in-memory, tự suy trạng thái; không gọi provider thật, DB, Redis hay service khác."
+  },
+  {
+   "service": "admin",
+   "id": "e1",
+   "kind": "rest",
+   "route": "GET /admin/dashboard",
+   "status": "flow",
+   "flows": [
+    "admin-dashboard"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "admin",
+   "id": "e2",
+   "kind": "rest",
+   "route": "GET /admin/users",
+   "status": "flow",
+   "flows": [
+    "admin-user-lookup-and-unban"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "admin",
+   "id": "e3",
+   "kind": "rest",
+   "route": "GET /admin/users/:id",
+   "status": "flow",
+   "flows": [
+    "admin-user-lookup-and-unban"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "admin",
+   "id": "e4",
+   "kind": "rest",
+   "route": "POST /admin/users/:id/ban",
+   "status": "flow",
+   "flows": [
+    "admin-ban-and-refund"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "admin",
+   "id": "e5",
+   "kind": "rest",
+   "route": "POST /admin/users/:id/unban",
+   "status": "flow",
+   "flows": [
+    "admin-user-lookup-and-unban"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "admin",
+   "id": "e6",
+   "kind": "rest",
+   "route": "GET /admin/reports",
+   "status": "flow",
+   "flows": [
+    "admin-report-resolution"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "admin",
+   "id": "e7",
+   "kind": "rest",
+   "route": "POST /admin/reports/:id/resolve",
+   "status": "flow",
+   "flows": [
+    "admin-report-resolution"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "admin",
+   "id": "e8",
+   "kind": "rest",
+   "route": "POST /admin/reports/:id/dismiss",
+   "status": "flow",
+   "flows": [
+    "admin-report-resolution"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "admin",
+   "id": "e9",
+   "kind": "rest",
+   "route": "GET /admin/videos/pending",
+   "status": "flow",
+   "flows": [
+    "admin-video-moderation-queue"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "admin",
+   "id": "e10",
+   "kind": "rest",
+   "route": "GET /admin/videos/published",
+   "status": "flow",
+   "flows": [
+    "admin-video-moderation-queue"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "admin",
+   "id": "e11",
+   "kind": "rest",
+   "route": "POST /admin/videos/:id/approve",
+   "status": "flow",
+   "flows": [
+    "short-video-publish-moderation"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "admin",
+   "id": "e12",
+   "kind": "rest",
+   "route": "POST /admin/videos/:id/reject",
+   "status": "flow",
+   "flows": [
+    "admin-video-moderation-queue"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "admin",
+   "id": "e13",
+   "kind": "rest",
+   "route": "POST /admin/videos/:id/remove",
+   "status": "flow",
+   "flows": [
+    "admin-video-moderation-queue"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "admin",
+   "id": "e14",
+   "kind": "rest",
+   "route": "POST /admin/rooms/:id/close",
+   "status": "flow",
+   "flows": [
+    "admin-room-management"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "admin",
+   "id": "e15",
+   "kind": "rest",
+   "route": "GET /admin/rooms",
+   "status": "flow",
+   "flows": [
+    "admin-room-management"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "admin",
+   "id": "e16",
+   "kind": "rest",
+   "route": "GET /admin/support/tickets",
+   "status": "flow",
+   "flows": [
+    "admin-support-tickets"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "admin",
+   "id": "e17",
+   "kind": "rest",
+   "route": "PATCH /admin/support/tickets/:id",
+   "status": "flow",
+   "flows": [
+    "admin-support-tickets"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "admin",
+   "id": "e18",
+   "kind": "rest",
+   "route": "GET /admin/gifts",
+   "status": "flow",
+   "flows": [
+    "admin-gift-catalog"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "admin",
+   "id": "e19",
+   "kind": "rest",
+   "route": "POST /admin/gifts",
+   "status": "flow",
+   "flows": [
+    "admin-gift-catalog"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "admin",
+   "id": "e20",
+   "kind": "rest",
+   "route": "PATCH /admin/gifts/:id",
+   "status": "flow",
+   "flows": [
+    "admin-gift-catalog"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "admin",
+   "id": "e21",
+   "kind": "rest",
+   "route": "GET /admin/economy/wallet/:userId",
+   "status": "flow",
+   "flows": [
+    "admin-economy-inspect-and-config"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "admin",
+   "id": "e22",
+   "kind": "rest",
+   "route": "GET /admin/economy/users/:userId/transactions",
+   "status": "flow",
+   "flows": [
+    "admin-economy-inspect-and-config"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "admin",
+   "id": "e23",
+   "kind": "rest",
+   "route": "POST /admin/economy/transactions/:id/refund",
+   "status": "flow",
+   "flows": [
+    "admin-ban-and-refund"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "admin",
+   "id": "e24",
+   "kind": "rest",
+   "route": "GET /admin/config/economy-catalog",
+   "status": "flow",
+   "flows": [
+    "admin-economy-inspect-and-config"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "admin",
+   "id": "e25",
+   "kind": "rest",
+   "route": "PATCH /admin/config/iap-products/:productId",
+   "status": "flow",
+   "flows": [
+    "admin-economy-inspect-and-config"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "admin",
+   "id": "e26",
+   "kind": "rest",
+   "route": "PATCH /admin/config/vip-plans/:id",
+   "status": "flow",
+   "flows": [
+    "admin-economy-inspect-and-config"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "admin",
+   "id": "e27",
+   "kind": "rest",
+   "route": "POST /admin/notifications/broadcast",
+   "status": "flow",
+   "flows": [
+    "admin-broadcast-notification"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "admin",
+   "id": "e28",
+   "kind": "rest",
+   "route": "GET /admin/permissions",
+   "status": "flow",
+   "flows": [
+    "admin-staff-and-permissions"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "admin",
+   "id": "e29",
+   "kind": "rest",
+   "route": "PATCH /admin/permissions/:role/:permission",
+   "status": "flow",
+   "flows": [
+    "admin-staff-and-permissions"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "admin",
+   "id": "e30",
+   "kind": "rest",
+   "route": "GET /admin/staff",
+   "status": "flow",
+   "flows": [
+    "admin-staff-and-permissions"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "admin",
+   "id": "e31",
+   "kind": "rest",
+   "route": "PATCH /admin/staff/:id/role",
+   "status": "flow",
+   "flows": [
+    "admin-staff-and-permissions"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "economy",
+   "id": "e1",
+   "kind": "rest",
+   "route": "GET /economy/wallet",
+   "status": "local",
+   "flows": [],
+   "reason": "Chỉ walletRepo.findOneBy Wallet của user trong DB economy, trả 0 nếu chưa có ví; không ghi ledger hay gọi service khác.",
+   "localEvidence": [
+    {
+     "file": "apps/core-api/src/modules/economy/economy.service.ts",
+     "line": 85,
+     "quote": "const wallet = await this.walletRepo.findOneBy({ userId });"
+    }
+   ],
+   "skeptic": "upheld",
+   "skepticReason": "Đã đọc getWallet: chỉ walletRepo.findOneBy Wallet của user (trả 0 nếu chưa có), không ghi ledger, không gọi service khác, Redis hay realtime."
+  },
+  {
+   "service": "economy",
+   "id": "e2",
+   "kind": "rest",
+   "route": "GET /economy/iap/products",
+   "status": "local",
+   "flows": [],
+   "reason": "Chỉ productRepo.find IapProduct active sắp theo diamonds trong DB economy; không verify receipt với Apple/Google.",
+   "localEvidence": [
+    {
+     "file": "apps/core-api/src/modules/economy/economy.service.ts",
+     "line": 114,
+     "quote": "const products = await this.productRepo.find({"
+    }
+   ],
+   "skeptic": "upheld",
+   "skepticReason": "Đã đọc listIapProducts: chỉ productRepo.find IapProduct active trong DB economy, không gọi iapVerifier/Apple/Google, không Redis hay realtime."
+  },
+  {
+   "service": "economy",
+   "id": "e3",
+   "kind": "rest",
+   "route": "GET /economy/payos/packages",
+   "status": "local",
+   "flows": [],
+   "reason": "Chỉ packageRepo.find các PayosPackage active theo amountVnd tăng dần trong DB economy rồi map view; không gọi payOS.",
+   "localEvidence": [
+    {
+     "file": "apps/core-api/src/modules/economy/services/payos.service.ts",
+     "line": 69,
+     "quote": "const packages = await this.packageRepo.find({"
+    }
+   ],
+   "skeptic": "upheld",
+   "skepticReason": "Đã đọc listPackages: chỉ packageRepo.find PayosPackage active và map view; không gọi PayosClient/ledger, không Redis, realtime hay guard riêng."
+  },
+  {
+   "service": "economy",
+   "id": "e4",
+   "kind": "rest",
+   "route": "POST /economy/payos/orders",
+   "status": "flow",
+   "flows": [
+    "payos-topup-webhook"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "economy",
+   "id": "e5",
+   "kind": "rest",
+   "route": "GET /economy/payos/orders/:orderId",
+   "status": "flow",
+   "flows": [
+    "payos-topup-webhook"
+   ],
+   "localEvidence": [
+    {
+     "file": "apps/core-api/src/modules/economy/services/payos.service.ts",
+     "line": 145,
+     "quote": "let order = await this.orderRepo.findOneBy({ id: orderId, userId });"
+    },
+    {
+     "file": "apps/core-api/src/modules/economy/services/payos.service.ts",
+     "line": 151,
+     "quote": "await this.orderRepo.update("
+    }
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "economy",
+   "id": "e6",
+   "kind": "rest",
+   "route": "GET /economy/vip/plans",
+   "status": "local",
+   "flows": [],
+   "reason": "Chỉ planRepo.find VipPlan active sắp theo priceDiamond trong DB economy, rồi map view.",
+   "localEvidence": [
+    {
+     "file": "apps/core-api/src/modules/economy/economy.service.ts",
+     "line": 134,
+     "quote": "const plans = await this.planRepo.find({"
+    }
+   ],
+   "skeptic": "upheld",
+   "skepticReason": "Đã đọc listVipPlans: chỉ planRepo.find VipPlan active sắp theo giá rồi map; không gọi ledger hay service khác, không Redis hay realtime."
+  },
+  {
+   "service": "economy",
+   "id": "e7",
+   "kind": "rest",
+   "route": "POST /economy/iap/verify",
+   "status": "flow",
+   "flows": [
+    "vip-purchase-iap"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "economy",
+   "id": "e8",
+   "kind": "rest",
+   "route": "POST /economy/vip/purchase",
+   "status": "flow",
+   "flows": [
+    "vip-purchase-iap"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "economy",
+   "id": "e9",
+   "kind": "rest",
+   "route": "GET /economy/transactions",
+   "status": "local",
+   "flows": [],
+   "reason": "Chỉ SELECT ledger_transactions/ledger_entries/ledger_accounts của economy với cursor pagination; read-only, không ghi ledger hay gọi service khác.",
+   "localEvidence": [
+    {
+     "file": "apps/core-api/src/modules/economy/economy.service.ts",
+     "line": 674,
+     "quote": "const qb = this.txnRepo"
+    }
+   ],
+   "skeptic": "upheld",
+   "skepticReason": "Chỉ SELECT join ledger_transactions/ledger_entries/ledger_accounts của economy với cursor pagination, đọc-only; không ghi ledger, không service khác, không Redis/realtime, không guard riêng."
+  },
+  {
+   "service": "economy",
+   "id": "e10",
+   "kind": "webhook",
+   "route": "POST /economy/webhooks/apple",
+   "status": "flow",
+   "flows": [
+    "iap-store-notifications-and-refund-poll"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "economy",
+   "id": "e11",
+   "kind": "webhook",
+   "route": "POST /economy/webhooks/google/rtdn",
+   "status": "flow",
+   "flows": [
+    "iap-store-notifications-and-refund-poll"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "economy",
+   "id": "e12",
+   "kind": "webhook",
+   "route": "POST /economy/webhooks/payos",
+   "status": "flow",
+   "flows": [
+    "payos-topup-webhook"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "economy",
+   "id": "e13",
+   "kind": "job",
+   "route": "IapRefundPollService.onApplicationBootstrap",
+   "status": "flow",
+   "flows": [
+    "iap-store-notifications-and-refund-poll"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "economy",
+   "id": "e14",
+   "kind": "job",
+   "route": "OutboxRelayService.onApplicationBootstrap",
+   "status": "flow",
+   "flows": [
+    "economy-outbox-relay"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "economy",
+   "id": "e15",
+   "kind": "job",
+   "route": "ReconciliationService.onApplicationBootstrap",
+   "status": "flow",
+   "flows": [
+    "economy-reconciliation-and-startup-guards"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "economy",
+   "id": "e16",
+   "kind": "job",
+   "route": "DevIapVerifier.onApplicationBootstrap",
+   "status": "flow",
+   "flows": [
+    "economy-reconciliation-and-startup-guards"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "economy",
+   "id": "e17",
+   "kind": "job",
+   "route": "DevAppleNotificationVerifier.onApplicationBootstrap",
+   "status": "flow",
+   "flows": [
+    "economy-reconciliation-and-startup-guards"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "economy",
+   "id": "e18",
+   "kind": "job",
+   "route": "DevGoogleRtdnVerifier.onApplicationBootstrap",
+   "status": "flow",
+   "flows": [
+    "economy-reconciliation-and-startup-guards"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "gift",
+   "id": "e1",
+   "kind": "rest",
+   "route": "GET /gifts",
+   "status": "flow",
+   "flows": [
+    "admin-gift-catalog"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "gift",
+   "id": "e2",
+   "kind": "rest",
+   "route": "POST /party/rooms/:roomId/gifts",
+   "status": "flow",
+   "flows": [
+    "gift-in-party-room"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "gift",
+   "id": "e3",
+   "kind": "rest",
+   "route": "POST /videos/:videoId/gifts",
+   "status": "flow",
+   "flows": [
+    "gift-on-video"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "gift",
+   "id": "e4",
+   "kind": "rest",
+   "route": "POST /profiles/:profileUserId/gifts",
+   "status": "flow",
+   "flows": [
+    "gift-to-profile-chat-gate"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "matching",
+   "id": "e1",
+   "kind": "rest",
+   "route": "POST /matching/invites",
+   "status": "flow",
+   "flows": [
+    "matching-invite-create"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "matching",
+   "id": "e2",
+   "kind": "rest",
+   "route": "GET /matching/invites",
+   "status": "flow",
+   "flows": [
+    "matching-invite-create"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "matching",
+   "id": "e3",
+   "kind": "rest",
+   "route": "GET /matching/invites/:id",
+   "status": "flow",
+   "flows": [
+    "matching-invite-create"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "matching",
+   "id": "e4",
+   "kind": "rest",
+   "route": "POST /matching/invites/:id/accept",
+   "status": "flow",
+   "flows": [
+    "matching-invite-accept"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "matching",
+   "id": "e5",
+   "kind": "rest",
+   "route": "POST /matching/invites/:id/decline",
+   "status": "flow",
+   "flows": [
+    "matching-invite-decline-cancel"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "matching",
+   "id": "e6",
+   "kind": "rest",
+   "route": "POST /matching/invites/:id/cancel",
+   "status": "flow",
+   "flows": [
+    "matching-invite-decline-cancel"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "matching",
+   "id": "e7",
+   "kind": "rest",
+   "route": "POST /matching/tickets",
+   "status": "flow",
+   "flows": [
+    "matching-to-call"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "matching",
+   "id": "e8",
+   "kind": "rest",
+   "route": "GET /matching/tickets/current",
+   "status": "flow",
+   "flows": [
+    "matching-ticket-status-cancel-speedup"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "matching",
+   "id": "e9",
+   "kind": "rest",
+   "route": "GET /matching/tickets/:id",
+   "status": "flow",
+   "flows": [
+    "matching-ticket-status-cancel-speedup"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "matching",
+   "id": "e10",
+   "kind": "rest",
+   "route": "DELETE /matching/tickets/:id",
+   "status": "flow",
+   "flows": [
+    "matching-ticket-status-cancel-speedup"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "matching",
+   "id": "e11",
+   "kind": "rest",
+   "route": "POST /matching/tickets/:id/confirm",
+   "status": "flow",
+   "flows": [
+    "matching-to-call"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "matching",
+   "id": "e12",
+   "kind": "rest",
+   "route": "POST /matching/tickets/:id/speedup",
+   "status": "flow",
+   "flows": [
+    "matching-ticket-status-cancel-speedup"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "matching",
+   "id": "e14",
+   "kind": "job",
+   "route": "InviteSweeperService.onApplicationBootstrap",
+   "status": "flow",
+   "flows": [
+    "matching-sweeper-jobs"
+   ],
+   "localEvidence": [
+    {
+     "file": "apps/core-api/src/modules/matching/jobs/invite-sweeper.service.ts",
+     "line": 52,
+     "quote": "clusterSingleton: { dataSource: this.dataSource },"
+    },
+    {
+     "file": "apps/core-api/src/modules/matching/jobs/invite-sweeper.service.ts",
+     "line": 63,
+     "quote": "const [, count] = (await this.dataSource.query("
+    }
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "matching",
+   "id": "e15",
+   "kind": "job",
+   "route": "MatcherWorkerService.onApplicationBootstrap",
+   "status": "flow",
+   "flows": [
+    "matching-to-call"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "matching",
+   "id": "e16",
+   "kind": "job",
+   "route": "TicketSweeperService.onApplicationBootstrap",
+   "status": "flow",
+   "flows": [
+    "matching-sweeper-jobs"
+   ],
+   "localEvidence": [
+    {
+     "file": "apps/core-api/src/modules/matching/jobs/ticket-sweeper.service.ts",
+     "line": 72,
+     "quote": "clusterSingleton: { dataSource: this.dataSource },"
+    },
+    {
+     "file": "apps/core-api/src/modules/matching/jobs/ticket-sweeper.service.ts",
+     "line": 133,
+     "quote": "await this.queue.remove("
+    }
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "calling",
+   "id": "e1",
+   "kind": "rest",
+   "route": "POST /calling/match-sessions/:matchSessionId/join",
+   "status": "flow",
+   "flows": [
+    "matching-to-call"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "calling",
+   "id": "e2",
+   "kind": "rest",
+   "route": "POST /calling/friends/:friendUserId/join",
+   "status": "flow",
+   "flows": [
+    "friend-direct-call"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "calling",
+   "id": "e3",
+   "kind": "rest",
+   "route": "GET /calling/calls/:id",
+   "status": "flow",
+   "flows": [
+    "calling-end-and-ticker"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "calling",
+   "id": "e4",
+   "kind": "rest",
+   "route": "POST /calling/calls/:id/end",
+   "status": "flow",
+   "flows": [
+    "matching-to-call"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "calling",
+   "id": "e5",
+   "kind": "rest",
+   "route": "POST /calling/match-sessions/:matchSessionId/end",
+   "status": "flow",
+   "flows": [
+    "calling-end-and-ticker"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "calling",
+   "id": "e6",
+   "kind": "rest",
+   "route": "POST /calling/calls/:id/like",
+   "status": "flow",
+   "flows": [
+    "calling-like-after-call"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "calling",
+   "id": "e7",
+   "kind": "webhook",
+   "route": "POST /calling/webhooks/livekit",
+   "status": "flow",
+   "flows": [
+    "matching-to-call"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "calling",
+   "id": "e9",
+   "kind": "job",
+   "route": "CallTickerService.onApplicationBootstrap",
+   "status": "flow",
+   "flows": [
+    "calling-end-and-ticker"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "soul-match",
+   "id": "e1",
+   "kind": "rest",
+   "route": "GET /soul-match/sessions/:id",
+   "status": "flow",
+   "flows": [
+    "soul-match-room-reads-and-reveal"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "soul-match",
+   "id": "e2",
+   "kind": "rest",
+   "route": "GET /soul-match/sessions/:id/messages",
+   "status": "flow",
+   "flows": [
+    "soul-match-room-reads-and-reveal"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "soul-match",
+   "id": "e3",
+   "kind": "rest",
+   "route": "POST /soul-match/sessions/:id/messages",
+   "status": "flow",
+   "flows": [
+    "soul-match-send-message"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "soul-match",
+   "id": "e4",
+   "kind": "rest",
+   "route": "POST /soul-match/sessions/:id/rating",
+   "status": "flow",
+   "flows": [
+    "soul-match-session"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "soul-match",
+   "id": "e5",
+   "kind": "rest",
+   "route": "POST /soul-match/sessions/:id/end",
+   "status": "flow",
+   "flows": [
+    "soul-match-session"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "soul-match",
+   "id": "e6",
+   "kind": "rest",
+   "route": "GET /soul-match/sessions/:id/partner",
+   "status": "flow",
+   "flows": [
+    "soul-match-room-reads-and-reveal"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "palm-match",
+   "id": "e1",
+   "kind": "rest",
+   "route": "GET /palm-match/reading",
+   "status": "flow",
+   "flows": [
+    "palm-match-queue-and-rating"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "palm-match",
+   "id": "e2",
+   "kind": "rest",
+   "route": "POST /palm-match/queue",
+   "status": "flow",
+   "flows": [
+    "palm-match-queue-and-rating"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "palm-match",
+   "id": "e3",
+   "kind": "rest",
+   "route": "GET /palm-match/current",
+   "status": "flow",
+   "flows": [
+    "palm-match-queue-and-rating"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "palm-match",
+   "id": "e4",
+   "kind": "rest",
+   "route": "POST /palm-match/sessions/:id/flip",
+   "status": "flow",
+   "flows": [
+    "palm-match-queue-and-rating"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "palm-match",
+   "id": "e5",
+   "kind": "rest",
+   "route": "POST /palm-match/sessions/:id/rating",
+   "status": "flow",
+   "flows": [
+    "palm-match-queue-and-rating"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "palm-match",
+   "id": "e6",
+   "kind": "rest",
+   "route": "DELETE /palm-match/current",
+   "status": "flow",
+   "flows": [
+    "palm-match-queue-and-rating"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "mood",
+   "id": "e1",
+   "kind": "rest",
+   "route": "GET /mood/presets",
+   "status": "flow",
+   "flows": [
+    "mood-status-visibility"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "mood",
+   "id": "e2",
+   "kind": "rest",
+   "route": "GET /mood/status/me",
+   "status": "flow",
+   "flows": [
+    "mood-status-visibility"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "mood",
+   "id": "e3",
+   "kind": "rest",
+   "route": "GET /mood/status/:userId",
+   "status": "flow",
+   "flows": [
+    "mood-status-visibility"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "mood",
+   "id": "e4",
+   "kind": "rest",
+   "route": "POST /mood/status",
+   "status": "flow",
+   "flows": [
+    "mood-status-visibility"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "mood",
+   "id": "e5",
+   "kind": "rest",
+   "route": "DELETE /mood/status",
+   "status": "flow",
+   "flows": [
+    "mood-status-visibility"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "movie-match",
+   "id": "e1",
+   "kind": "rest",
+   "route": "POST /movie-match/sessions",
+   "status": "flow",
+   "flows": [
+    "movie-match-friend-session"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "movie-match",
+   "id": "e2",
+   "kind": "rest",
+   "route": "PATCH /movie-match/sessions/:id/state",
+   "status": "flow",
+   "flows": [
+    "movie-match-friend-session"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "movie-match",
+   "id": "e3",
+   "kind": "rest",
+   "route": "POST /movie-match/sessions/:id/end",
+   "status": "flow",
+   "flows": [
+    "movie-match-friend-session"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "movie-match",
+   "id": "e4",
+   "kind": "rest",
+   "route": "GET /movie-match/sessions/:id",
+   "status": "flow",
+   "flows": [
+    "movie-match-friend-session"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "movie-match",
+   "id": "e5",
+   "kind": "rest",
+   "route": "POST /movie-match/anon/queue",
+   "status": "flow",
+   "flows": [
+    "movie-match-anonymous"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "movie-match",
+   "id": "e6",
+   "kind": "rest",
+   "route": "GET /movie-match/anon/current",
+   "status": "flow",
+   "flows": [
+    "movie-match-anon-chat-finish-reactions"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "movie-match",
+   "id": "e7",
+   "kind": "rest",
+   "route": "DELETE /movie-match/anon/current",
+   "status": "flow",
+   "flows": [
+    "movie-match-anon-chat-finish-reactions"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "movie-match",
+   "id": "e8",
+   "kind": "rest",
+   "route": "PATCH /movie-match/anon/sessions/:id/state",
+   "status": "flow",
+   "flows": [
+    "movie-match-anonymous"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "movie-match",
+   "id": "e9",
+   "kind": "rest",
+   "route": "POST /movie-match/anon/sessions/:id/finish",
+   "status": "flow",
+   "flows": [
+    "movie-match-anon-chat-finish-reactions"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "movie-match",
+   "id": "e10",
+   "kind": "rest",
+   "route": "POST /movie-match/anon/sessions/:id/rating",
+   "status": "flow",
+   "flows": [
+    "movie-match-anonymous"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "movie-match",
+   "id": "e11",
+   "kind": "rest",
+   "route": "POST /movie-match/anon/sessions/:id/messages",
+   "status": "flow",
+   "flows": [
+    "movie-match-anon-chat-finish-reactions"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "movie-match",
+   "id": "e12",
+   "kind": "rest",
+   "route": "GET /movie-match/anon/sessions/:id/messages",
+   "status": "flow",
+   "flows": [
+    "movie-match-anon-chat-finish-reactions"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "movie-match",
+   "id": "e13",
+   "kind": "rest",
+   "route": "POST /movie-match/anon/sessions/:id/reactions",
+   "status": "flow",
+   "flows": [
+    "movie-match-anon-chat-finish-reactions"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "mini-game",
+   "id": "e1",
+   "kind": "rest",
+   "route": "POST /mini-game/sessions",
+   "status": "flow",
+   "flows": [
+    "mini-game-session"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "mini-game",
+   "id": "e2",
+   "kind": "rest",
+   "route": "POST /mini-game/sessions/:id/moves",
+   "status": "flow",
+   "flows": [
+    "mini-game-session"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "mini-game",
+   "id": "e3",
+   "kind": "rest",
+   "route": "POST /mini-game/sessions/:id/cancel",
+   "status": "local",
+   "flows": [],
+   "reason": "Chỉ đọc MiniGameSession qua sessionRepo rồi trong một transaction update status=Cancelled và xoá MiniGameActiveParticipant (bảng của mini-game); handler cancelSession không gọi publishRealtimeEvent (chỉ dòng 130/232 ở luồng khác) và không gọi module khác.",
+   "localEvidence": [
+    {
+     "file": "apps/core-api/src/modules/mini-game/mini-game.service.ts",
+     "line": 260,
+     "quote": "await this.dataSource.transaction(async (manager) => {"
+    },
+    {
+     "file": "apps/core-api/src/modules/mini-game/mini-game.service.ts",
+     "line": 266,
+     "quote": "await manager.delete(MiniGameActiveParticipant, { sessionId });"
+    }
+   ],
+   "skeptic": "upheld",
+   "skepticReason": "Đã đọc controller, cancelSession và getSessionForParticipant: chỉ findOneBy MiniGameSession rồi transaction update status và delete MiniGameActiveParticipant (bảng của mini-game). Không có publishRealtimeEvent, service khác, provider, Redis hay guard riêng."
+  },
+  {
+   "service": "mini-game",
+   "id": "e4",
+   "kind": "rest",
+   "route": "GET /mini-game/sessions/:id",
+   "status": "local",
+   "flows": [],
+   "reason": "Chỉ đọc một dòng mini_game_sessions bằng sessionRepo.findOneBy rồi kiểm tra participant; 404 gộp nếu không phải thành viên. Không publish realtime, không gọi service khác.",
+   "localEvidence": [
+    {
+     "file": "apps/core-api/src/modules/mini-game/mini-game.service.ts",
+     "line": 313,
+     "quote": "const session = await this.sessionRepo.findOneBy({ id: sessionId });"
+    }
+   ],
+   "skeptic": "upheld",
+   "skepticReason": "getSession chỉ gọi getSessionForParticipant: một findOneBy mini_game_sessions rồi so userLowId/userHighId; không gọi service khác, không publish realtime, không Redis; controller không có guard/interceptor riêng."
+  },
+  {
+   "service": "friend",
+   "id": "e1",
+   "kind": "rest",
+   "route": "GET /profiles/:profileUserId/actions",
+   "status": "flow",
+   "flows": [
+    "friend-profile-follow-and-actions"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "friend",
+   "id": "e2",
+   "kind": "rest",
+   "route": "POST /profiles/:profileUserId/follow",
+   "status": "flow",
+   "flows": [
+    "friend-profile-follow-and-actions"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "friend",
+   "id": "e3",
+   "kind": "rest",
+   "route": "DELETE /profiles/:profileUserId/follow",
+   "status": "flow",
+   "flows": [
+    "friend-profile-follow-and-actions"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "friend",
+   "id": "e4",
+   "kind": "rest",
+   "route": "POST /profiles/:profileUserId/conversation",
+   "status": "flow",
+   "flows": [
+    "friend-open-conversation-from-profile"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "friend",
+   "id": "e5",
+   "kind": "rest",
+   "route": "GET /friends",
+   "status": "flow",
+   "flows": [
+    "friend-list-and-conversation-reads"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "friend",
+   "id": "e6",
+   "kind": "rest",
+   "route": "GET /friends/:friendUserId/conversation",
+   "status": "flow",
+   "flows": [
+    "friend-open-conversation-from-profile"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "friend",
+   "id": "e7",
+   "kind": "rest",
+   "route": "GET /conversations/:id/messages",
+   "status": "flow",
+   "flows": [
+    "friend-list-and-conversation-reads"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "friend",
+   "id": "e8",
+   "kind": "rest",
+   "route": "GET /conversations/:id/streak",
+   "status": "flow",
+   "flows": [
+    "friend-list-and-conversation-reads"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "friend",
+   "id": "e9",
+   "kind": "rest",
+   "route": "POST /conversations/:id/read",
+   "status": "flow",
+   "flows": [
+    "friend-list-and-conversation-reads"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "friend",
+   "id": "e10",
+   "kind": "rest",
+   "route": "POST /conversations/:id/mute",
+   "status": "flow",
+   "flows": [
+    "friend-list-and-conversation-reads"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "friend",
+   "id": "e11",
+   "kind": "rest",
+   "route": "POST /conversations/:id/messages",
+   "status": "flow",
+   "flows": [
+    "message-push-notification"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "friend",
+   "id": "e15",
+   "kind": "job",
+   "route": "StreakWarningJob.onApplicationBootstrap",
+   "status": "flow",
+   "flows": [
+    "friend-streak-warning-job"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "notification",
+   "id": "e1",
+   "kind": "rest",
+   "route": "GET /notifications",
+   "status": "local",
+   "flows": [],
+   "reason": "Query builder trên bảng notifications của user, phân trang cursor theo seq, giải mã cursor bằng helper thuần. Chỉ đọc DB của module notification, không gọi gì khác.",
+   "localEvidence": [
+    {
+     "file": "apps/core-api/src/modules/notification/notification.service.ts",
+     "line": 160,
+     "quote": "const qb = this.notificationRepo"
+    },
+    {
+     "file": "apps/core-api/src/modules/notification/notification.service.ts",
+     "line": 176,
+     "quote": "const rows = await qb"
+    }
+   ],
+   "skeptic": "upheld",
+   "skepticReason": "list chỉ dựng query builder trên bảng notifications theo userId và cursor seq (decodeCursor là helper thuần); không gọi module khác, analytics, push hay realtime; không guard riêng."
+  },
+  {
+   "service": "notification",
+   "id": "e2",
+   "kind": "rest",
+   "route": "GET /notifications/unread-count",
+   "status": "local",
+   "flows": [],
+   "reason": "Chỉ đếm Notification có readAt IS NULL của user bằng query builder trên bảng của notification; read-only.",
+   "localEvidence": [
+    {
+     "file": "apps/core-api/src/modules/notification/notification.service.ts",
+     "line": 184,
+     "quote": "return this.notificationRepo"
+    }
+   ],
+   "skeptic": "upheld",
+   "skepticReason": "Chỉ query builder getCount trên Notification (readAt IS NULL) của user; read-only, không gọi module khác, không realtime, không Redis, không guard/interceptor riêng."
+  },
+  {
+   "service": "notification",
+   "id": "e3",
+   "kind": "rest",
+   "route": "POST /notifications/web-push/subscription",
+   "status": "flow",
+   "flows": [
+    "message-push-notification"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "notification",
+   "id": "e4",
+   "kind": "rest",
+   "route": "DELETE /notifications/web-push/subscription",
+   "status": "local",
+   "flows": [],
+   "reason": "Chỉ xoá hàng WebPushSubscription theo userId+endpoint trong DB của notification; không gửi push hay gọi provider.",
+   "localEvidence": [
+    {
+     "file": "apps/core-api/src/modules/notification/services/web-push-subscription.service.ts",
+     "line": 32,
+     "quote": "await this.subscriptionRepo.delete({ userId, endpoint });"
+    }
+   ],
+   "skeptic": "upheld",
+   "skepticReason": "Chỉ subscriptionRepo.delete({ userId, endpoint }) trên bảng web push subscription của notification; không gửi push, không gọi provider, không Redis, không guard riêng cho route."
+  },
+  {
+   "service": "notification",
+   "id": "e5",
+   "kind": "rest",
+   "route": "POST /notifications/:notificationId/read",
+   "status": "local",
+   "flows": [],
+   "reason": "Đọc bảng notifications theo id, kiểm tra chủ sở hữu rồi update readAt; idempotent. Chỉ chạm bảng của module notification, không analytics/push/realtime.",
+   "localEvidence": [
+    {
+     "file": "apps/core-api/src/modules/notification/notification.service.ts",
+     "line": 192,
+     "quote": "const notification = await this.notificationRepo.findOneBy({"
+    },
+    {
+     "file": "apps/core-api/src/modules/notification/notification.service.ts",
+     "line": 203,
+     "quote": "await this.notificationRepo.update("
+    }
+   ],
+   "skeptic": "upheld",
+   "skepticReason": "markRead chỉ findOneBy rồi update readAt trên bảng notifications của module; idempotent return sớm. Không gọi analyticsPort (chỉ dùng ở đường track khác), không push/realtime, không guard riêng."
+  },
+  {
+   "service": "discovery",
+   "id": "e1",
+   "kind": "rest",
+   "route": "GET /discovery/browse",
+   "status": "flow",
+   "flows": [
+    "discovery-browse-and-nearby"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "discovery",
+   "id": "e2",
+   "kind": "rest",
+   "route": "PUT /discovery/nearby/location",
+   "status": "flow",
+   "flows": [
+    "discovery-browse-and-nearby"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "discovery",
+   "id": "e3",
+   "kind": "rest",
+   "route": "PUT /discovery/nearby/visible",
+   "status": "flow",
+   "flows": [
+    "discovery-browse-and-nearby"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "discovery",
+   "id": "e4",
+   "kind": "rest",
+   "route": "GET /discovery/nearby",
+   "status": "flow",
+   "flows": [
+    "discovery-browse-and-nearby"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "avatar",
+   "id": "e1",
+   "kind": "rest",
+   "route": "GET /avatar/catalog",
+   "status": "local",
+   "flows": [],
+   "reason": "Chỉ find AvatarAsset active theo slot tuỳ chọn, sắp sortOrder/code; read-only trên bảng của avatar, không gọi EconomyService.",
+   "localEvidence": [
+    {
+     "file": "apps/core-api/src/modules/avatar/avatar.service.ts",
+     "line": 39,
+     "quote": "return this.assetRepo.find({"
+    }
+   ],
+   "skeptic": "upheld",
+   "skepticReason": "AvatarService.listCatalog chỉ assetRepo.find AvatarAsset active theo slot; dù service inject EconomyService, đường này không dùng nó. Không realtime, provider, Redis hay guard riêng."
+  },
+  {
+   "service": "avatar",
+   "id": "e2",
+   "kind": "rest",
+   "route": "GET /avatar/me/items",
+   "status": "local",
+   "flows": [],
+   "reason": "Đọc user_avatar_items của user rồi avatar_assets theo id (findBy + find). Chỉ bảng của module avatar, không gọi Economy hay module khác, không realtime.",
+   "localEvidence": [
+    {
+     "file": "apps/core-api/src/modules/avatar/avatar.service.ts",
+     "line": 46,
+     "quote": "const items = await this.itemRepo.findBy({ userId });"
+    },
+    {
+     "file": "apps/core-api/src/modules/avatar/avatar.service.ts",
+     "line": 48,
+     "quote": "return this.assetRepo.find({"
+    }
+   ],
+   "skeptic": "upheld",
+   "skepticReason": "listMyItems chỉ findBy user_avatar_items rồi find avatar_assets theo id; không gọi EconomyService hay module khác, không realtime, không Redis, không guard riêng."
+  },
+  {
+   "service": "avatar",
+   "id": "e3",
+   "kind": "rest",
+   "route": "POST /avatar/items/:assetId/claim",
+   "status": "flow",
+   "flows": [
+    "avatar-buy-item"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "avatar",
+   "id": "e4",
+   "kind": "rest",
+   "route": "POST /avatar/items/:assetId/buy",
+   "status": "flow",
+   "flows": [
+    "avatar-buy-item"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "avatar",
+   "id": "e5",
+   "kind": "rest",
+   "route": "PUT /avatar/me/equip",
+   "status": "flow",
+   "flows": [
+    "avatar-buy-item"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "avatar",
+   "id": "e6",
+   "kind": "rest",
+   "route": "GET /avatar/me",
+   "status": "local",
+   "flows": [],
+   "reason": "Đọc user_avatar_config và avatar_assets của chính module avatar; lần đầu lazy-init ghi user_avatar_items + user_avatar_config trong một transaction Postgres. Không gọi service/provider khác, không publish realtime.",
+   "localEvidence": [
+    {
+     "file": "apps/core-api/src/modules/avatar/avatar.service.ts",
+     "line": 133,
+     "quote": "(await this.configRepo.findOneBy({ userId })) ??"
+    },
+    {
+     "file": "apps/core-api/src/modules/avatar/avatar.service.ts",
+     "line": 234,
+     "quote": "return await this.dataSource.transaction(async (manager) => {"
+    }
+   ],
+   "skeptic": "upheld",
+   "skepticReason": "Đã đọc getMyAvatar, initDefaultConfig, grantOwnership, resolveLayers: chỉ đọc/ghi bảng avatar_assets, user_avatar_items, user_avatar_config của module avatar (transaction Postgres). EconomyService chỉ được dùng ở buy(), không nằm trên đường này; không guard riêng, không realtime/provider/Redis."
+  },
+  {
+   "service": "avatar",
+   "id": "e7",
+   "kind": "rest",
+   "route": "GET /avatar/users/:userId",
+   "status": "local",
+   "flows": [],
+   "reason": "Chỉ đọc user_avatar_config và avatar_assets (resolveLayers) của module avatar; chưa có config thì trả layers rỗng tại chỗ. Không ghi, không gọi module khác, không realtime.",
+   "localEvidence": [
+    {
+     "file": "apps/core-api/src/modules/avatar/avatar.service.ts",
+     "line": 140,
+     "quote": "const config = await this.configRepo.findOneBy({ userId });"
+    },
+    {
+     "file": "apps/core-api/src/modules/avatar/avatar.service.ts",
+     "line": 214,
+     "quote": "const assets = await this.assetRepo.find({ where: { id: In(ids) } });"
+    }
+   ],
+   "skeptic": "upheld",
+   "skepticReason": "getAvatarOf chỉ findOneBy user_avatar_config rồi resolveLayers đọc avatar_assets; không có kiểm tra bạn bè/block gọi module khác, không ghi, không realtime, không Redis, không guard riêng trên controller."
+  },
+  {
+   "service": "media",
+   "id": "e1",
+   "kind": "rest",
+   "route": "POST /media/images/upload-intent",
+   "status": "flow",
+   "flows": [
+    "feed-post-with-image"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "feed",
+   "id": "e1",
+   "kind": "rest",
+   "route": "POST /stories",
+   "status": "flow",
+   "flows": [
+    "story-create-with-image"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "feed",
+   "id": "e2",
+   "kind": "rest",
+   "route": "GET /stories/ring",
+   "status": "flow",
+   "flows": [
+    "story-ring-view-and-viewers"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "feed",
+   "id": "e3",
+   "kind": "rest",
+   "route": "GET /stories/:storyId",
+   "status": "flow",
+   "flows": [
+    "story-ring-view-and-viewers"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "feed",
+   "id": "e4",
+   "kind": "rest",
+   "route": "GET /stories/:storyId/viewers",
+   "status": "flow",
+   "flows": [
+    "story-ring-view-and-viewers"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "feed",
+   "id": "e5",
+   "kind": "rest",
+   "route": "POST /stories/:storyId/reply",
+   "status": "flow",
+   "flows": [
+    "story-reply-to-dm"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "feed",
+   "id": "e6",
+   "kind": "rest",
+   "route": "POST /feed/posts",
+   "status": "flow",
+   "flows": [
+    "feed-post-with-image"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "feed",
+   "id": "e7",
+   "kind": "rest",
+   "route": "GET /feed/posts",
+   "status": "flow",
+   "flows": [
+    "feed-read-posts"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "feed",
+   "id": "e8",
+   "kind": "rest",
+   "route": "GET /feed/users/:userId/posts",
+   "status": "flow",
+   "flows": [
+    "feed-read-posts"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "feed",
+   "id": "e9",
+   "kind": "rest",
+   "route": "GET /feed/posts/:postId",
+   "status": "flow",
+   "flows": [
+    "feed-read-posts"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "feed",
+   "id": "e10",
+   "kind": "rest",
+   "route": "DELETE /feed/posts/:postId",
+   "status": "flow",
+   "flows": [
+    "feed-delete-post"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "feed",
+   "id": "e11",
+   "kind": "rest",
+   "route": "POST /feed/posts/:postId/comments",
+   "status": "flow",
+   "flows": [
+    "feed-comment-with-notification"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "feed",
+   "id": "e12",
+   "kind": "rest",
+   "route": "GET /feed/posts/:postId/comments",
+   "status": "flow",
+   "flows": [
+    "feed-comment-with-notification"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "feed",
+   "id": "e13",
+   "kind": "rest",
+   "route": "DELETE /feed/comments/:commentId",
+   "status": "flow",
+   "flows": [
+    "feed-delete-post"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "feed",
+   "id": "e14",
+   "kind": "rest",
+   "route": "POST /feed/posts/:postId/reactions",
+   "status": "flow",
+   "flows": [
+    "feed-reaction-with-notification"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "feed",
+   "id": "e15",
+   "kind": "rest",
+   "route": "DELETE /feed/posts/:postId/reactions",
+   "status": "flow",
+   "flows": [
+    "feed-reaction-with-notification"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "feed",
+   "id": "e16",
+   "kind": "rest",
+   "route": "GET /feed/posts/:postId/reactions",
+   "status": "flow",
+   "flows": [
+    "feed-reaction-with-notification"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "feed",
+   "id": "e17",
+   "kind": "job",
+   "route": "StorySweeperService.onApplicationBootstrap",
+   "status": "flow",
+   "flows": [
+    "story-create-with-image"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "short-video",
+   "id": "e1",
+   "kind": "rest",
+   "route": "POST /videos/upload-intent",
+   "status": "flow",
+   "flows": [
+    "short-video-publish-moderation"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "short-video",
+   "id": "e2",
+   "kind": "rest",
+   "route": "POST /videos/:id/finalize",
+   "status": "flow",
+   "flows": [
+    "short-video-publish-moderation"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "short-video",
+   "id": "e3",
+   "kind": "rest",
+   "route": "GET /videos",
+   "status": "flow",
+   "flows": [
+    "short-video-browse-and-detail"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "short-video",
+   "id": "e4",
+   "kind": "rest",
+   "route": "GET /videos/:id",
+   "status": "flow",
+   "flows": [
+    "short-video-browse-and-detail"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "short-video",
+   "id": "e5",
+   "kind": "rest",
+   "route": "POST /videos/:id/report",
+   "status": "flow",
+   "flows": [
+    "short-video-report"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "short-video",
+   "id": "e6",
+   "kind": "rest",
+   "route": "POST /videos/:id/views",
+   "status": "flow",
+   "flows": [
+    "short-video-browse-and-detail"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "short-video",
+   "id": "e7",
+   "kind": "rest",
+   "route": "POST /videos/:id/reactions",
+   "status": "flow",
+   "flows": [
+    "short-video-browse-and-detail"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "short-video",
+   "id": "e8",
+   "kind": "rest",
+   "route": "DELETE /videos/:id/reactions",
+   "status": "flow",
+   "flows": [
+    "short-video-browse-and-detail"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "short-video",
+   "id": "e9",
+   "kind": "rest",
+   "route": "POST /videos/:id/comments",
+   "status": "flow",
+   "flows": [
+    "short-video-comments"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "short-video",
+   "id": "e10",
+   "kind": "rest",
+   "route": "GET /videos/:id/comments",
+   "status": "flow",
+   "flows": [
+    "short-video-comments"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "short-video",
+   "id": "e11",
+   "kind": "rest",
+   "route": "DELETE /videos/:id/comments/:commentId",
+   "status": "flow",
+   "flows": [
+    "short-video-comments"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "short-video",
+   "id": "e12",
+   "kind": "job",
+   "route": "VideoRankingService.onApplicationBootstrap",
+   "status": "flow",
+   "flows": [
+    "short-video-ranking-and-sweeper-jobs"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "short-video",
+   "id": "e13",
+   "kind": "job",
+   "route": "VideoSweeperService.onApplicationBootstrap",
+   "status": "flow",
+   "flows": [
+    "short-video-ranking-and-sweeper-jobs"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "party-room",
+   "id": "e1",
+   "kind": "rest",
+   "route": "POST /party/rooms",
+   "status": "flow",
+   "flows": [
+    "party-room-lifecycle"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "party-room",
+   "id": "e2",
+   "kind": "rest",
+   "route": "GET /party/rooms",
+   "status": "flow",
+   "flows": [
+    "party-room-detail-and-comments"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "party-room",
+   "id": "e3",
+   "kind": "rest",
+   "route": "GET /party/rooms/:id",
+   "status": "flow",
+   "flows": [
+    "party-room-detail-and-comments"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "party-room",
+   "id": "e4",
+   "kind": "rest",
+   "route": "GET /party/rooms/:id/comments",
+   "status": "flow",
+   "flows": [
+    "party-room-detail-and-comments"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "party-room",
+   "id": "e5",
+   "kind": "rest",
+   "route": "POST /party/rooms/:id/comments",
+   "status": "flow",
+   "flows": [
+    "party-room-detail-and-comments"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "party-room",
+   "id": "e6",
+   "kind": "rest",
+   "route": "POST /party/rooms/:id/join",
+   "status": "flow",
+   "flows": [
+    "party-room-lifecycle"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "party-room",
+   "id": "e7",
+   "kind": "rest",
+   "route": "POST /party/rooms/:id/leave",
+   "status": "flow",
+   "flows": [
+    "party-room-leave-and-role-change"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "party-room",
+   "id": "e8",
+   "kind": "rest",
+   "route": "POST /party/rooms/:id/members/:userId/role",
+   "status": "flow",
+   "flows": [
+    "party-room-leave-and-role-change"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "party-room",
+   "id": "e9",
+   "kind": "rest",
+   "route": "POST /party/rooms/:id/members/:userId/speaker-invite",
+   "status": "flow",
+   "flows": [
+    "party-room-speaker-invite"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "party-room",
+   "id": "e10",
+   "kind": "rest",
+   "route": "POST /party/rooms/:id/speaker-invite/accept",
+   "status": "flow",
+   "flows": [
+    "party-room-speaker-invite"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "party-room",
+   "id": "e11",
+   "kind": "rest",
+   "route": "POST /party/rooms/:id/speaker-invite/decline",
+   "status": "flow",
+   "flows": [
+    "party-room-speaker-invite"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "party-room",
+   "id": "e12",
+   "kind": "webhook",
+   "route": "POST /party/webhooks/livekit",
+   "status": "flow",
+   "flows": [
+    "party-room-lifecycle"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "party-room",
+   "id": "e23",
+   "kind": "job",
+   "route": "PartyRoomSweeperService.onApplicationBootstrap",
+   "status": "flow",
+   "flows": [
+    "party-room-lifecycle"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "safety",
+   "id": "e1",
+   "kind": "rest",
+   "route": "POST /safety/reports",
+   "status": "flow",
+   "flows": [
+    "safety-report-and-trust-score"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "safety",
+   "id": "e2",
+   "kind": "rest",
+   "route": "POST /safety/blocks/:targetUserId",
+   "status": "flow",
+   "flows": [
+    "safety-block-and-unblock"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "safety",
+   "id": "e3",
+   "kind": "rest",
+   "route": "DELETE /safety/blocks/:targetUserId",
+   "status": "flow",
+   "flows": [
+    "safety-block-and-unblock"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "safety",
+   "id": "e4",
+   "kind": "rest",
+   "route": "GET /safety/blocks/:targetUserId",
+   "status": "flow",
+   "flows": [
+    "safety-block-and-unblock"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "signaling-gateway",
+   "id": "e1",
+   "kind": "rest",
+   "route": "GET /health",
+   "status": "local",
+   "flows": [],
+   "reason": "Liveness thuần: trả status ok và process.uptime(), không chạm Redis hay service nào.",
+   "localEvidence": [
+    {
+     "file": "apps/signaling-gateway/src/app/health.controller.ts",
+     "line": 22,
+     "quote": "return { status: 'ok', uptimeSeconds: Math.round(process.uptime()) };"
+    }
+   ],
+   "skeptic": "upheld",
+   "skepticReason": "Đã đọc liveCompatibility/live: chỉ trả status ok và process.uptime(); không chạm Redis, DB, service khác hay realtime."
+  },
+  {
+   "service": "signaling-gateway",
+   "id": "e2",
+   "kind": "rest",
+   "route": "GET /health/live",
+   "status": "local",
+   "flows": [],
+   "reason": "Liveness chỉ trả { status: ok, uptimeSeconds } từ process.uptime(), không chạm Redis, DB hay service nào khác.",
+   "localEvidence": [
+    {
+     "file": "apps/signaling-gateway/src/app/health.controller.ts",
+     "line": 22,
+     "quote": "return { status: 'ok', uptimeSeconds: Math.round(process.uptime()) };"
+    }
+   ],
+   "skeptic": "upheld",
+   "skepticReason": "Handler live() chỉ trả status ok và uptimeSeconds từ process.uptime(); HealthController có inject SignalingGateway/SignalingRedisAdapterService nhưng chỉ dùng ở ready(), không ở live(). Không Redis, DB, realtime."
+  },
+  {
+   "service": "signaling-gateway",
+   "id": "e3",
+   "kind": "rest",
+   "route": "GET /health/ready",
+   "status": "local",
+   "flows": [],
+   "reason": "Chỉ đọc cờ in-memory signaling.isReady() và redisAdapter.isReady() của chính gateway rồi trả 200/503; không gọi I/O hay service khác, không publish event.",
+   "localEvidence": [
+    {
+     "file": "apps/signaling-gateway/src/app/health.controller.ts",
+     "line": 30,
+     "quote": "const fanoutReady = this.signaling.isReady();"
+    },
+    {
+     "file": "apps/signaling-gateway/src/app/health.controller.ts",
+     "line": 34,
+     "quote": "const adapterReady = this.redisAdapter.isReady();"
+    }
+   ],
+   "skeptic": "upheld",
+   "skepticReason": "Đã đọc ready(): chỉ đọc cờ in-memory signaling.isReady() và redisAdapter.isReady() của chính gateway rồi set 200/503; không thực hiện I/O mới, không publish, không gọi service khác."
+  },
+  {
+   "service": "friend",
+   "id": "e16",
+   "kind": "rest",
+   "route": "GET /friends/connections",
+   "status": "flow",
+   "flows": [
+    "friend-follow-lists-and-connections"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "friend",
+   "id": "e17",
+   "kind": "rest",
+   "route": "GET /profiles/:profileUserId/follow-counts",
+   "status": "flow",
+   "flows": [
+    "friend-follow-lists-and-connections"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "friend",
+   "id": "e18",
+   "kind": "rest",
+   "route": "GET /profiles/:profileUserId/followers",
+   "status": "flow",
+   "flows": [
+    "friend-follow-lists-and-connections"
+   ],
+   "skeptic": null
+  },
+  {
+   "service": "friend",
+   "id": "e19",
+   "kind": "rest",
+   "route": "GET /profiles/:profileUserId/following",
+   "status": "flow",
+   "flows": [
+    "friend-follow-lists-and-connections"
+   ],
+   "skeptic": null
+  }
+ ]
+}

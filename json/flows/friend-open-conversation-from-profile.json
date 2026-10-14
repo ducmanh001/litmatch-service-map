@@ -1,0 +1,231 @@
+{
+ "id": "friend-open-conversation-from-profile",
+ "title": "Mở chat từ hồ sơ trước khi là bạn",
+ "summary": "Người xem bấm nhắn tin trên hồ sơ của người lạ. friend phải hỏi user (hồ sơ có tồn tại) và safety (có block không), rồi khoá dòng user đích trong một transaction để việc đếm first-contact trong ngày và việc tạo Conversation không bị tách đôi khi nhiều người bấm cùng lúc.",
+ "caption": "Luồng POST /profiles/:profileUserId/conversation kiểm tra hồ sơ và block, khoá user đích rồi mới đếm ngưỡng và tạo Conversation, sau đó client đọc lại bằng GET /friends/:friendUserId/conversation.",
+ "participants": [
+  {
+   "id": "web",
+   "label": "Web client",
+   "kind": "client"
+  },
+  {
+   "id": "friend",
+   "label": "friend",
+   "kind": "service"
+  },
+  {
+   "id": "user",
+   "label": "user",
+   "kind": "service"
+  },
+  {
+   "id": "safety",
+   "label": "safety",
+   "kind": "service"
+  },
+  {
+   "id": "postgres",
+   "label": "PostgreSQL",
+   "kind": "infra"
+  }
+ ],
+ "steps": [
+  {
+   "from": "web",
+   "to": "friend",
+   "label": "POST /profiles/:profileUserId/conversation (JWT)",
+   "kind": "call",
+   "mechanism": "http",
+   "note": "Mọi route REST đều qua JwtAuthGuard toàn cục trừ route @Public."
+  },
+  {
+   "from": "friend",
+   "to": "user",
+   "label": "Kiểm tra hồ sơ đích tồn tại (getByIdOrThrow)",
+   "kind": "call",
+   "mechanism": "di-call",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/friend/services/profile-social.service.ts",
+     "line": 398,
+     "quote": "await this.userService.getByIdOrThrow(profileUserId);"
+    }
+   ]
+  },
+  {
+   "from": "friend",
+   "to": "safety",
+   "label": "Hỏi isBlocked theo cả hai chiều viewer/profile",
+   "kind": "call",
+   "mechanism": "di-call",
+   "note": "Nếu bị block theo bất kỳ chiều nào, service ném PROFILE_NOT_AVAILABLE (404) trước khi mở transaction.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/friend/services/profile-social.service.ts",
+     "line": 546,
+     "quote": "(await this.safetyService.isBlocked(userAId, userBId)) ||"
+    },
+    {
+     "file": "apps/core-api/src/modules/friend/services/profile-social.service.ts",
+     "line": 547,
+     "quote": "(await this.safetyService.isBlocked(userBId, userAId))"
+    }
+   ]
+  },
+  {
+   "from": "friend",
+   "to": "postgres",
+   "label": "Khoá dòng User đích (pessimistic_write)",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/friend/services/profile-social.service.ts",
+     "line": 467,
+     "quote": "const profile = await manager.findOne(User, {"
+    },
+    {
+     "file": "apps/core-api/src/modules/friend/services/profile-social.service.ts",
+     "line": 469,
+     "quote": "lock: { mode: 'pessimistic_write' },"
+    }
+   ]
+  },
+  {
+   "from": "friend",
+   "to": "postgres",
+   "label": "Tìm Conversation theo cặp canonical; có sẵn thì trả luôn",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/friend/services/profile-social.service.ts",
+     "line": 594,
+     "quote": "return manager.findOne(Conversation, { where: { userLowId, userHighId } });"
+    }
+   ]
+  },
+  {
+   "from": "friend",
+   "to": "postgres",
+   "label": "Đếm ProfileChatContact first-contact trong ngày của profile",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "note": "Nếu số đếm >= PROFILE_DIRECT_MESSAGE_DAILY_FIRST_CHAT_THRESHOLD thì ném MESSAGE_GIFT_REQUIRED (402) và không tạo gì.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/friend/services/profile-social.service.ts",
+     "line": 608,
+     "quote": "const row = await manager"
+    }
+   ]
+  },
+  {
+   "from": "friend",
+   "to": "postgres",
+   "label": "INSERT Conversation (orIgnore), đọc lại bản ghi",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/friend/services/profile-social.service.ts",
+     "line": 497,
+     "quote": "const existing = await manager.findOne(Conversation, {"
+    },
+    {
+     "file": "apps/core-api/src/modules/friend/services/profile-social.service.ts",
+     "line": 506,
+     "quote": ".orIgnore()"
+    }
+   ]
+  },
+  {
+   "from": "friend",
+   "to": "postgres",
+   "label": "INSERT ProfileChatContact (orIgnore) nếu vừa tạo mới",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/friend/services/profile-social.service.ts",
+     "line": 467,
+     "quote": "await manager"
+    }
+   ]
+  },
+  {
+   "from": "friend",
+   "to": "web",
+   "label": "Trả Conversation (ConversationDto) sau khi commit",
+   "kind": "return",
+   "mechanism": "http"
+  },
+  {
+   "from": "web",
+   "to": "friend",
+   "label": "GET /friends/:friendUserId/conversation để đọc lại hội thoại",
+   "kind": "call",
+   "mechanism": "http"
+  },
+  {
+   "from": "friend",
+   "to": "postgres",
+   "label": "Tìm Conversation theo cặp canonical (findOneBy)",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "note": "Không thấy Conversation thì ném FriendErrors.NOT_FRIEND (404).",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/friend/services/conversation.service.ts",
+     "line": 55,
+     "quote": "return this.conversationRepo.findOneBy({ userLowId, userHighId });"
+    }
+   ]
+  },
+  {
+   "from": "friend",
+   "to": "web",
+   "label": "Trả Conversation của cặp",
+   "kind": "return",
+   "mechanism": "http"
+  }
+ ],
+ "groups": [
+  {
+   "from": 4,
+   "to": 8,
+   "label": "Transaction khoá user đích và tạo chat",
+   "kind": "transaction"
+  }
+ ],
+ "invariants": [
+  "Khoá pessimistic_write trên dòng User đích khiến mọi lần mở chat tới cùng một profile xếp hàng: đếm first-contact và insert Conversation/ProfileChatContact diễn ra trọn vẹn trước lần kế tiếp, nên ngưỡng không bị vượt do chạy song song.",
+  "Kiểm tra tồn tại hồ sơ (user) và block (safety) chạy trước transaction vì là câu hỏi đồng bộ của module khác; chỉ phần ghi dữ liệu của friend nằm trong transaction để không giữ khoá khi gọi module khác.",
+  "Conversation và ProfileChatContact được tạo cùng một transaction nên không có Conversation mới mà thiếu dấu first-contact để đếm ngưỡng."
+ ],
+ "failureModes": [
+  {
+   "when": "Viewer trùng profile hoặc profile không tồn tại",
+   "effect": "assertTarget ném SELF_PROFILE_ACTION (400) hoặc getByIdOrThrow ném lỗi; transaction chưa mở."
+  },
+  {
+   "when": "Hai bên có block theo bất kỳ chiều nào",
+   "effect": "Trả PROFILE_NOT_AVAILABLE (404), không lộ việc bị block."
+  },
+  {
+   "when": "Profile đã đạt ngưỡng first-contact trong ngày và chưa có Conversation",
+   "effect": "Ném MESSAGE_GIFT_REQUIRED (402) kèm dailyFirstChatCount và firstChatThreshold; transaction rollback, không tạo Conversation."
+  },
+  {
+   "when": "Đã có Conversation giữa hai người",
+   "effect": "Trả Conversation hiện có, không tính thêm first-contact."
+  },
+  {
+   "when": "GET /friends/:friendUserId/conversation khi chưa có Conversation",
+   "effect": "Ném NOT_FRIEND (404) 'Chưa có cuộc trò chuyện với profile này'."
+  }
+ ],
+ "dataIssues": [],
+ "uncertain": []
+}

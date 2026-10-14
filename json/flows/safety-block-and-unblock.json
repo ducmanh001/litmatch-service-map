@@ -1,0 +1,181 @@
+{
+ "id": "safety-block-and-unblock",
+ "title": "Chặn và bỏ chặn người dùng",
+ "summary": "Người dùng chặn, bỏ chặn hoặc kiểm tra trạng thái chặn một người khác. Safety sở hữu log Block append-only nhưng phải hỏi User để chắc người bị chặn tồn tại trước khi ghi.",
+ "caption": "Ba endpoint /safety/blocks/:targetUserId đều đọc dòng Block mới nhất trong PostgreSQL; chỉ block gọi thêm User, và chỉ ghi dòng mới khi trạng thái thật sự đổi.",
+ "participants": [
+  {
+   "id": "web",
+   "label": "Web client",
+   "kind": "client"
+  },
+  {
+   "id": "safety",
+   "label": "Safety",
+   "kind": "service"
+  },
+  {
+   "id": "user",
+   "label": "User",
+   "kind": "service"
+  },
+  {
+   "id": "postgres",
+   "label": "PostgreSQL",
+   "kind": "infra"
+  }
+ ],
+ "steps": [
+  {
+   "from": "web",
+   "to": "safety",
+   "label": "POST /safety/blocks/:targetUserId (chặn)",
+   "kind": "call",
+   "mechanism": "http"
+  },
+  {
+   "from": "safety",
+   "to": "user",
+   "label": "Kiểm tra người bị chặn tồn tại (getByIdOrThrow)",
+   "kind": "call",
+   "mechanism": "di-call",
+   "note": "Tự chặn chính mình bị từ chối trước bước này bằng SELF_BLOCK_FORBIDDEN (400).",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/safety/safety.service.ts",
+     "line": 199,
+     "quote": "await this.userService.getByIdOrThrow(targetUserId);"
+    }
+   ]
+  },
+  {
+   "from": "safety",
+   "to": "postgres",
+   "label": "Đọc dòng Block mới nhất của cặp (latestAction)",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/safety/safety.service.ts",
+     "line": 376,
+     "quote": "const latest = await this.blockRepo.findOne({"
+    }
+   ]
+  },
+  {
+   "from": "safety",
+   "to": "postgres",
+   "label": "Ghi dòng Block action=Blocked (bỏ qua nếu đã Blocked)",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "note": "Idempotent: nếu dòng mới nhất đã là Blocked thì return, không ghi dòng trùng.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/safety/safety.service.ts",
+     "line": 202,
+     "quote": "await this.blockRepo.save("
+    }
+   ]
+  },
+  {
+   "from": "safety",
+   "to": "web",
+   "label": "204 No Content",
+   "kind": "return",
+   "mechanism": "http"
+  },
+  {
+   "from": "web",
+   "to": "safety",
+   "label": "DELETE /safety/blocks/:targetUserId (bỏ chặn)",
+   "kind": "call",
+   "mechanism": "http"
+  },
+  {
+   "from": "safety",
+   "to": "postgres",
+   "label": "Đọc dòng Block mới nhất của cặp (latestAction)",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/safety/safety.service.ts",
+     "line": 376,
+     "quote": "const latest = await this.blockRepo.findOne({"
+    }
+   ]
+  },
+  {
+   "from": "safety",
+   "to": "postgres",
+   "label": "Ghi dòng Block action=Unblocked (bỏ qua nếu chưa Blocked)",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "note": "Idempotent: nếu dòng mới nhất không phải Blocked thì return, không ghi gì.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/safety/safety.service.ts",
+     "line": 215,
+     "quote": "await this.blockRepo.save("
+    }
+   ]
+  },
+  {
+   "from": "safety",
+   "to": "web",
+   "label": "204 No Content",
+   "kind": "return",
+   "mechanism": "http"
+  },
+  {
+   "from": "web",
+   "to": "safety",
+   "label": "Đọc dòng Block mới nhất để suy ra trường blocked",
+   "kind": "call",
+   "mechanism": "http"
+  },
+  {
+   "from": "safety",
+   "to": "postgres",
+   "label": "Đọc dòng Block mới nhất để suy ra isBlocked",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/safety/safety.service.ts",
+     "line": 376,
+     "quote": "const latest = await this.blockRepo.findOne({"
+    }
+   ]
+  },
+  {
+   "from": "safety",
+   "to": "web",
+   "label": "BlockStatusDto: đang chặn hay không",
+   "kind": "return",
+   "mechanism": "http"
+  }
+ ],
+ "groups": [],
+ "invariants": [
+  "Block là log append-only: trạng thái hiện tại là action của dòng mới nhất theo createdAt DESC (latestAction), nên block/unblock chỉ thêm dòng, không sửa hay xóa dòng cũ.",
+  "Safety phải hỏi UserService.getByIdOrThrow trước khi ghi để không tạo Block cho user không tồn tại; bước này nằm trước đọc latestAction và ghi.",
+  "Block và unblock idempotent: đọc latestAction trước khi ghi giúp lặp lại cùng thao tác không sinh dòng thừa. Suy luận: không có transaction hay khoá nên hai request đồng thời vẫn có thể ghi dòng trùng."
+ ],
+ "failureModes": [
+  {
+   "when": "blockerUserId trùng targetUserId",
+   "effect": "SafetyService.block ném DomainException SELF_BLOCK_FORBIDDEN (400), không gọi User và không ghi Block."
+  },
+  {
+   "when": "targetUserId không tồn tại",
+   "effect": "UserService.getByIdOrThrow ném lỗi, request thất bại và không có dòng Block nào được ghi."
+  },
+  {
+   "when": "targetUserId không phải UUID hợp lệ",
+   "effect": "ParseUUIDPipe trên controller từ chối request trước khi vào SafetyService."
+  }
+ ],
+ "dataIssues": [],
+ "uncertain": []
+}

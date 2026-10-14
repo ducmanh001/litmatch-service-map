@@ -1,0 +1,143 @@
+{
+ "id": "short-video-report",
+ "title": "Báo cáo video vi phạm",
+ "summary": "Người xem báo cáo một video ngắn; short-video phải xác nhận video tồn tại và hiển thị được trước, Safety ghi log report append-only và đếm số người báo cáo khác nhau, rồi short-video quyết định tự ẩn video khi vượt ngưỡng.",
+ "caption": "Luồng POST /videos/:id/report: kiểm tra video, ghi report ở Safety, đếm distinct reporter và tự động gỡ video đang published khi vượt ngưỡng.",
+ "participants": [
+  {
+   "id": "web",
+   "label": "Web client",
+   "kind": "client"
+  },
+  {
+   "id": "short-video",
+   "label": "Video ngắn",
+   "kind": "service"
+  },
+  {
+   "id": "safety",
+   "label": "Safety",
+   "kind": "service"
+  },
+  {
+   "id": "postgres",
+   "label": "PostgreSQL",
+   "kind": "infra"
+  }
+ ],
+ "steps": [
+  {
+   "from": "web",
+   "to": "short-video",
+   "label": "POST /videos/:id/report với reason và description",
+   "kind": "call",
+   "mechanism": "http",
+   "note": "Mọi route REST đều qua JwtAuthGuard toàn cục."
+  },
+  {
+   "from": "short-video",
+   "to": "postgres",
+   "label": "Đọc video theo id, kiểm tra tồn tại và hiển thị với người báo cáo",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "note": "Video không tồn tại, hoặc chưa published và không phải tác giả, đều trả VIDEO_NOT_FOUND (404) trước khi ghi report.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/short-video/short-video.service.ts",
+     "line": 174,
+     "quote": "const video = await this.videoRepo.findOneBy({ id: videoId });"
+    }
+   ]
+  },
+  {
+   "from": "short-video",
+   "to": "safety",
+   "label": "Gọi SafetyService.reportVideo(userId, videoId, reason, description)",
+   "kind": "call",
+   "mechanism": "di-call",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/short-video/short-video.service.ts",
+     "line": 490,
+     "quote": "const { distinctReporterCount } = await this.safetyService.reportVideo("
+    }
+   ]
+  },
+  {
+   "from": "safety",
+   "to": "postgres",
+   "label": "INSERT report (unique reporter+video), trùng thì đọc lại; COUNT DISTINCT reporter",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "note": "Không bọc transaction: insert lỗi unique-violation rồi đọc lại trong cùng transaction sẽ bị Postgres huỷ.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/safety/safety.service.ts",
+     "line": 159,
+     "quote": "report = await this.reportRepo.save("
+    },
+    {
+     "file": "apps/core-api/src/modules/safety/safety.service.ts",
+     "line": 181,
+     "quote": "COUNT(DISTINCT r.reporterUserId)"
+    }
+   ]
+  },
+  {
+   "from": "safety",
+   "to": "short-video",
+   "label": "Trả distinctReporterCount, Safety không tự quyết ẩn video",
+   "kind": "return",
+   "mechanism": "di-call"
+  },
+  {
+   "from": "short-video",
+   "to": "postgres",
+   "label": "Nếu count >= ngưỡng: UPDATE status published -> removed (có điều kiện)",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "note": "Idempotent: thua race hoặc video đã ẩn thì affected = 0, trả false, không lỗi. Dưới ngưỡng thì bước này bị bỏ qua.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/short-video/short-video.service.ts",
+     "line": 542,
+     "quote": "const result = await repo.update("
+    },
+    {
+     "file": "apps/core-api/src/modules/short-video/short-video.service.ts",
+     "line": 507,
+     "quote": "return this.transition(videoId, VideoStatus.Published, VideoStatus.Removed);"
+    }
+   ]
+  },
+  {
+   "from": "short-video",
+   "to": "web",
+   "label": "204 No Content",
+   "kind": "return",
+   "mechanism": "http"
+  }
+ ],
+ "groups": [],
+ "invariants": [
+  "short-video phải kiểm tra video tồn tại trước khi gọi Safety vì Safety trung lập và không biết bảng videos; nhờ vậy Safety không ghi report cho video không có thật.",
+  "Safety chỉ trả số distinct reporter còn quyết định ẩn nằm ở short-video, vì chỉ short-video sở hữu vòng đời Video và ngưỡng VIDEO_REPORT_AUTOHIDE_THRESHOLD.",
+  "Ràng buộc unique (reporter, video) ở Safety chặn một người báo cáo lặp lại làm tăng số đếm, nên ngưỡng tự ẩn tính theo người khác nhau."
+ ],
+ "failureModes": [
+  {
+   "when": "Video không tồn tại hoặc chưa published và người gọi không phải tác giả",
+   "effect": "short-video ném VIDEO_NOT_FOUND (404), Safety không được gọi, không ghi report."
+  },
+  {
+   "when": "Cùng người báo cáo cùng video nhiều lần",
+   "effect": "Insert vi phạm unique, Safety đọc lại report cũ và không tăng số distinct reporter."
+  },
+  {
+   "when": "Hai request cùng vượt ngưỡng đồng thời",
+   "effect": "UPDATE có điều kiện status = published chỉ thắng một lần, request thua nhận affected = 0 và không ném lỗi."
+  }
+ ],
+ "dataIssues": [],
+ "uncertain": []
+}

@@ -1,0 +1,45 @@
+{
+ "id": "gift-on-video",
+ "title": "Tặng quà cho tác giả video",
+ "summary": "Người xem tặng quà cho tác giả video: Gift tra catalog và người nhận, Economy trừ DIA người tặng và cộng PTS tác giả trong một giao dịch, rồi Notification báo cho tác giả.",
+ "caption": "Gift điều phối, Economy ghi sổ cùng GiftEvent và thông báo trong một transaction, push gửi sau cùng.",
+ "participants": [
+  {"id": "web", "label": "Web client", "kind": "client"},
+  {"id": "gift", "label": "Gift", "kind": "service"},
+  {"id": "short-video", "label": "Short-video", "kind": "service"},
+  {"id": "user", "label": "User", "kind": "service"},
+  {"id": "economy", "label": "Economy", "kind": "service"},
+  {"id": "notification", "label": "Notification", "kind": "service"},
+  {"id": "postgres", "label": "PostgreSQL", "kind": "infra"}
+ ],
+ "steps": [
+  {"from": "web", "to": "gift", "label": "POST /videos/:videoId/gifts kèm giftId và Idempotency-Key", "kind": "call", "mechanism": "http", "note": "Route có Throttle 30 lần/phút và đi qua JwtAuthGuard toàn cục.", "evidence": []},
+  {"from": "gift", "to": "short-video", "label": "Lấy video, xác nhận người tặng xem được, suy ra tác giả", "kind": "call", "mechanism": "di-call", "evidence": [{"file": "apps/core-api/src/modules/gift/gift.service.ts", "line": 280, "quote": "const video = await this.shortVideoService.getVideoOrThrow(user, videoId);"}]},
+  {"from": "gift", "to": "postgres", "label": "Đọc quà đang bán trong catalog (active = true)", "kind": "call", "mechanism": "shared-db", "evidence": [{"file": "apps/core-api/src/modules/gift/gift.service.ts", "line": 290, "quote": "const gift = await this.giftRepo.findOneBy({ id: giftId, active: true });"}]},
+  {"from": "gift", "to": "user", "label": "Đọc hồ sơ tác giả để biết isGuest (khách thì 0 PTS)", "kind": "call", "mechanism": "di-call", "evidence": [{"file": "apps/core-api/src/modules/gift/gift.service.ts", "line": 299, "quote": "const receiver = await this.userService.getByIdOrThrow(receiverUserId);"}]},
+  {"from": "gift", "to": "economy", "label": "sendGift: giá DIA, PTS thưởng, idempotencyKey, callback withinTransaction", "kind": "call", "mechanism": "di-call", "evidence": [{"file": "apps/core-api/src/modules/gift/gift.service.ts", "line": 308, "quote": "const result = await this.economy.sendGift({"}]},
+  {"from": "economy", "to": "postgres", "label": "Ghi sổ kép: trừ DIA người tặng, cộng PTS tác giả, ghi outbox", "kind": "call", "mechanism": "shared-db", "note": "LedgerService.record mở transaction và chạy callback withinTransaction bên trong; lặp lại cùng idempotencyKey thì trả bản cũ (replayed).", "evidence": [{"file": "apps/core-api/src/modules/economy/services/ledger.service.ts", "line": 74, "quote": "const result = await this.dataSource.transaction((manager) =>"}, {"file": "apps/core-api/src/modules/economy/economy.service.ts", "line": 647, "quote": "await manager.save("}]},
+  {"from": "gift", "to": "postgres", "label": "Lưu GiftEvent (videoId, transactionId) cùng transaction", "kind": "call", "mechanism": "shared-db", "evidence": [{"file": "apps/core-api/src/modules/gift/gift.service.ts", "line": 322, "quote": "await manager.save("}]},
+  {"from": "gift", "to": "notification", "label": "Tạo thông báo gift_received cho tác giả (cùng manager)", "kind": "call", "mechanism": "di-call", "evidence": [{"file": "apps/core-api/src/modules/gift/gift.service.ts", "line": 335, "quote": "notification = await this.notificationService.createWithManager("}]},
+  {"from": "economy", "to": "gift", "label": "Trả transactionId và cờ replayed sau khi commit", "kind": "return", "mechanism": "di-call", "evidence": []},
+  {"from": "gift", "to": "postgres", "label": "Đọc lại GiftEvent theo transactionId để trả về", "kind": "call", "mechanism": "shared-db", "evidence": [{"file": "apps/core-api/src/modules/gift/gift.service.ts", "line": 351, "quote": "const giftEvent = await this.giftEventRepo.findOneByOrFail({"}]},
+  {"from": "gift", "to": "notification", "label": "Đẩy push cho tác giả (chỉ khi không phải replay)", "kind": "async", "mechanism": "di-call", "note": "sendPush bọc try/catch, lỗi push chỉ ghi log warn, thông báo in-app vẫn còn.", "evidence": [{"file": "apps/core-api/src/modules/gift/gift.service.ts", "line": 355, "quote": "await this.notificationService.sendPush(notification);"}]},
+  {"from": "gift", "to": "web", "label": "Trả GiftEvent kèm mã quà và replayed", "kind": "return", "mechanism": "http", "evidence": []}
+ ],
+ "groups": [
+  {"from": 6, "to": 8, "label": "Một transaction: sổ kép, GiftEvent, thông báo", "kind": "transaction"},
+  {"from": 11, "to": 11, "label": "Push sau commit, lỗi bị nuốt", "kind": "besteffort"}
+ ],
+ "invariants": [
+  "Economy là nơi duy nhất ghi sổ và ví, nên Gift phải gọi EconomyService.sendGift thay vì tự trừ tiền; GiftEvent và thông báo chạy trong callback withinTransaction để cùng commit hoặc cùng rollback.",
+  "Người nhận được suy từ video (authorUserId), client không gửi receiverUserId, nên không thể gửi quà lệch người; tự tặng bị chặn bằng SELF_GIFT_FORBIDDEN.",
+  "Push chỉ gửi sau khi transaction commit và bỏ qua khi replayed, để retry cùng Idempotency-Key không trừ tiền hai lần hay báo hai lần."
+ ],
+ "failureModes": [
+  {"when": "Một bước trong transaction (ghi sổ, GiftEvent hoặc thông báo) thất bại", "effect": "Toàn bộ rollback: không trừ DIA, không cộng PTS, không có GiftEvent và không có thông báo."},
+  {"when": "Push provider lỗi hoặc ném exception", "effect": "sendPush bắt lỗi và chỉ ghi log; giao dịch đã commit, thông báo in-app vẫn còn."},
+  {"when": "Video không nhìn thấy được, quà không active, hoặc tự tặng", "effect": "Lỗi domain trả về trước khi gọi Economy, không có thay đổi dữ liệu."}
+ ],
+ "dataIssues": [],
+ "uncertain": []
+}

@@ -1,0 +1,292 @@
+{
+ "id": "feed-reaction-with-notification",
+ "title": "Reaction bài kèm thông báo",
+ "summary": "Người dùng thả tim, bỏ tim và xem trạng thái reaction của một bài đăng. Feed sở hữu Reaction nhưng quyền xem bài phụ thuộc safety (block), friend (audience bạn bè) và user (ẩn hồ sơ), còn thông báo cho tác giả phải ghi qua notification trong cùng transaction.",
+ "caption": "Luồng like/unlike/xem reaction: feed hỏi safety, friend, user rồi ghi Reaction và Notification trong một transaction, push gửi sau best-effort.",
+ "participants": [
+  {
+   "id": "web",
+   "label": "Web client",
+   "kind": "client"
+  },
+  {
+   "id": "feed",
+   "label": "Feed",
+   "kind": "service"
+  },
+  {
+   "id": "safety",
+   "label": "Safety",
+   "kind": "service"
+  },
+  {
+   "id": "friend",
+   "label": "Friend",
+   "kind": "service"
+  },
+  {
+   "id": "user",
+   "label": "User",
+   "kind": "service"
+  },
+  {
+   "id": "notification",
+   "label": "Notification",
+   "kind": "service"
+  },
+  {
+   "id": "postgres",
+   "label": "PostgreSQL",
+   "kind": "infra"
+  }
+ ],
+ "steps": [
+  {
+   "from": "web",
+   "to": "feed",
+   "label": "POST /feed/posts/:postId/reactions (thả tim)",
+   "kind": "call",
+   "mechanism": "http",
+   "note": "Mọi route REST đều qua JwtAuthGuard toàn cục; like chặn tài khoản guest (assertNotGuest)."
+  },
+  {
+   "from": "feed",
+   "to": "postgres",
+   "label": "getPostOrThrow: đọc Post theo id",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/feed/feed.service.ts",
+     "line": 196,
+     "quote": "const post = await this.postRepo.findOneBy({ id: postId });"
+    }
+   ]
+  },
+  {
+   "from": "feed",
+   "to": "safety",
+   "label": "isBlocked hai chiều giữa người xem và tác giả",
+   "kind": "call",
+   "mechanism": "di-call",
+   "note": "Chỉ chạy khi người xem không phải tác giả.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/feed/feed.service.ts",
+     "line": 206,
+     "quote": "(await this.safetyService.isBlocked(user.userId, post.authorUserId)) ||"
+    }
+   ]
+  },
+  {
+   "from": "feed",
+   "to": "friend",
+   "label": "areFriends khi audience của bài là friends",
+   "kind": "call",
+   "mechanism": "di-call",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/feed/feed.service.ts",
+     "line": 211,
+     "quote": "(await this.friendService.areFriends("
+    }
+   ]
+  },
+  {
+   "from": "feed",
+   "to": "user",
+   "label": "isHidden: tác giả có ẩn hồ sơ không",
+   "kind": "call",
+   "mechanism": "di-call",
+   "note": "Nếu bị block, ẩn hoặc audience không cho phép thì ném POST_NOT_FOUND (không lộ lý do).",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/feed/feed.service.ts",
+     "line": 215,
+     "quote": "const hidden = await this.privacySettings.isHidden(post.authorUserId);"
+    }
+   ]
+  },
+  {
+   "from": "feed",
+   "to": "postgres",
+   "label": "Transaction: lưu Reaction và tăng Post.likeCount",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "note": "Unique trên Reaction chặn like trùng; vi phạm unique được bắt và trả liked=true không tăng đếm.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/feed/feed.service.ts",
+     "line": 353,
+     "quote": "await this.dataSource.transaction(async (manager) => {"
+    }
+   ]
+  },
+  {
+   "from": "feed",
+   "to": "notification",
+   "label": "createWithManager: thông báo PostLiked cho tác giả",
+   "kind": "call",
+   "mechanism": "di-call",
+   "note": "Bỏ qua khi tự like bài của mình.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/feed/feed.service.ts",
+     "line": 360,
+     "quote": "notification = await this.notificationService.createWithManager("
+    }
+   ]
+  },
+  {
+   "from": "notification",
+   "to": "postgres",
+   "label": "Ghi dòng notifications bằng manager của transaction",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/notification/notification.service.ts",
+     "line": 60,
+     "quote": "manager.create(Notification, { ...input, readAt: null })"
+    }
+   ]
+  },
+  {
+   "from": "feed",
+   "to": "notification",
+   "label": "sendPush sau khi commit (best-effort)",
+   "kind": "async",
+   "mechanism": "di-call",
+   "note": "sendPush bắt mọi lỗi push và chỉ ghi log, không làm hỏng like.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/feed/feed.service.ts",
+     "line": 370,
+     "quote": "if (notification) await this.notificationService.sendPush(notification);"
+    }
+   ]
+  },
+  {
+   "from": "feed",
+   "to": "web",
+   "label": "Trả { liked: true, likeCount }",
+   "kind": "return",
+   "mechanism": "http",
+   "note": "likeCount không đọc lại sau transaction mà tính từ bản Post đã đọc trước đó (likeCount + 1), nên có thể lệch nhẹ khi nhiều request đồng thời."
+  },
+  {
+   "from": "web",
+   "to": "feed",
+   "label": "DELETE /feed/posts/:postId/reactions (bỏ tim)",
+   "kind": "call",
+   "mechanism": "http"
+  },
+  {
+   "from": "feed",
+   "to": "safety",
+   "label": "Kiểm tra lại quyền xem bài như lúc like",
+   "kind": "call",
+   "mechanism": "di-call",
+   "note": "Cùng getPostOrThrow: đọc Post, rồi safety, friend, user.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/feed/feed.service.ts",
+     "line": 207,
+     "quote": "(await this.safetyService.isBlocked(post.authorUserId, user.userId));"
+    }
+   ]
+  },
+  {
+   "from": "feed",
+   "to": "postgres",
+   "label": "Transaction: xoá Reaction, giảm likeCount nếu có xoá",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "note": "Không gửi thông báo khi bỏ tim.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/feed/feed.service.ts",
+     "line": 384,
+     "quote": "const result = await this.dataSource.transaction(async (manager) => {"
+    }
+   ]
+  },
+  {
+   "from": "feed",
+   "to": "web",
+   "label": "Trả { liked: false, likeCount }",
+   "kind": "return",
+   "mechanism": "http",
+   "note": "Tương tự: likeCount suy từ bản Post đã đọc trước (trừ 1 nếu có xoá được Reaction), không đọc lại."
+  },
+  {
+   "from": "web",
+   "to": "feed",
+   "label": "GET /feed/posts/:postId/reactions (trạng thái)",
+   "kind": "call",
+   "mechanism": "http",
+   "note": "Cũng qua getPostOrThrow với safety, friend, user như trên."
+  },
+  {
+   "from": "feed",
+   "to": "postgres",
+   "label": "exists(Reaction) của người xem trên bài",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/feed/feed.service.ts",
+     "line": 405,
+     "quote": "const liked = await this.reactionRepo.exists({"
+    }
+   ]
+  },
+  {
+   "from": "feed",
+   "to": "web",
+   "label": "Trả { liked, likeCount }",
+   "kind": "return",
+   "mechanism": "http"
+  }
+ ],
+ "groups": [
+  {
+   "from": 6,
+   "to": 8,
+   "label": "Transaction: Reaction + likeCount + Notification",
+   "kind": "transaction"
+  },
+  {
+   "from": 9,
+   "to": 9,
+   "label": "Push best-effort",
+   "kind": "besteffort"
+  },
+  {
+   "from": 13,
+   "to": 13,
+   "label": "Transaction: xoá Reaction + giảm đếm",
+   "kind": "transaction"
+  }
+ ],
+ "invariants": [
+  "Feed phải hỏi safety, friend và user trước khi ghi vì Feed không sở hữu block, bạn bè hay privacy; getPostOrThrow là guard chung nên like, unlike và xem trạng thái đều cùng quyết định xem được bài.",
+  "Reaction, Post.likeCount và Notification được ghi trong cùng một transaction để thông báo không tồn tại nếu like rollback; push chỉ gửi sau khi commit vì sendPush best-effort và không throw."
+ ],
+ "failureModes": [
+  {
+   "when": "Người dùng like lặp hoặc hai request đua nhau",
+   "effect": "Unique của Reaction báo vi phạm, transaction rollback, API trả liked=true với likeCount cũ, không có thông báo trùng."
+  },
+  {
+   "when": "Push provider hoặc web push lỗi",
+   "effect": "sendPush bắt lỗi và ghi log; like và thông báo in-app vẫn được giữ."
+  },
+  {
+   "when": "Người xem bị block, tác giả ẩn hồ sơ hoặc audience không cho phép",
+   "effect": "getPostOrThrow ném POST_NOT_FOUND 404, không ghi gì."
+  }
+ ],
+ "dataIssues": [],
+ "uncertain": []
+}

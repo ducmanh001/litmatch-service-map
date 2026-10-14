@@ -1,0 +1,274 @@
+{
+ "id": "soul-match-room-reads-and-reveal",
+ "title": "Đọc phòng Soul Match và lộ hồ sơ sau mutual-like",
+ "summary": "Phòng chat ẩn danh Soul Match thuộc soul-match nhưng MatchSession do matching sở hữu và Friendship do friend sở hữu, nên mọi lần đọc phòng, tin nhắn hay hồ sơ đối phương đều phải hỏi hai service kia và suy ra phase theo giờ server.",
+ "caption": "Ba endpoint đọc đều đi qua getRoomForMember (matching + friend); hồ sơ đối phương chỉ lộ khi Friendship tồn tại.",
+ "participants": [
+  {
+   "id": "web",
+   "label": "Web client",
+   "kind": "client"
+  },
+  {
+   "id": "soul-match",
+   "label": "Soul Match",
+   "kind": "service"
+  },
+  {
+   "id": "matching",
+   "label": "Matching",
+   "kind": "service"
+  },
+  {
+   "id": "friend",
+   "label": "Friend",
+   "kind": "service"
+  },
+  {
+   "id": "user",
+   "label": "User",
+   "kind": "service"
+  },
+  {
+   "id": "postgres",
+   "label": "PostgreSQL",
+   "kind": "infra"
+  }
+ ],
+ "steps": [
+  {
+   "from": "web",
+   "to": "soul-match",
+   "label": "GET /soul-match/sessions/:id (poll trạng thái phòng)",
+   "kind": "call",
+   "mechanism": "http"
+  },
+  {
+   "from": "soul-match",
+   "to": "matching",
+   "label": "getRoomForMember: tìm MatchSession theo id, kiểm tra là thành viên",
+   "kind": "call",
+   "mechanism": "di-call",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/soul-match/soul-match.service.ts",
+     "line": 434,
+     "quote": "const session = await this.matchingService.findSessionById(sessionId);"
+    }
+   ],
+   "note": "Không phải thành viên hoặc không có session thì gộp thành 404 SESSION_NOT_FOUND; không phải session soul đã đủ 2 confirm thì 409 CHAT_NOT_OPEN."
+  },
+  {
+   "from": "matching",
+   "to": "soul-match",
+   "label": "Trả MatchSession (userA/B, status, confirmedAAt/BAt)",
+   "kind": "return",
+   "mechanism": "di-call"
+  },
+  {
+   "from": "soul-match",
+   "to": "friend",
+   "label": "areFriends(userA, userB) để lấy cờ matched",
+   "kind": "call",
+   "mechanism": "di-call",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/soul-match/soul-match.service.ts",
+     "line": 474,
+     "quote": "const matched = await this.friendService.areFriends("
+    }
+   ],
+   "note": "phase = Chatting nếu matched hoặc chưa hết SOUL_CHAT_DURATION_SECONDS; sau đó Rating, rồi Closed; session Ended thì luôn Closed."
+  },
+  {
+   "from": "friend",
+   "to": "soul-match",
+   "label": "Trả matched (đã là bạn hay chưa)",
+   "kind": "return",
+   "mechanism": "di-call"
+  },
+  {
+   "from": "soul-match",
+   "to": "postgres",
+   "label": "Đọc rating của chính mình (myVerdict)",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/soul-match/soul-match.service.ts",
+     "line": 92,
+     "quote": "const myRating = await this.ratingRepo.findOneBy({"
+    }
+   ]
+  },
+  {
+   "from": "soul-match",
+   "to": "web",
+   "label": "Trả room + phase + myVerdict + matched",
+   "kind": "return",
+   "mechanism": "http"
+  },
+  {
+   "from": "web",
+   "to": "soul-match",
+   "label": "GET /soul-match/sessions/:id/messages (cursor)",
+   "kind": "call",
+   "mechanism": "http"
+  },
+  {
+   "from": "soul-match",
+   "to": "matching",
+   "label": "getRoomForMember: tìm MatchSession theo id, kiểm tra là thành viên",
+   "kind": "call",
+   "mechanism": "di-call",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/soul-match/soul-match.service.ts",
+     "line": 434,
+     "quote": "const session = await this.matchingService.findSessionById(sessionId);"
+    }
+   ],
+   "note": "Không phải thành viên hoặc không có session thì gộp thành 404 SESSION_NOT_FOUND; không phải session soul đã đủ 2 confirm thì 409 CHAT_NOT_OPEN."
+  },
+  {
+   "from": "soul-match",
+   "to": "friend",
+   "label": "areFriends(userA, userB) để lấy cờ matched",
+   "kind": "call",
+   "mechanism": "di-call",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/soul-match/soul-match.service.ts",
+     "line": 474,
+     "quote": "const matched = await this.friendService.areFriends("
+    }
+   ],
+   "note": "phase = Chatting nếu matched hoặc chưa hết SOUL_CHAT_DURATION_SECONDS; sau đó Rating, rồi Closed; session Ended thì luôn Closed."
+  },
+  {
+   "from": "soul-match",
+   "to": "postgres",
+   "label": "Đọc tin nhắn seq > cursor, sắp xếp tăng dần",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/soul-match/soul-match.service.ts",
+     "line": 275,
+     "quote": "const rows = await this.messageRepo"
+    }
+   ],
+   "note": "Nếu phase = Closed thì ném 409 CHAT_NOT_OPEN trước khi truy vấn."
+  },
+  {
+   "from": "soul-match",
+   "to": "web",
+   "label": "Trả trang tin nhắn ẩn danh",
+   "kind": "return",
+   "mechanism": "http"
+  },
+  {
+   "from": "web",
+   "to": "soul-match",
+   "label": "GET /soul-match/sessions/:id/partner (xem hồ sơ đối phương)",
+   "kind": "call",
+   "mechanism": "http"
+  },
+  {
+   "from": "soul-match",
+   "to": "matching",
+   "label": "getRoomForMember: tìm MatchSession theo id, kiểm tra là thành viên",
+   "kind": "call",
+   "mechanism": "di-call",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/soul-match/soul-match.service.ts",
+     "line": 434,
+     "quote": "const session = await this.matchingService.findSessionById(sessionId);"
+    }
+   ],
+   "note": "Không phải thành viên hoặc không có session thì gộp thành 404 SESSION_NOT_FOUND; không phải session soul đã đủ 2 confirm thì 409 CHAT_NOT_OPEN."
+  },
+  {
+   "from": "soul-match",
+   "to": "friend",
+   "label": "areFriends(userA, userB) để lấy cờ matched",
+   "kind": "call",
+   "mechanism": "di-call",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/soul-match/soul-match.service.ts",
+     "line": 474,
+     "quote": "const matched = await this.friendService.areFriends("
+    }
+   ],
+   "note": "phase = Chatting nếu matched hoặc chưa hết SOUL_CHAT_DURATION_SECONDS; sau đó Rating, rồi Closed; session Ended thì luôn Closed."
+  },
+  {
+   "from": "soul-match",
+   "to": "friend",
+   "label": "areFriends(user, partner): kiểm tra lần nữa trước khi lộ hồ sơ",
+   "kind": "call",
+   "mechanism": "di-call",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/soul-match/soul-match.service.ts",
+     "line": 412,
+     "quote": "if (!(await this.friendService.areFriends(user.userId, partnerId))) {"
+    }
+   ],
+   "note": "Chưa là bạn thì 403 PARTNER_LOCKED, không gọi user."
+  },
+  {
+   "from": "soul-match",
+   "to": "user",
+   "label": "getByIdOrThrow(partnerId) dựng PublicProfileDto",
+   "kind": "call",
+   "mechanism": "di-call",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/soul-match/soul-match.service.ts",
+     "line": 420,
+     "quote": "await this.userService.getByIdOrThrow(partnerId),"
+    }
+   ]
+  },
+  {
+   "from": "soul-match",
+   "to": "web",
+   "label": "Trả PublicProfileDto của đối phương",
+   "kind": "return",
+   "mechanism": "http"
+  }
+ ],
+ "groups": [],
+ "invariants": [
+  "MatchSession do matching ghi và Friendship do friend ghi, nên soul-match chỉ đọc qua MatchingService.findSessionById và FriendService.areFriends, không tự giữ bản sao trạng thái.",
+  "Friendship là nguồn sự thật để mở khóa hồ sơ: getPartnerProfile gọi areFriends lần nữa rồi mới lấy PublicProfileDto từ user, nên không thể đọc hồ sơ bằng cách đoán sessionId.",
+  "Không phải thành viên và không có session cùng trả 404 để không thành oracle dò sessionId; phase luôn tính theo giờ server từ mốc confirmedAAt/confirmedBAt muộn hơn (chatEndsAt = mốc + SOUL_CHAT_DURATION_SECONDS), không tin client."
+ ],
+ "failureModes": [
+  {
+   "when": "Session không tồn tại hoặc caller không phải thành viên",
+   "effect": "404 SESSION_NOT_FOUND"
+  },
+  {
+   "when": "Session không phải soul hoặc chưa Confirmed/Ended",
+   "effect": "409 CHAT_NOT_OPEN"
+  },
+  {
+   "when": "Đọc tin nhắn khi phase = Closed",
+   "effect": "409 CHAT_NOT_OPEN, lịch sử ẩn danh không đọc lại được"
+  },
+  {
+   "when": "Cursor không hợp lệ",
+   "effect": "400 CURSOR_INVALID"
+  },
+  {
+   "when": "Gọi /partner khi chưa là bạn",
+   "effect": "403 PARTNER_LOCKED"
+  }
+ ],
+ "dataIssues": [],
+ "uncertain": []
+}

@@ -1,0 +1,49 @@
+{
+ "id": "gift-to-profile-chat-gate",
+ "title": "Tặng quà từ hồ sơ để mở chat (cổng quà)",
+ "summary": "Người dùng tặng quà từ profile người khác để mở chat 1-1. Gift tính điểm, Economy ghi sổ kép, Friend tạo conversation và liên hệ first-contact, Notification ghi thông báo; tất cả phải nằm trong cùng một giao dịch DB để không có quà mà thiếu chat hoặc ngược lại.",
+ "caption": "Gift điều phối: kiểm tra chặn, Economy mở giao dịch ledger, rồi ghi GiftEvent + conversation + thông báo trong cùng transaction, push sau commit.",
+ "participants": [
+  {"id": "web", "label": "Web client", "kind": "client"},
+  {"id": "gift", "label": "Gift", "kind": "service"},
+  {"id": "friend", "label": "Friend", "kind": "service"},
+  {"id": "user", "label": "User", "kind": "service"},
+  {"id": "economy", "label": "Economy", "kind": "service"},
+  {"id": "notification", "label": "Notification", "kind": "service"},
+  {"id": "postgres", "label": "PostgreSQL", "kind": "infra"}
+ ],
+ "steps": [
+  {"from": "web", "to": "gift", "label": "POST /profiles/:profileUserId/gifts kèm giftId và idempotency key", "kind": "call", "mechanism": "http", "note": "Route có JWT guard toàn cục và @Throttle 30 request/phút."},
+  {"from": "gift", "to": "friend", "label": "Kiểm tra hai bên không chặn nhau (assertNotBlocked)", "kind": "call", "mechanism": "di-call", "evidence": [{"file": "apps/core-api/src/modules/gift/gift.service.ts", "line": 382, "quote": "await profileSocial.assertNotBlocked(user.userId, profileUserId);"}]},
+  {"from": "gift", "to": "postgres", "label": "Đọc quà đang bán (active) trong catalog gifts", "kind": "call", "mechanism": "shared-db", "evidence": [{"file": "apps/core-api/src/modules/gift/gift.service.ts", "line": 384, "quote": "const gift = await this.giftRepo.findOneBy({ id: giftId, active: true });"}]},
+  {"from": "gift", "to": "user", "label": "Lấy người nhận để biết isGuest và tính điểm PTS", "kind": "call", "mechanism": "di-call", "evidence": [{"file": "apps/core-api/src/modules/gift/gift.service.ts", "line": 392, "quote": "const receiver = await this.userService.getByIdOrThrow(profileUserId);"}]},
+  {"from": "gift", "to": "economy", "label": "sendGift: giá, điểm, idempotencyKey và callback withinTransaction", "kind": "call", "mechanism": "di-call", "evidence": [{"file": "apps/core-api/src/modules/gift/gift.service.ts", "line": 401, "quote": "const result = await this.economy.sendGift({"}]},
+  {"from": "economy", "to": "postgres", "label": "Mở transaction: ghi sổ kép trừ diamond người tặng + outbox economy.gift.sent", "kind": "call", "mechanism": "shared-db", "evidence": [{"file": "apps/core-api/src/modules/economy/economy.service.ts", "line": 638, "quote": "const result = await this.ledger.record({"}, {"file": "apps/core-api/src/modules/economy/services/ledger.service.ts", "line": 74, "quote": "this.dataSource.transaction((manager) =>"}]},
+  {"from": "economy", "to": "gift", "label": "Gọi lại callback withinTransaction với manager và transactionId", "kind": "call", "mechanism": "di-call", "evidence": [{"file": "apps/core-api/src/modules/economy/economy.service.ts", "line": 662, "quote": "await input.withinTransaction?.(manager, txn.id);"}]},
+  {"from": "gift", "to": "friend", "label": "Kiểm tra chặn lần nữa và khóa profile để giữ ngưỡng first-contact", "kind": "call", "mechanism": "di-call", "evidence": [{"file": "apps/core-api/src/modules/gift/gift.service.ts", "line": 420, "quote": "await profileSocial.lockProfileForChatInManager(manager, profileUserId);"}]},
+  {"from": "gift", "to": "postgres", "label": "Lưu GiftEvent (gift_events) gắn transactionId", "kind": "call", "mechanism": "shared-db", "evidence": [{"file": "apps/core-api/src/modules/gift/gift.service.ts", "line": 421, "quote": "await manager.save("}]},
+  {"from": "gift", "to": "friend", "label": "ensureConversationInManager: tạo/lấy conversation 1-1", "kind": "call", "mechanism": "di-call", "evidence": [{"file": "apps/core-api/src/modules/gift/gift.service.ts", "line": 435, "quote": "const { created } = await profileSocial.ensureConversationInManager("}]},
+  {"from": "gift", "to": "friend", "label": "Nếu conversation mới: ghi ProfileChatContact (first-contact)", "kind": "call", "mechanism": "di-call", "evidence": [{"file": "apps/core-api/src/modules/gift/gift.service.ts", "line": 441, "quote": "await profileSocial.ensureProfileChatContactInManager("}]},
+  {"from": "gift", "to": "notification", "label": "createWithManager: ghi thông báo GiftReceived cho người nhận", "kind": "call", "mechanism": "di-call", "evidence": [{"file": "apps/core-api/src/modules/gift/gift.service.ts", "line": 447, "quote": "notification = await this.notificationService.createWithManager("}]},
+  {"from": "gift", "to": "postgres", "label": "Sau commit: đọc lại GiftEvent theo transactionId để trả về", "kind": "call", "mechanism": "shared-db", "evidence": [{"file": "apps/core-api/src/modules/gift/gift.service.ts", "line": 463, "quote": "const giftEvent = await this.giftEventRepo.findOneByOrFail({"}]},
+  {"from": "gift", "to": "notification", "label": "sendPush chỉ khi không phải replay", "kind": "async", "mechanism": "di-call", "note": "sendPush bọc try/catch, lỗi push chỉ log warn và không throw ra caller.", "evidence": [{"file": "apps/core-api/src/modules/gift/gift.service.ts", "line": 467, "quote": "await this.notificationService.sendPush(notification);"}]},
+  {"from": "gift", "to": "web", "label": "Trả GiftEventDto kèm cờ replayed", "kind": "return", "mechanism": "http"}
+ ],
+ "groups": [
+  {"from": 6, "to": 12, "label": "Một transaction: ledger + GiftEvent + chat", "kind": "transaction"},
+  {"from": 14, "to": 14, "label": "Push best-effort sau commit", "kind": "besteffort"}
+ ],
+ "invariants": [
+  "Ledger, GiftEvent, conversation, ProfileChatContact và thông báo nằm cùng một transaction do Economy mở, nên lỗi ở bước nào cũng rollback toàn bộ: không mất diamond mà thiếu chat.",
+  "Khóa profile (lockProfileForChatInManager) chạy trong transaction để hai request đồng thời không cùng vượt ngưỡng first-contact.",
+  "assertNotBlocked được kiểm tra lại trong transaction để block phát sinh sau precheck không biến quà thành đường bypass Safety.",
+  "Push chỉ gửi sau commit và chỉ khi không phải replay, nên retry cùng idempotency key không gửi push lần hai."
+ ],
+ "failureModes": [
+  {"when": "Một bước trong callback withinTransaction (ví dụ tạo conversation) ném lỗi", "effect": "Cả transaction rollback, ledger và GiftEvent không được ghi."},
+  {"when": "Push provider hoặc web push lỗi", "effect": "sendPush chỉ log cảnh báo; thông báo in-app vẫn còn và request vẫn thành công."},
+  {"when": "Hai bên có chặn nhau hoặc quà không active", "effect": "assertNotBlocked hoặc kiểm tra quà ném lỗi trước khi Economy mở transaction."}
+ ],
+ "dataIssues": [],
+ "uncertain": []
+}

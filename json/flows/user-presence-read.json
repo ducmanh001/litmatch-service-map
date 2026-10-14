@@ -1,0 +1,132 @@
+{
+ "id": "user-presence-read",
+ "title": "Xem trạng thái online của người dùng",
+ "summary": "Khi một người dùng xem trạng thái online của người khác, User đọc cài đặt riêng tư trong PostgreSQL rồi đọc khoá presence trong Redis do lease của signaling-gateway ghi, nên User phụ thuộc dữ liệu do gateway sở hữu.",
+ "caption": "GET /users/:id/presence kết hợp cài đặt riêng tư (Postgres) với khoá presence Redis do signaling-gateway ghi.",
+ "participants": [
+  {
+   "id": "web",
+   "label": "Web client",
+   "kind": "client"
+  },
+  {
+   "id": "user",
+   "label": "User",
+   "kind": "service"
+  },
+  {
+   "id": "postgres",
+   "label": "PostgreSQL",
+   "kind": "infra"
+  },
+  {
+   "id": "redis",
+   "label": "Redis",
+   "kind": "infra"
+  },
+  {
+   "id": "signaling-gateway",
+   "label": "Signaling gateway",
+   "kind": "service"
+  }
+ ],
+ "steps": [
+  {
+   "from": "web",
+   "to": "user",
+   "label": "GET /users/:id/presence xem trạng thái online",
+   "kind": "call",
+   "mechanism": "http",
+   "note": "Route được bảo vệ bởi JwtAuthGuard toàn cục.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/app/app.module.ts",
+     "line": 154,
+     "quote": "{ provide: APP_GUARD, useClass: JwtAuthGuard },"
+    }
+   ]
+  },
+  {
+   "from": "user",
+   "to": "postgres",
+   "label": "Đọc user_privacy_settings của người bị xem (showOnlineStatus)",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/user/services/privacy-settings.service.ts",
+     "line": 21,
+     "quote": "(await this.settingRepo.findOneBy({ userId })) ?? undefined,"
+    }
+   ]
+  },
+  {
+   "from": "postgres",
+   "to": "user",
+   "label": "Trả cài đặt riêng tư",
+   "kind": "return",
+   "mechanism": "shared-db"
+  },
+  {
+   "from": "signaling-gateway",
+   "to": "redis",
+   "label": "Từ trước: lease kết nối ghi/gia hạn khoá presence",
+   "kind": "async",
+   "mechanism": "redis-state",
+   "note": "acquire/refresh/release chạy script Lua trên khoá realtimePresenceKey(userId); gateway sở hữu dữ liệu này.",
+   "evidence": [
+    {
+     "file": "apps/signaling-gateway/src/app/connection-quota.service.ts",
+     "line": 130,
+     "quote": "realtimePresenceKey(userId),"
+    }
+   ]
+  },
+  {
+   "from": "user",
+   "to": "redis",
+   "label": "Xoá lease hết hạn rồi đếm khoá presence (zcard > 0)",
+   "kind": "call",
+   "mechanism": "redis-state",
+   "note": "Chỉ cần thực hiện khi showOnlineStatus bật (toán tử && ngắt sớm); lỗi Redis trả false (fail-closed).",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/user/redis/redis-presence-reader.adapter.ts",
+     "line": 16,
+     "quote": "return (await this.redis.zcard(key)) > 0;"
+    }
+   ]
+  },
+  {
+   "from": "redis",
+   "to": "user",
+   "label": "Trả số lease còn hiệu lực",
+   "kind": "return",
+   "mechanism": "redis-state"
+  },
+  {
+   "from": "user",
+   "to": "web",
+   "label": "Trả UserPresenceDto { isOnline }",
+   "kind": "return",
+   "mechanism": "http"
+  }
+ ],
+ "groups": [],
+ "invariants": [
+  "Cài đặt riêng tư được đọc trước: nếu showOnlineStatus tắt thì isOnline luôn false và Redis không bị hỏi, nên quyền riêng tư của User luôn thắng dữ liệu presence của gateway.",
+  "Khoá presence chỉ do lease adapter của signaling-gateway ghi; User chỉ đọc qua cổng UserPresenceReaderPort nên không cần gọi trực tiếp gateway."
+ ],
+ "failureModes": [
+  {
+   "when": "Redis lỗi khi đọc presence",
+   "effect": "RedisPresenceReader bắt lỗi và trả false, người dùng hiển thị offline thay vì lộ trạng thái sai (fail-closed)."
+  },
+  {
+   "when": "Gateway không gia hạn lease (mất kết nối)",
+   "effect": "Phần tử lease hết hạn bị zremrangebyscore xoá, zcard = 0 nên hiển thị offline."
+  }
+ ],
+ "dataIssues": [],
+ "uncertain": []
+}

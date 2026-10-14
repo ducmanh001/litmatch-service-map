@@ -1,0 +1,307 @@
+{
+ "id": "iap-store-notifications-and-refund-poll",
+ "title": "Hoàn tiền IAP: webhook Apple/Google và job quét refund",
+ "summary": "Khi Apple/Google hoàn tiền một giao dịch IAP, economy phải xác minh chữ ký webhook, rồi ghi bút toán đảo vào sổ cái và đánh dấu receipt đã refund trong cùng một transaction. Webhook có thể bị miss nên job quét định kỳ chủ động hỏi store để bắt lại; cả hai đường cùng dùng RefundService nên idempotent.",
+ "caption": "Webhook Apple, RTDN Google và job quét định kỳ cùng đi tới RefundService, nơi bút toán đảo và trạng thái receipt được ghi trong một transaction.",
+ "participants": [
+  {
+   "id": "external:apple",
+   "label": "Apple",
+   "kind": "external"
+  },
+  {
+   "id": "external:google",
+   "label": "Google Play",
+   "kind": "external"
+  },
+  {
+   "id": "economy",
+   "label": "Economy",
+   "kind": "service"
+  },
+  {
+   "id": "postgres",
+   "label": "PostgreSQL",
+   "kind": "infra"
+  }
+ ],
+ "steps": [
+  {
+   "from": "external:apple",
+   "to": "economy",
+   "label": "POST /economy/webhooks/apple kèm signedPayload (REFUND/REVOKE)",
+   "kind": "call",
+   "mechanism": "webhook",
+   "note": "Controller là @Public (không JWT) và giới hạn 60 request/phút; xác thực bằng chữ ký của Apple.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/economy/webhooks/economy-webhooks.controller.ts",
+     "line": 56,
+     "quote": "@Post('apple')"
+    }
+   ]
+  },
+  {
+   "from": "economy",
+   "to": "economy",
+   "label": "Verify chữ ký signedPayload của Apple, lấy notificationType",
+   "kind": "call",
+   "mechanism": "di-call",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/economy/webhooks/economy-webhooks.controller.ts",
+     "line": 62,
+     "quote": "await this.appleVerifier.verify(dto.signedPayload)"
+    }
+   ]
+  },
+  {
+   "from": "economy",
+   "to": "economy",
+   "label": "Đối chiếu bundleId; chỉ REFUND/REVOKE mới decode transactionInfo",
+   "kind": "call",
+   "mechanism": "config",
+   "note": "Sai bundleId hoặc không phải refund thì trả { received: true } ngay, không ghi gì.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/economy/webhooks/economy-webhooks.controller.ts",
+     "line": 69,
+     "quote": "payload.data.bundleId !== expectedBundleId"
+    }
+   ]
+  },
+  {
+   "from": "economy",
+   "to": "postgres",
+   "label": "refundIapPurchase: tìm iap_receipt; đọc giao dịch gốc, entries, accounts",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "note": "Không thấy receipt thì trả unknown_receipt; receipt đã Refunded thì trả already_refunded, không ghi thêm.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/economy/services/refund.service.ts",
+     "line": 40,
+     "quote": "const receipt = await this.receiptRepo.findOneBy({"
+    },
+    {
+     "file": "apps/core-api/src/modules/economy/services/ledger.service.ts",
+     "line": 204,
+     "quote": "const original = await this.dataSource"
+    }
+   ]
+  },
+  {
+   "from": "economy",
+   "to": "postgres",
+   "label": "ledger.reverse: bút toán đảo, ví, outbox, gốc Reversed, receipt Refunded",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "note": "Giao dịch gốc không bị sửa nội dung, chỉ đổi status sang Reversed có điều kiện Completed; outbox economy.diamond.refunded được ghi cùng transaction.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/economy/services/ledger.service.ts",
+     "line": 74,
+     "quote": "await this.dataSource.transaction((manager) =>"
+    },
+    {
+     "file": "apps/core-api/src/modules/economy/services/refund.service.ts",
+     "line": 74,
+     "quote": "await manager.update("
+    }
+   ]
+  },
+  {
+   "from": "economy",
+   "to": "external:apple",
+   "label": "Trả 200 { received: true }",
+   "kind": "return",
+   "mechanism": "http"
+  },
+  {
+   "from": "external:google",
+   "to": "economy",
+   "label": "POST /economy/webhooks/google/rtdn (Pub/Sub push)",
+   "kind": "call",
+   "mechanism": "webhook",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/economy/webhooks/economy-webhooks.controller.ts",
+     "line": 93,
+     "quote": "@Post('google/rtdn')"
+    }
+   ]
+  },
+  {
+   "from": "economy",
+   "to": "economy",
+   "label": "Verify envelope Pub/Sub qua header authorization, decode RTDN",
+   "kind": "call",
+   "mechanism": "di-call",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/economy/webhooks/economy-webhooks.controller.ts",
+     "line": 100,
+     "quote": "await this.googleVerifier.verify("
+    }
+   ]
+  },
+  {
+   "from": "economy",
+   "to": "external:google",
+   "label": "Trả 200; CANCELED chỉ log, không tự refund",
+   "kind": "return",
+   "mechanism": "http",
+   "note": "Controller chủ ý không refund ở RTDN vì CANCELED không đảm bảo nghĩa voided; nguồn refund duy nhất của Google là job quét."
+  },
+  {
+   "from": "economy",
+   "to": "economy",
+   "label": "Job quét khởi động theo ECONOMY_REFUND_POLL_INTERVAL_MS, mỗi tick chạy runOnce",
+   "kind": "async",
+   "mechanism": "config",
+   "note": "Chỉ chạy khi ECONOMY_REFUND_POLL_ENABLED bật; ManagedInterval đăng ký vào SchedulerRegistry.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/economy/jobs/iap-refund-poll.service.ts",
+     "line": 66,
+     "quote": "this.job.start(this.scheduler, {"
+    }
+   ]
+  },
+  {
+   "from": "economy",
+   "to": "postgres",
+   "label": "Claim lô receipt credited bằng SKIP LOCKED, stamp refund_checked_at, COMMIT ngay",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "note": "Nhả lock trước khi gọi store, vì refundIapPurchase mở transaction riêng và sẽ tự deadlock nếu lock còn giữ.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/economy/jobs/iap-refund-poll.service.ts",
+     "line": 92,
+     "quote": "const candidates = await this.dataSource.transaction(async (manager) => {"
+    },
+    {
+     "file": "apps/core-api/src/modules/economy/jobs/iap-refund-poll.service.ts",
+     "line": 97,
+     "quote": ".setOnLocked('skip_locked')"
+    }
+   ]
+  },
+  {
+   "from": "economy",
+   "to": "external:apple",
+   "label": "Với từng receipt Apple: hasRefund (Get Refund History theo transaction)",
+   "kind": "call",
+   "mechanism": "sdk",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/economy/jobs/iap-refund-poll.service.ts",
+     "line": 136,
+     "quote": "await this.appleRefund.hasRefund(receipt.providerTransactionId)"
+    }
+   ]
+  },
+  {
+   "from": "external:apple",
+   "to": "economy",
+   "label": "Trả có/không có refund cho transaction",
+   "kind": "return",
+   "mechanism": "sdk"
+  },
+  {
+   "from": "economy",
+   "to": "external:google",
+   "label": "findVoidedPurchaseIds(since): lấy 1 lần các purchase bị void trong window",
+   "kind": "call",
+   "mechanism": "sdk",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/economy/jobs/iap-refund-poll.service.ts",
+     "line": 153,
+     "quote": "await this.googleRefund.findVoidedPurchaseIds(since)"
+    }
+   ]
+  },
+  {
+   "from": "external:google",
+   "to": "economy",
+   "label": "Trả tập order id đã void để đối chiếu với receipt Google",
+   "kind": "return",
+   "mechanism": "sdk"
+  },
+  {
+   "from": "economy",
+   "to": "postgres",
+   "label": "Receipt trùng khớp: refundIapPurchase, đọc receipt rồi ledger.reverse như bước 4-5",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "note": "Cùng RefundService nên nếu webhook đã refund trước thì kết quả là already_refunded, không hoàn lần hai.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/economy/jobs/iap-refund-poll.service.ts",
+     "line": 137,
+     "quote": "await this.refundService.refundIapPurchase("
+    },
+    {
+     "file": "apps/core-api/src/modules/economy/jobs/iap-refund-poll.service.ts",
+     "line": 158,
+     "quote": "await this.refundService.refundIapPurchase("
+    }
+   ]
+  }
+ ],
+ "groups": [
+  {
+   "from": 5,
+   "to": 5,
+   "label": "Bút toán đảo + receipt Refunded",
+   "kind": "transaction"
+  },
+  {
+   "from": 11,
+   "to": 11,
+   "label": "Claim lô và commit ngay",
+   "kind": "transaction"
+  },
+  {
+   "from": 12,
+   "to": 15,
+   "label": "Hỏi store bên ngoài",
+   "kind": "external"
+  }
+ ],
+ "invariants": [
+  "Bút toán đảo, việc đánh dấu giao dịch gốc Reversed và việc đổi receipt sang Refunded phải nằm trong cùng một transaction (withinTransaction của ledger.reverse), nếu không ví và receipt có thể lệch nhau.",
+  "Webhook và job quét cùng gọi RefundService.refundIapPurchase, nên idempotent theo (provider, providerTransactionId) cộng idempotencyKey refund:provider:id; chạy trùng cũng chỉ hoàn một lần.",
+  "Job phải COMMIT lô claim trước khi gọi API store và refundIapPurchase, vì refund mở transaction riêng trên connection khác và sẽ deadlock với lock còn giữ.",
+  "Google RTDN CANCELED không tự refund; chỉ job quét Voided Purchases mới quyết định refund cho Google, để không đảo nhầm giao dịch hợp lệ."
+ ],
+ "failureModes": [
+  {
+   "when": "Webhook tới nhưng không tìm thấy receipt (credit chưa kịp xử lý hoặc app khác)",
+   "effect": "refundIapPurchase trả unknown_receipt, webhook vẫn trả 200; job quét sẽ bắt lại nếu receipt thực sự bị lệch."
+  },
+  {
+   "when": "Webhook Apple bị miss (mạng, downtime)",
+   "effect": "Job quét hỏi hasRefund theo từng receipt Apple còn credited trong window và refund bù."
+  },
+  {
+   "when": "Giao dịch gốc đã bị reverse trước đó (ví dụ admin) nhưng receipt chưa Refunded",
+   "effect": "Bắt TRANSACTION_ALREADY_REVERSED, tìm giao dịch đảo hiện có, cập nhật receipt Refunded và trả already_refunded."
+  },
+  {
+   "when": "Hai request cùng reverse một giao dịch",
+   "effect": "Update có điều kiện status Completed chỉ thắng một bên; bên thua ném TRANSACTION_ALREADY_REVERSED và rollback bút toán đảo của mình."
+  },
+  {
+   "when": "Lô claim đầy batchSize (200)",
+   "effect": "Job ghi cảnh báo; refund_checked_at xoay vòng để các tick sau quét sang receipt khác."
+  }
+ ],
+ "dataIssues": [],
+ "uncertain": [
+  "Verifier thật hay bản Dev (không verify chữ ký) được dùng phụ thuộc cấu hình môi trường lúc chạy; code có lớp Dev chặn ở production nhưng việc binding thực tế không quyết định được chỉ từ mã nguồn trace này.",
+  "Kiểm tra bundleId Apple chỉ chạy khi ECONOMY_APPLE_BUNDLE_ID khác rỗng, giá trị thực tế là cấu hình triển khai."
+ ]
+}

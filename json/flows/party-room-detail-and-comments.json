@@ -1,0 +1,286 @@
+{
+ "id": "party-room-detail-and-comments",
+ "title": "Xem phòng party và bình luận trong phòng",
+ "summary": "Client xem danh sách phòng, chi tiết phòng (kèm hồ sơ member lấy từ module user), đọc comment rồi gửi comment với Idempotency-Key. Comment được ghi trong transaction của party-room, sau đó được fanout realtime qua Redis và signaling-gateway tới từng member.",
+ "caption": "Đọc phòng/comment chỉ đi qua party-room và PostgreSQL (chi tiết phòng gọi thêm user); gửi comment ghi DB trong transaction rồi publish realtime qua Redis tới gateway.",
+ "participants": [
+  {
+   "id": "web",
+   "label": "Web client",
+   "kind": "client"
+  },
+  {
+   "id": "party-room",
+   "label": "Party Room",
+   "kind": "service"
+  },
+  {
+   "id": "user",
+   "label": "User",
+   "kind": "service"
+  },
+  {
+   "id": "postgres",
+   "label": "PostgreSQL",
+   "kind": "infra"
+  },
+  {
+   "id": "redis",
+   "label": "Redis",
+   "kind": "infra"
+  },
+  {
+   "id": "signaling-gateway",
+   "label": "Signaling gateway",
+   "kind": "service"
+  }
+ ],
+ "steps": [
+  {
+   "from": "web",
+   "to": "party-room",
+   "label": "GET /party/rooms — danh sách phòng đang mở (cursor)",
+   "kind": "call",
+   "mechanism": "http",
+   "note": "Mọi route REST đều qua JwtAuthGuard toàn cục trừ route @Public."
+  },
+  {
+   "from": "party-room",
+   "to": "postgres",
+   "label": "Query party_rooms rồi đếm member từng phòng",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/party-room/party-room.service.ts",
+     "line": 727,
+     "quote": "const qb = this.roomRepo"
+    },
+    {
+     "file": "apps/core-api/src/modules/party-room/party-room.service.ts",
+     "line": 948,
+     "quote": "const counts = await this.memberRepo"
+    }
+   ]
+  },
+  {
+   "from": "party-room",
+   "to": "web",
+   "label": "Trả danh sách phòng kèm số member",
+   "kind": "return",
+   "mechanism": "http"
+  },
+  {
+   "from": "web",
+   "to": "party-room",
+   "label": "GET /party/rooms/:id — chi tiết phòng",
+   "kind": "call",
+   "mechanism": "http"
+  },
+  {
+   "from": "party-room",
+   "to": "postgres",
+   "label": "Đọc phòng và danh sách PartyRoomMember",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/party-room/party-room.service.ts",
+     "line": 685,
+     "quote": "const room = await this.roomRepo.findOneBy({ id: roomId });"
+    }
+   ]
+  },
+  {
+   "from": "party-room",
+   "to": "user",
+   "label": "UserService.findByIds lấy nickname của các member",
+   "kind": "call",
+   "mechanism": "di-call",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/party-room/party-room.service.ts",
+     "line": 698,
+     "quote": "? await this.userService.findByIds(members.map((member) => member.userId))"
+    }
+   ]
+  },
+  {
+   "from": "party-room",
+   "to": "web",
+   "label": "Trả chi tiết phòng + member active",
+   "kind": "return",
+   "mechanism": "http"
+  },
+  {
+   "from": "web",
+   "to": "party-room",
+   "label": "GET /party/rooms/:id/comments — comment gần nhất",
+   "kind": "call",
+   "mechanism": "http"
+  },
+  {
+   "from": "party-room",
+   "to": "postgres",
+   "label": "Kiểm tra phòng còn Active và user là member đang kết nối",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "note": "Phòng không tồn tại trả 404, phòng đã đóng trả 409, không phải member trả 403.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/party-room/party-room.service.ts",
+     "line": 1245,
+     "quote": "const room = await this.roomRepo.findOneBy({ id: roomId });"
+    }
+   ]
+  },
+  {
+   "from": "party-room",
+   "to": "web",
+   "label": "Trả trang comment (cursor theo seq)",
+   "kind": "return",
+   "mechanism": "http"
+  },
+  {
+   "from": "web",
+   "to": "party-room",
+   "label": "POST /party/rooms/:id/comments kèm Idempotency-Key",
+   "kind": "call",
+   "mechanism": "http",
+   "note": "Throttle 60 request/phút; nội dung được trim và kiểm tra độ dài trước khi mở transaction."
+  },
+  {
+   "from": "party-room",
+   "to": "postgres",
+   "label": "Transaction: khoá phòng, kiểm tra member, insert comment",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "note": "Insert append-only; unique idempotency ở DB. Trùng key cùng nội dung thì trả lại comment cũ và không bắn lại event.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/party-room/party-room.service.ts",
+     "line": 799,
+     "quote": "const comment = await this.dataSource.transaction(async (manager) => {"
+    },
+    {
+     "file": "apps/core-api/src/modules/party-room/party-room.service.ts",
+     "line": 801,
+     "quote": "const membership = await manager.findOneBy(PartyRoomMember, {"
+    }
+   ]
+  },
+  {
+   "from": "party-room",
+   "to": "postgres",
+   "label": "Sau commit: đọc member chưa rời phòng để fanout",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/party-room/party-room.service.ts",
+     "line": 1321,
+     "quote": "const members = await this.memberRepo.findBy({ roomId, leftAt: IsNull() });"
+    }
+   ],
+   "note": "Nằm ngoài try/catch của publish: lỗi đọc member không bị nuốt, request lỗi dù comment đã commit."
+  },
+  {
+   "from": "party-room",
+   "to": "redis",
+   "label": "Publish PartyCommentCreated tới kênh realtime của từng member",
+   "kind": "async",
+   "mechanism": "redis-pubsub",
+   "note": "publishRealtimeEvent bọc try/catch, lỗi chỉ log warn.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/party-room/party-room.service.ts",
+     "line": 1326,
+     "quote": "publishRealtimeEvent(this.redis, this.logger, m.userId, envelope),"
+    },
+    {
+     "file": "apps/core-api/src/common/realtime/redis-realtime-publisher.adapter.ts",
+     "line": 11,
+     "quote": "return this.redis.publish(channel, payload);"
+    }
+   ]
+  },
+  {
+   "from": "redis",
+   "to": "signaling-gateway",
+   "label": "Gateway PSUBSCRIBE realtime:user:* nhận envelope",
+   "kind": "async",
+   "mechanism": "redis-pubsub",
+   "evidence": [
+    {
+     "file": "apps/signaling-gateway/src/app/signaling.gateway.ts",
+     "line": 346,
+     "quote": ".psubscribe(REALTIME_USER_CHANNEL_PATTERN)"
+    }
+   ]
+  },
+  {
+   "from": "signaling-gateway",
+   "to": "web",
+   "label": "Emit party comment tới socket room của member",
+   "kind": "async",
+   "mechanism": "socket",
+   "evidence": [
+    {
+     "file": "apps/signaling-gateway/src/app/signaling.gateway.ts",
+     "line": 332,
+     "quote": "this.server.local.to(userRoom(userId)).emit(envelope.event, envelope.data);"
+    }
+   ]
+  },
+  {
+   "from": "party-room",
+   "to": "web",
+   "label": "Trả comment vừa tạo (hoặc comment cũ khi replay)",
+   "kind": "return",
+   "mechanism": "http"
+  }
+ ],
+ "groups": [
+  {
+   "from": 12,
+   "to": 12,
+   "label": "Transaction ghi comment",
+   "kind": "transaction"
+  },
+  {
+   "from": 14,
+   "to": 16,
+   "label": "Fanout realtime sau commit",
+   "kind": "besteffort"
+  }
+ ],
+ "invariants": [
+  "Membership được kiểm tra dưới lock phòng trong cùng transaction với insert comment, để REST leave và gửi comment đồng thời có thứ tự xác định.",
+  "Event realtime chỉ được publish sau khi transaction commit; replay cùng Idempotency-Key không đi qua bước publish nên không bắn lại event.",
+  "Gateway chỉ relay envelope từ kênh per-user realtime:user:*; party-room phải publish riêng cho từng member chưa rời phòng."
+ ],
+ "failureModes": [
+  {
+   "when": "Redis publish thất bại khi fanout comment",
+   "effect": "Lỗi bị bắt và chỉ log warn; comment đã commit và request vẫn trả thành công, client dựa vào polling GET comments."
+  },
+  {
+   "when": "Cùng Idempotency-Key nhưng khác phòng, người gửi hoặc nội dung",
+   "effect": "Vi phạm unique idempotency, trả 409 COMMENT_IDEMPOTENCY_CONFLICT."
+  },
+  {
+   "when": "User không phải member đang kết nối khi gửi hoặc đọc comment",
+   "effect": "Trả 403 NOT_A_MEMBER; gửi comment thì transaction bị rollback."
+  },
+  {
+   "when": "Nội dung comment rỗng hoặc vượt PARTY_COMMENT_MAX_LENGTH",
+   "effect": "Trả 422 COMMENT_INVALID trước khi mở transaction."
+  },
+  {
+   "when": "Đọc danh sách member để fanout lỗi sau khi comment đã commit",
+   "effect": "Lỗi không bị nuốt (chỉ publishRealtimeEvent mới bọc try/catch) nên request trả lỗi dù comment đã được lưu; retry cùng Idempotency-Key trả lại comment cũ."
+  }
+ ],
+ "dataIssues": [],
+ "uncertain": []
+}

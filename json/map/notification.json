@@ -1,0 +1,797 @@
+{
+ "id": "notification",
+ "title": "Notification (+ Web Push)",
+ "tagline": "Thông báo in-app và Web Push",
+ "deployable": "core-api",
+ "role": "Sở hữu bảng notifications (in-app, cursor theo seq) và web_push_subscriptions; là điểm duy nhất các module nghiệp vụ gọi để ghi thông báo (createWithManager/create) rồi đẩy push best-effort (sendPush). Không sở hữu nội dung hiển thị (payload tối thiểu, client tự render), không có realtime event riêng và không publish Redis.",
+ "owns": [
+  "bảng notifications (userId, type, payload jsonb, readAt, seq)",
+  "bảng web_push_subscriptions (endpoint unique, p256dh, auth)"
+ ],
+ "confidence": "high",
+ "endpoints": [
+  {
+   "id": "e1",
+   "kind": "rest",
+   "method": "GET",
+   "path": "/api/v1/notifications",
+   "purpose": "Liệt kê notification của chính user, mới nhất trước, phân trang cursor theo seq (cursor sai trả 400 CURSOR_INVALID).",
+   "auth": "jwt",
+   "file": "apps/core-api/src/modules/notification/notification.controller.ts",
+   "line": 42,
+   "quote": "@Get()"
+  },
+  {
+   "id": "e2",
+   "kind": "rest",
+   "method": "GET",
+   "path": "/api/v1/notifications/unread-count",
+   "purpose": "Đếm notification chưa đọc (readAt IS NULL) cho badge chuông; web poll mỗi 60s.",
+   "auth": "jwt",
+   "file": "apps/core-api/src/modules/notification/notification.controller.ts",
+   "line": 55,
+   "quote": "@Get('unread-count')"
+  },
+  {
+   "id": "e3",
+   "kind": "rest",
+   "method": "POST",
+   "path": "/api/v1/notifications/web-push/subscription",
+   "purpose": "Đăng ký/cập nhật browser push subscription (endpoint+p256dh+auth) của user; upsert theo endpoint unique.",
+   "auth": "jwt",
+   "file": "apps/core-api/src/modules/notification/notification.controller.ts",
+   "line": 65,
+   "quote": "@Post('web-push/subscription')"
+  },
+  {
+   "id": "e4",
+   "kind": "rest",
+   "method": "DELETE",
+   "path": "/api/v1/notifications/web-push/subscription",
+   "purpose": "Huỷ subscription theo endpoint, chỉ xoá hàng thuộc chính user (delete theo userId+endpoint).",
+   "auth": "jwt",
+   "file": "apps/core-api/src/modules/notification/notification.controller.ts",
+   "line": 75,
+   "quote": "@Delete('web-push/subscription')"
+  },
+  {
+   "id": "e5",
+   "kind": "rest",
+   "method": "POST",
+   "path": "/api/v1/notifications/:notificationId/read",
+   "purpose": "Đánh dấu đã đọc, idempotent; chỉ chủ sở hữu (người khác nhận 404 NOTIFICATION_NOT_FOUND để không lộ sự tồn tại).",
+   "auth": "jwt",
+   "file": "apps/core-api/src/modules/notification/notification.controller.ts",
+   "line": 85,
+   "quote": "@Post(':notificationId/read')"
+  }
+ ],
+ "collaborators": [
+  {
+   "id": "c1",
+   "label": "ghi notification + push sub",
+   "what": "Đọc/ghi bảng notifications (save, query theo seq, update readAt) và web_push_subscriptions (upsert theo endpoint, find theo userId, delete).",
+   "why": "Hàng notification là nguồn sự thật của thông báo (push chỉ là best-effort) nên phải bền vững; createWithManager nhận EntityManager của caller để hàng này commit/rollback cùng hành động gốc (vd gift/like/comment/match) trong MỘT transaction.",
+   "ifMissing": "Mất thông báo khi push fail hoặc user offline; nếu ghi ngoài transaction của caller thì có thể có thông báo 'ma' cho hành động đã rollback, hoặc hành động thành công mà không có thông báo.",
+   "with": "postgres",
+   "withKind": "infra",
+   "direction": "out",
+   "mechanism": "shared-db",
+   "endpoints": [
+    "e1",
+    "e2",
+    "e3",
+    "e4",
+    "e5"
+   ],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/notification/entities/notification.entity.ts",
+     "line": 26,
+     "quote": "@Entity({ name: 'notifications' })"
+    },
+    {
+     "file": "apps/core-api/src/modules/notification/entities/web-push-subscription.entity.ts",
+     "line": 11,
+     "quote": "@Entity({ name: 'web_push_subscriptions' })"
+    }
+   ],
+   "review": {
+    "verdict": "partial",
+    "note": "Chưa xác nhận createWithManager nhận EntityManager của caller và upsert theo endpoint; snippet chỉ cho thấy entity notifications và web_push_subscriptions."
+   },
+   "logic": {
+    "verdict": "sound",
+    "note": "createWithManager nhận EntityManager của caller; WebPushSubscriptionService.upsert theo ['endpoint'] với unique index; markRead update readAt. Đã xác nhận."
+   }
+  },
+  {
+   "id": "c2",
+   "label": "broadcast admin + push",
+   "what": "AdminService.broadcastNotification gọi createBroadcastWithManager(manager, recipientIds, {title, body}) trong transaction chung với auditLogService.record, rồi sendPush cho từng notification sau commit.",
+   "why": "Broadcast phải ghi audit 'notification.broadcast.sent' atomic với các hàng notification (chunk 500/INSERT, cùng manager); push chỉ chạy sau commit để không gửi thông báo cho broadcast bị rollback.",
+   "ifMissing": "Admin gửi được broadcast mà không có audit (hoặc audit mà không có thông báo); push có thể đi trước khi hàng DB tồn tại.",
+   "with": "admin",
+   "withKind": "service",
+   "direction": "in",
+   "mechanism": "di-call",
+   "endpoints": [
+    "e1",
+    "e2"
+   ],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/admin/admin.service.ts",
+     "line": 438,
+     "quote": "const created = await this.notificationService.createBroadcastWithManager("
+    },
+    {
+     "file": "apps/core-api/src/modules/admin/admin.service.ts",
+     "line": 463,
+     "quote": "this.notificationService.sendPush(notification),"
+    }
+   ],
+   "basis": "ast",
+   "logic": {
+    "verdict": "sound",
+    "note": "createBroadcastWithManager chunk 500 và auditLogService.record cùng manager; sendPush chạy sau transaction. Đúng."
+   }
+  },
+  {
+   "id": "c3",
+   "label": "like/comment notify",
+   "what": "FeedService.like/createComment gọi createWithManager(manager, {type post_liked|post_commented, payload {postId, commentId?, actorUserId}}) trong transaction của hành động, rồi sendPush sau commit; bỏ qua nếu actor = author.",
+   "why": "Thông báo phải atomic với việc tăng commentCount/ghi like: không được có thông báo cho comment đã rollback. Chỉ có 1 consumer nên gọi DI trực tiếp, không cần Outbox/Kafka (doc § 1).",
+   "ifMissing": "Tác giả bài viết không biết có like/comment, hoặc nhận thông báo trỏ tới comment không tồn tại.",
+   "with": "feed",
+   "withKind": "service",
+   "direction": "in",
+   "mechanism": "di-call",
+   "endpoints": [
+    "e1",
+    "e2"
+   ],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/feed/feed.service.ts",
+     "line": 260,
+     "quote": "notification = await this.notificationService.createWithManager("
+    },
+    {
+     "file": "apps/core-api/src/modules/feed/feed.service.ts",
+     "line": 275,
+     "quote": "if (notification) await this.notificationService.sendPush(notification);"
+    },
+    {
+     "file": "apps/core-api/src/modules/feed/feed.service.ts",
+     "line": 360,
+     "quote": "notification = await this.notificationService.createWithManager("
+    }
+   ],
+   "basis": "ast",
+   "logic": {
+    "verdict": "sound",
+    "note": "createWithManager trong transaction comment/like, bỏ qua tự like/comment, sendPush sau commit. Đúng."
+   }
+  },
+  {
+   "id": "c4",
+   "label": "tin nhắn + cảnh báo streak",
+   "what": "FriendService.sendMessage gọi create({friend_message, payload {conversationId, senderUserId, preview}}) rồi sendPush; streak-warning.job cũng gọi create để nhắc streak sắp mất.",
+   "why": "Tin nhắn Friend đã commit transaction riêng nên Notification phải tự mở transaction (create, không createWithManager) và chạy NGAY SAU khi message persist, bọc try/catch để lỗi thông báo không làm fail luồng gửi tin nhắn đã thành công.",
+   "ifMissing": "Người nhận offline không thấy badge/push cho tin nhắn mới; nếu dùng chung transaction thì lỗi thông báo có thể rollback cả tin nhắn.",
+   "with": "friend",
+   "withKind": "service",
+   "direction": "in",
+   "mechanism": "di-call",
+   "endpoints": [
+    "e1",
+    "e2"
+   ],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/friend/friend.service.ts",
+     "line": 440,
+     "quote": "const notification = await this.notificationService.create({"
+    },
+    {
+     "file": "apps/core-api/src/modules/friend/friend.service.ts",
+     "line": 449,
+     "quote": "await this.notificationService.sendPush(notification);"
+    },
+    {
+     "file": "apps/core-api/src/modules/friend/jobs/streak-warning.job.ts",
+     "line": 106,
+     "quote": "const notification = await this.notificationService.create({"
+    }
+   ],
+   "basis": "ast",
+   "logic": {
+    "verdict": "sound",
+    "note": "create dùng notificationRepo.manager (ghi độc lập), bọc try/catch; job streak cũng gọi create + sendPush."
+   }
+  },
+  {
+   "id": "c5",
+   "label": "thông báo nhận quà",
+   "what": "GiftService.sendGift gọi createWithManager(manager, {gift_received, payload {roomId, senderUserId, giftCode, priceDiamond}}) bên trong withinTransaction cùng bút toán Economy; sendPush chỉ khi !replayed.",
+   "why": "Quà là giao dịch tiền: thông báo phải commit/rollback cùng GiftEvent và ledger trong MỘT transaction; replay Idempotency-Key không được tạo hoặc push thông báo thứ hai.",
+   "ifMissing": "Người nhận quà không được báo; hoặc retry cùng Idempotency-Key tạo thông báo trùng; hoặc có thông báo cho lần gửi quà đã rollback vì thiếu kim cương.",
+   "with": "gift",
+   "withKind": "service",
+   "direction": "in",
+   "mechanism": "di-call",
+   "endpoints": [
+    "e1",
+    "e2"
+   ],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/gift/gift.service.ts",
+     "line": 238,
+     "quote": "notification = await this.notificationService.createWithManager("
+    },
+    {
+     "file": "apps/core-api/src/modules/gift/gift.service.ts",
+     "line": 261,
+     "quote": "if (notification) await this.notificationService.sendPush(notification);"
+    },
+    {
+     "file": "apps/core-api/src/modules/gift/gift.service.ts",
+     "line": 335,
+     "quote": "notification = await this.notificationService.createWithManager("
+    }
+   ],
+   "basis": "ast",
+   "logic": {
+    "verdict": "sound",
+    "note": "withinTransaction chỉ chạy khi không replay (ledger trả replayed trước đó); sendPush chỉ khi !replayed. Đúng."
+   }
+  },
+  {
+   "id": "c6",
+   "label": "thông báo match_confirmed",
+   "what": "matcher-worker và MatchingService.confirmTicket gọi createWithManager(manager, {match_confirmed, payload {sessionId, matchType}}) trong transaction chốt cặp, rồi sendPush cho 2 người sau commit.",
+   "why": "Thông báo phải atomic với việc chốt MatchSession/ticket để cả hai người cùng nhận hoặc cùng không; payload TUYỆT ĐỐI không chứa partnerId vì Soul Match ẩn danh tới khi unlock (docs/06).",
+   "ifMissing": "Người dùng đóng app không biết đã match; nếu lộ partnerId trong payload thì phá vỡ ẩn danh Soul Match.",
+   "with": "matching",
+   "withKind": "service",
+   "direction": "in",
+   "mechanism": "di-call",
+   "endpoints": [
+    "e1",
+    "e2"
+   ],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/matching/jobs/matcher-worker.service.ts",
+     "line": 299,
+     "quote": "this.notificationService.createWithManager(manager, {"
+    },
+    {
+     "file": "apps/core-api/src/modules/matching/jobs/matcher-worker.service.ts",
+     "line": 387,
+     "quote": "this.notificationService.sendPush(n),"
+    },
+    {
+     "file": "apps/core-api/src/modules/matching/matching.service.ts",
+     "line": 381,
+     "quote": "this.notificationService.createWithManager(manager, {"
+    }
+   ],
+   "basis": "ast",
+   "logic": {
+    "verdict": "sound",
+    "note": "Payload chỉ {sessionId, matchType}, không có partnerId; sendPush sau transaction ở cả matcher-worker và confirmTicket."
+   }
+  },
+  {
+   "id": "c50",
+   "with": "external:web-push",
+   "withKind": "external",
+   "direction": "out",
+   "mechanism": "sdk",
+   "endpoints": [
+    "e3",
+    "e4"
+   ],
+   "label": "gửi Web Push (VAPID)",
+   "what": "WebPushNotificationAdapter.send gọi webpush.sendNotification(subscription, JSON {notificationId, type, payload}, TTL 3600) tới endpoint của push service trình duyệt; 404/410 trả removeSubscription để xoá subscription chết.",
+   "why": "Trình duyệt đóng tab chỉ nhận được thông báo qua push service của hãng (FCM/Mozilla/Apple) ký bằng khoá VAPID; web_push_subscriptions lưu endpoint để core-api gửi tới đúng trình duyệt, và phải dọn endpoint 404/410 để không gửi mãi vào endpoint đã huỷ.",
+   "ifMissing": "User đóng tab không nhận được thông báo nào ngoài việc mở lại app và poll; endpoint chết tích luỹ và mỗi sendPush tốn thêm lời gọi mạng vô ích.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/common/platform/web-push-notification.adapter.ts",
+     "line": 46,
+     "quote": "await webpush.sendNotification("
+    },
+    {
+     "file": "apps/core-api/src/common/platform/web-push-notification.adapter.ts",
+     "line": 63,
+     "quote": "removeSubscription: statusCode === 404 || statusCode === 410,"
+    }
+   ],
+   "review": {
+    "verdict": "supported"
+   },
+   "logic": {
+    "verdict": "sound",
+    "note": "setVapidDetails, sendNotification TTL 3600, 404/410 thành removeSubscription và sendPush gọi removeById. Đúng."
+   }
+  },
+  {
+   "id": "c51",
+   "with": "external:fcm",
+   "withKind": "external",
+   "direction": "out",
+   "mechanism": "http",
+   "endpoints": [],
+   "label": "push FCM (chưa có token)",
+   "what": "FcmPushNotificationAdapter.send POST FCM HTTP v1 messages:send với {token, data.notification_type}, xác thực bằng access token OAuth từ service account; chỉ chạy khi NOTIFICATION_PUSH_PROVIDER=fcm VÀ caller truyền deviceToken.",
+   "why": "Suy luận: đây là kênh push native Android theo Port/Adapter để business code chỉ phụ thuộc PushNotificationPort; hiện không caller nào truyền deviceToken nên adapter luôn trả 'skipped' (xem notes).",
+   "ifMissing": "Không có kênh native Android khi sau này có đăng ký device token; hiện tại không có hành vi nào mất vì chưa có token.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/common/platform/fcm-push-notification.adapter.ts",
+     "line": 36,
+     "quote": "const response = await fetch("
+    },
+    {
+     "file": "apps/core-api/src/common/platform/fcm-push-notification.adapter.ts",
+     "line": 154,
+     "quote": "if (message.deviceToken === undefined || message.deviceToken === '') {"
+    }
+   ],
+   "review": {
+    "verdict": "supported"
+   },
+   "logic": {
+    "verdict": "sound",
+    "note": "Không caller nào truyền deviceToken vào sendPush nên adapter luôn trả skipped; HTTP v1 messages:send đúng."
+   }
+  },
+  {
+   "id": "c52",
+   "with": "external:apns",
+   "withKind": "external",
+   "direction": "out",
+   "mechanism": "http",
+   "endpoints": [],
+   "label": "push APNs (chưa có token)",
+   "what": "ApnsPushNotificationAdapter mở kết nối node:http2 tới APNs gửi thông báo cho device token iOS; chỉ được chọn khi NOTIFICATION_PUSH_PROVIDER=apns và cần deviceToken từ caller.",
+   "why": "Suy luận: kênh push native iOS đặt sau cùng PushNotificationPort với FCM, chọn bằng provider-factory; cùng giới hạn là chưa có luồng đăng ký device token nên hiện chưa bao giờ gửi thật.",
+   "ifMissing": "Không có kênh native iOS khi sau này có token; hiện tại không mất hành vi nào.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/common/platform/apns-push-notification.adapter.ts",
+     "line": 42,
+     "quote": "const client = connect(url);"
+    }
+   ],
+   "review": {
+    "verdict": "supported"
+   },
+   "logic": {
+    "verdict": "sound",
+    "note": "Dùng connect từ node:http2, JWT ES256 ký bằng jose; chỉ chạy khi provider=apns và có deviceToken, hiện chưa caller nào có token."
+   }
+  },
+  {
+   "id": "c53",
+   "with": "web",
+   "withKind": "client",
+   "direction": "both",
+   "mechanism": "sdk",
+   "endpoints": [
+    "e3",
+    "e4"
+   ],
+   "label": "service worker + subscribe",
+   "what": "apps/web đăng ký /web-push/sw.js, gọi pushManager.subscribe với NEXT_PUBLIC_WEB_PUSH_PUBLIC_KEY rồi POST subscription lên e3; sw.js nhận sự kiện push, chỉ hiện thông báo khi không có tab visible và mở /chat/:senderUserId khi click.",
+   "why": "Push tới khi tab đã đóng chỉ xử lý được bởi service worker phía trình duyệt; applicationServerKey phía web phải khớp WEB_PUSH_PUBLIC_KEY của core-api (cùng cặp VAPID) nếu không push service từ chối. Tab đang mở thì đã có toast/realtime nên sw im lặng để khỏi trùng.",
+   "ifMissing": "Không có subscription để lưu, hoặc khoá VAPID lệch nên mọi push bị từ chối; không service worker thì push đến mà không hiển thị.",
+   "evidence": [
+    {
+     "file": "apps/web/src/features/notification/web-push.ts",
+     "line": 70,
+     "quote": "await registerWebPushSubscription({"
+    },
+    {
+     "file": "apps/web/public/web-push/sw.js",
+     "line": 2,
+     "quote": "self.addEventListener('push', (event) => {"
+    }
+   ],
+   "review": {
+    "verdict": "supported"
+   },
+   "logic": {
+    "verdict": "sound",
+    "note": "sw.js chỉ hiện khi không có cửa sổ visible và mở /chat/:senderUserId cho friend_message; applicationServerKey lấy từ NEXT_PUBLIC_WEB_PUSH_PUBLIC_KEY."
+   }
+  },
+  {
+   "id": "c54",
+   "with": "web",
+   "withKind": "client",
+   "direction": "in",
+   "mechanism": "http",
+   "endpoints": [
+    "e1",
+    "e2",
+    "e5"
+   ],
+   "label": "poll badge + danh sách",
+   "what": "Web gọi GET /notifications/unread-count mỗi 60s (refetchInterval), tải GET /notifications khi mở chuông và POST /:id/read; invalidate cache khi nhận event friend_message.",
+   "why": "Notification không phát realtime event riêng và push là best-effort, nên REST poll là kênh chính để badge không lệch; endpoint chỉ đọc theo userId từ JWT nên mỗi user chỉ thấy thông báo của mình.",
+   "ifMissing": "Badge chuông không bao giờ cập nhật khi push thất bại hoặc tab không nhận realtime; user không đọc/đánh dấu được thông báo.",
+   "evidence": [
+    {
+     "file": "apps/web/src/features/notification/api.ts",
+     "line": 54,
+     "quote": "refetchInterval: UNREAD_NOTIFICATION_COUNT_REFETCH_INTERVAL_MS,"
+    }
+   ],
+   "review": {
+    "verdict": "supported"
+   },
+   "logic": {
+    "verdict": "sound",
+    "note": "Poll unread-count mỗi 60_000ms; bridge invalidate notificationKeys.all khi nhận friend.message. Đúng."
+   }
+  }
+ ],
+ "waivedEdges": [],
+ "excludedRoutes": [],
+ "notes": [
+  "Code vs doc: doc nói FCM/APNs nhận device token từ caller, nhưng KHÔNG caller nào truyền deviceToken vào sendPush (admin/feed/friend/gift/matching đều gọi sendPush(notification)); FcmPushNotificationAdapter.send trả 'skipped' khi thiếu deviceToken. Vậy FCM/APNs hiện chỉ là hạ tầng chưa có luồng đăng ký token native (doc § 7 cũng ghi ngoài scope); push thật duy nhất hiện nay là Web Push.",
+  "NotificationService.trackAnalytics (AnalyticsPort/PostHog) không có caller nào trong src (đã grep) nên không thêm collaborator PostHog; doc § 5 mô tả adapter nhưng chưa có luồng nào bắn event qua module này.",
+  "Notification không publish realtime event riêng: badge chuông được cập nhật nhờ poll /notifications/unread-count mỗi 60s và nhờ RealtimeNotificationBridge nghe event friend_message do module Friend phát.",
+  "Friend.sendMessage bỏ qua cả in-app lẫn push khi người nhận mute hội thoại (friend.service.ts:439) - quyết định nằm ở caller, Notification không biết trạng thái mute.",
+  "Web Push chỉ hoạt động khi WEB_PUSH_ENABLED=true (mặc định tắt); khi tắt adapter trả 'skipped' và chỉ còn in-app + poll."
+ ],
+ "techniques": [
+  {
+   "id": "t1",
+   "slug": "other:prune-dead-subscription",
+   "name": "Dọn subscription chết",
+   "how": "Adapter web-push trả removeSubscription khi push service báo 404/410; NotificationService.sendPush gọi removeById để xoá hàng web_push_subscriptions chết khỏi bảng.",
+   "why": "Adapter web-push trả removeSubscription khi push service báo 404/410; NotificationService.sendPush gọi removeById để xoá hàng web_push_subscriptions chết khỏi bảng.",
+   "endpoints": [
+    "e3",
+    "e4"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/notification/notification.service.ts",
+     "line": 134,
+     "quote": "if (result.removeSubscription)"
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "local": "Adapter web-push trả removeSubscription khi push service báo 404/410; NotificationService.sendPush gọi removeById để xoá hàng web_push_subscriptions chết khỏi bảng.",
+   "addedByLogicReview": true
+  },
+  {
+   "slug": "jwt-bearer",
+   "name": "JWT bearer (access token không trạng thái)",
+   "model": "JWT bearer",
+   "how": "Client gửi access token (JWT) trong header Authorization; guard xác minh chữ ký và hạn rồi gắn user vào request, server không giữ phiên.",
+   "why": "Không trạng thái nên scale ngang dễ và không phải tra DB mỗi request; đánh đổi là không thu hồi tức thì trước khi token hết hạn.",
+   "alternative": "Session phía server (cookie + kho phiên) thu hồi được tức thì nhưng cần kho phiên dùng chung.",
+   "endpoints": [
+    "e1",
+    "e2",
+    "e3",
+    "e4",
+    "e5"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/app/app.module.ts",
+     "line": 117,
+     "quote": "{ provide: APP_GUARD, useClass: JwtAuthGuard },"
+    }
+   ],
+   "auto": true,
+   "count": 5,
+   "id": "t2",
+   "local": "Mọi endpoint của service được bảo vệ bởi `JwtAuthGuard` đăng ký qua `APP_GUARD` toàn cục trong app.module.ts, nên cần bearer JWT hợp lệ mới vào được controller."
+  },
+  {
+   "slug": "ownership-check",
+   "name": "Kiểm tra quyền sở hữu tài nguyên",
+   "model": "Kiểm tra chủ sở hữu",
+   "how": "So userId của tài nguyên với userId người gọi trước khi đọc hoặc sửa.",
+   "why": "Ngăn IDOR: không thao tác được trên tài nguyên của người khác bằng cách đoán id.",
+   "endpoints": [
+    "e5"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/notification/notification.service.ts",
+     "line": 195,
+     "quote": "if (!notification || notification.userId !== userId) {"
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "id": "t3",
+   "local": "`markRead` tải notification rồi kiểm `notification.userId !== userId` thì ném `NOTIFICATION_NOT_FOUND`, user khác không đánh dấu được."
+  },
+  {
+   "slug": "unique-constraint-guard",
+   "name": "Ràng buộc unique ở DB làm chốt chặn cuối",
+   "model": "Ràng buộc DB",
+   "how": "Ràng buộc unique hoặc index duy nhất ở DB là chốt chặn cuối cho trùng lặp.",
+   "why": "Check-rồi-insert ở tầng code vẫn dính race; DB mới bảo đảm tuyệt đối.",
+   "endpoints": [
+    "e3"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/notification/entities/web-push-subscription.entity.ts",
+     "line": 12,
+     "quote": "@Index('uq_web_push_subscriptions_endpoint', ['endpoint'], { unique: true })"
+    },
+    {
+     "file": "apps/core-api/src/modules/notification/notification.controller.ts",
+     "line": 72,
+     "quote": "await this.webPushSubscriptions.upsert(user.userId, dto);"
+    },
+    {
+     "file": "apps/core-api/src/modules/notification/services/web-push-subscription.service.ts",
+     "line": 20,
+     "quote": "await this.subscriptionRepo.upsert("
+    }
+   ],
+   "auto": true,
+   "count": 3,
+   "id": "t4",
+   "local": "Index `uq_web_push_subscriptions_endpoint` unique trên `endpoint` làm chốt chặn; `webPushSubscriptions.upsert(user.userId, dto)` đăng ký lại không nhân đôi."
+  },
+  {
+   "slug": "entity-manager-propagation",
+   "name": "Truyền EntityManager giữa module (chung một transaction)",
+   "model": "Chung transaction",
+   "how": "Module sở hữu dữ liệu nhận EntityManager của giao dịch đang chạy để việc của nó nằm trong cùng transaction.",
+   "why": "Nhiều module dùng chung DB nên atomicity xuyên module không cần saga hay 2PC.",
+   "alternative": "Saga/outbox xuyên service: cần khi tách deployable, thừa khi cùng process.",
+   "endpoints": [],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/notification/notification.service.ts",
+     "line": 55,
+     "quote": "async createWithManager("
+    }
+   ],
+   "auto": true,
+   "count": 5,
+   "id": "t5",
+   "local": "`createWithManager(manager: EntityManager, input)` cho module khác (feed) tạo Notification trong cùng transaction nghiệp vụ."
+  },
+  {
+   "id": "t6",
+   "slug": "polling-fallback",
+   "name": "REST polling làm fallback cho realtime best-effort",
+   "model": "Polling dự phòng",
+   "how": "Client vẫn đọc trạng thái qua REST khi realtime rớt.",
+   "why": "Realtime best-effort nên cần đường dự phòng đúng đắn.",
+   "endpoints": [
+    "e2"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/web/src/features/notification/api.ts",
+     "line": 17,
+     "quote": "UNREAD_NOTIFICATION_COUNT_REFETCH_INTERVAL_MS = 60_000"
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "local": "Notification không có realtime event riêng; web poll GET /notifications/unread-count mỗi UNREAD_NOTIFICATION_COUNT_REFETCH_INTERVAL_MS = 60_000 để cập nhật badge chuông.",
+   "addedByLogicReview": true
+  },
+  {
+   "slug": "rate-limit-throttler",
+   "name": "Rate limit (@nestjs/throttler)",
+   "model": "Rate limit",
+   "how": "@Throttle giới hạn số request theo khoảng thời gian cho từng route.",
+   "why": "Chặn spam và dò quét bằng cách giới hạn số request theo thời gian, trước khi request tới logic nghiệp vụ.",
+   "endpoints": [
+    "e1",
+    "e2",
+    "e3",
+    "e4",
+    "e5"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/app/app.module.ts",
+     "line": 116,
+     "quote": "{ provide: APP_GUARD, useClass: ThrottlerGuard },"
+    }
+   ],
+   "auto": true,
+   "count": 5,
+   "id": "t7",
+   "local": "Giới hạn tốc độ qua `ThrottlerGuard` đăng ký `APP_GUARD` toàn cục, chạy trước JwtAuthGuard; áp cho mọi route của service."
+  },
+  {
+   "slug": "best-effort-degrade",
+   "name": "Best-effort: lỗi phụ không phá nghiệp vụ chính",
+   "model": "Best-effort",
+   "how": "Việc phụ (push, realtime) lỗi chỉ ghi log, không phá nghiệp vụ chính.",
+   "why": "Nghiệp vụ đã commit không nên hỏng vì kênh phụ.",
+   "endpoints": [],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/notification/notification.service.ts",
+     "line": 90,
+     "quote": "* Best-effort — gọi SAU khi Notification đã commit (docs/services/notification-service.md § 1)."
+    }
+   ],
+   "auto": true,
+   "count": 2,
+   "id": "t8",
+   "local": "`sendPush` best-effort: gọi sau khi Notification commit và không bao giờ throw, push lỗi không phá luồng gốc."
+  },
+  {
+   "slug": "openapi-contract",
+   "name": "Hợp đồng OpenAPI + client sinh tự động",
+   "model": "OpenAPI",
+   "how": "OpenAPI sinh từ code và client TypeScript sinh tự động.",
+   "why": "Client và server không lệch hợp đồng.",
+   "endpoints": [
+    "e1",
+    "e2",
+    "e3",
+    "e4",
+    "e5"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/notification/notification.controller.ts",
+     "line": 43,
+     "quote": "@ApiOperation({ summary: 'Danh sách notification, mới nhất trước' })"
+    }
+   ],
+   "auto": true,
+   "count": 5,
+   "id": "t9",
+   "local": "`@ApiOperation`, `@ApiCursorPageQuery()`, `@ApiOkResponse({ type: NotificationsPageDto })` mô tả hợp đồng OpenAPI của từng route."
+  },
+  {
+   "slug": "cursor-pagination",
+   "name": "Phân trang cursor (keyset)",
+   "model": "Keyset",
+   "how": "Phân trang theo cursor thay vì offset.",
+   "why": "Ổn định khi dữ liệu thay đổi và nhanh ở trang sâu.",
+   "endpoints": [
+    "e1"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/notification/dto/notification.dtos.ts",
+     "line": 29,
+     "quote": "@ApiProperty({ nullable: true }) nextCursor!: string | null;"
+    },
+    {
+     "file": "apps/core-api/src/modules/notification/notification.controller.ts",
+     "line": 48,
+     "quote": "@Query() query: CursorPageQueryDto,"
+    },
+    {
+     "file": "apps/core-api/src/modules/notification/notification.service.ts",
+     "line": 158,
+     "quote": "query: CursorPageQueryDto,"
+    }
+   ],
+   "auto": true,
+   "count": 4,
+   "id": "t10",
+   "local": "`GET /notifications` nhận `CursorPageQueryDto` và trả `NotificationsPageDto` có `nextCursor`."
+  },
+  {
+   "slug": "jsonb-columns",
+   "name": "Cột JSONB",
+   "model": "JSONB",
+   "how": "Cột JSONB lưu dữ liệu linh hoạt.",
+   "why": "Cấu trúc thay đổi thường xuyên.",
+   "endpoints": [],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/notification/entities/notification.entity.ts",
+     "line": 45,
+     "quote": "@Column({ type: 'jsonb' })"
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "id": "t11",
+   "local": "Cột `payload` của `Notification` kiểu `jsonb` lưu dữ liệu tuỳ theo `type`."
+  },
+  {
+   "id": "t12",
+   "slug": "secret-isolation",
+   "name": "Cô lập secret (chỉ core-api giữ khoá)",
+   "model": "Cô lập secret",
+   "how": "Khoá và secret chỉ nằm ở core-api, không ra client.",
+   "why": "Giảm bề mặt lộ khoá: khoá ký và secret chỉ nằm ở backend, phía client không bao giờ nhận được.",
+   "endpoints": [
+    "e3",
+    "e4"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/notification/entities/web-push-subscription.entity.ts",
+     "line": 10,
+     "quote": "endpoint được coi là credential"
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "local": "endpoint web-push của trình duyệt được coi là credential, không log ra ngoài adapter; khoá riêng VAPID chỉ nằm ở core-api, sw.js không chứa auth/token.",
+   "addedByLogicReview": true
+  },
+  {
+   "id": "t13",
+   "slug": "data-minimization",
+   "name": "Tối thiểu hoá dữ liệu trả về (ẩn danh, DTO công khai)",
+   "model": "Tối thiểu dữ liệu",
+   "how": "Chỉ trả trường cần thiết (DTO công khai, ẩn danh theo từng người nhận).",
+   "why": "Giảm rò rỉ dữ liệu: chỉ trả đúng các trường cần thiết cho người nhận thay vì cả bản ghi nội bộ.",
+   "endpoints": [
+    "e1"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/notification/entities/notification.entity.ts",
+     "line": 23,
+     "quote": "KHÔNG bao giờ chứa"
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "local": "payload notification chỉ chứa dữ liệu tối thiểu để client tự render, không hardcode text; match_confirmed chỉ có sessionId/matchType, không partnerId (Soul Match ẩn danh).",
+   "addedByLogicReview": true
+  },
+  {
+   "id": "t14",
+   "slug": "anti-enumeration",
+   "name": "Chống dò tài khoản",
+   "model": "Chống dò",
+   "how": "Phản hồi đồng nhất để không dò được tài khoản có tồn tại hay không.",
+   "why": "Chống thu thập người dùng.",
+   "endpoints": [
+    "e5"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/notification/notification.service.ts",
+     "line": 195,
+     "quote": "notification.userId !== userId"
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "local": "markRead trả NOTIFICATION_NOT_FOUND 404 cho cả notification không tồn tại lẫn của user khác, nên không lộ sự tồn tại của notificationId người khác.",
+   "addedByLogicReview": true
+  }
+ ]
+}

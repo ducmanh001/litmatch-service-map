@@ -1,0 +1,1036 @@
+{
+ "id": "signaling-gateway",
+ "title": "Signaling Gateway (Socket.IO)",
+ "tagline": "Fanout Socket.IO, quota kết nối, presence",
+ "deployable": "signaling-gateway",
+ "role": "Gateway Socket.IO namespace /signaling: verify JWT của core-api lúc handshake, join socket vào room user:{userId}, relay nguyên văn envelope từ Redis pub/sub realtime:user:* xuống socket, và giữ quota kết nối + presence bằng lease trong Redis. KHÔNG chứa business logic, KHÔNG có DB, KHÔNG ký token và KHÔNG nhận room/event từ client (chỉ có 'ping').",
+ "owns": [
+  "Redis ZSET signaling:connection-quota:{userId} (lease mỗi socket, TTL WS_CONNECTION_LEASE_MS)",
+  "Redis ZSET realtime:presence:{userId} (cùng lease, core-api đọc để biết online)",
+  "Room Socket.IO user:{userId} (in-memory, đồng bộ giữa pod bằng Redis adapter)"
+ ],
+ "confidence": "high",
+ "endpoints": [
+  {
+   "id": "e1",
+   "kind": "rest",
+   "method": "GET",
+   "path": "/health",
+   "purpose": "Liveness tương thích ngược, trả status ok + uptimeSeconds; không kiểm tra Redis.",
+   "auth": "public",
+   "file": "apps/signaling-gateway/src/app/health.controller.ts",
+   "line": 15,
+   "quote": "@Get()"
+  },
+  {
+   "id": "e2",
+   "kind": "rest",
+   "method": "GET",
+   "path": "/health/live",
+   "purpose": "Liveness probe của K8s: chỉ cho biết process còn sống, không phụ thuộc Redis.",
+   "auth": "public",
+   "file": "apps/signaling-gateway/src/app/health.controller.ts",
+   "line": 20,
+   "quote": "@Get('live')"
+  },
+  {
+   "id": "e3",
+   "kind": "rest",
+   "method": "GET",
+   "path": "/health/ready",
+   "purpose": "Readiness probe: 503 nếu PSUBSCRIBE realtime:user:* chưa sẵn sàng, quota Redis chưa ready hoặc Redis cluster adapter chưa ready (checks.redisSubscription / redisClusterAdapter).",
+   "auth": "public",
+   "file": "apps/signaling-gateway/src/app/health.controller.ts",
+   "line": 25,
+   "quote": "@Get('ready')"
+  },
+  {
+   "id": "e50",
+   "kind": "socket-listen",
+   "method": "CONNECT",
+   "path": "/signaling",
+   "purpose": "Handshake Socket.IO: middleware verify handshake.auth.token (JWT của core-api), gán userId từ payload.sub, acquire lease quota (tối đa WS_MAX_CONNECTIONS_PER_USER) rồi mới cho thành socket; sai token -> connect_error UNAUTHORIZED, hết quota -> CONNECTION_LIMIT, Redis lỗi -> CONNECTION_QUOTA_UNAVAILABLE.",
+   "auth": "jwt",
+   "file": "apps/signaling-gateway/src/app/signaling.gateway.ts",
+   "line": 86,
+   "quote": "server.use((socket, next) => {"
+  },
+  {
+   "id": "e51",
+   "kind": "socket-listen",
+   "method": "EVENT",
+   "path": "ping",
+   "purpose": "Client gửi 'ping' nhận lại 'pong': kiểm tra kết nối ở tầng ứng dụng; đây là message duy nhất gateway nhận từ client (không có join/leave room theo yêu cầu).",
+   "auth": "jwt",
+   "file": "apps/signaling-gateway/src/app/signaling.gateway.ts",
+   "line": 202,
+   "quote": "@SubscribeMessage('ping')"
+  },
+  {
+   "id": "e52",
+   "kind": "socket-emit",
+   "method": "EMIT",
+   "path": "{event} -> room user:{userId}",
+   "purpose": "Relay: nhận envelope từ Redis pmessage trên realtime:user:{userId}, parse userId từ tên channel và emit(envelope.event, envelope.data) vào room của đúng user, không đọc/sửa payload; channel lạ hoặc JSON hỏng bị bỏ qua.",
+   "auth": "jwt",
+   "file": "apps/signaling-gateway/src/app/signaling.gateway.ts",
+   "line": 332,
+   "quote": "this.server.local.to(userRoom(userId)).emit(envelope.event, envelope.data);"
+  }
+ ],
+ "collaborators": [
+  {
+   "id": "c1",
+   "label": "gift.sent cho phòng tiệc",
+   "what": "GiftService sau khi giao dịch kim cương commit gọi publishRealtimeEvent với envelope gift.sent (roomId, giftCode, priceDiamond, pointsAwarded...) cho từng member active của party room.",
+   "why": "Mọi member phòng phải thấy hiệu ứng quà ngay, nhưng GiftService không giữ socket nào; nó chỉ publish lên realtime:user:{memberId} (sau transaction tiền) để gateway giữ kết nối đẩy xuống.",
+   "ifMissing": "Quà vẫn trừ/cộng tiền đúng nhưng người trong phòng không thấy hiệu ứng tức thì, phải chờ REST refetch.",
+   "with": "gift",
+   "withKind": "service",
+   "direction": "in",
+   "mechanism": "redis-pubsub",
+   "endpoints": [
+    "e52"
+   ],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/gift/gift.service.ts",
+     "line": 498,
+     "quote": "publishRealtimeEvent(this.redis, this.logger, m.userId, envelope),"
+    }
+   ],
+   "basis": "ast",
+   "logic": {
+    "verdict": "sound",
+    "note": "publishGiftSent chỉ chạy khi !result.replayed, sau commit, lỗi chỉ warn; publish per-user qua publishRealtimeEvent."
+   }
+  },
+  {
+   "id": "c2",
+   "label": "match.confirmed khi ghép cặp",
+   "what": "Matcher worker (tryPair sau commit), MatchingService.confirm và InviteService publish match.confirmed {ticketId, sessionId} cho từng user của cặp.",
+   "why": "Hai người chờ ghép đang mở UI chờ, cần biết phiên đã chốt ngay; core-api chỉ publish sau khi DB commit (best-effort) và để gateway fanout, vì worker nền không có kết nối tới trình duyệt.",
+   "ifMissing": "UI chờ ghép chỉ biết kết quả qua polling GET /matching/tickets/:id, trễ hơn nhiều giây.",
+   "with": "matching",
+   "withKind": "service",
+   "direction": "in",
+   "mechanism": "redis-pubsub",
+   "endpoints": [
+    "e52"
+   ],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/matching/jobs/matcher-worker.service.ts",
+     "line": 377,
+     "quote": "return publishRealtimeEvent("
+    },
+    {
+     "file": "apps/core-api/src/modules/matching/matching.module.ts",
+     "line": 86,
+     "quote": "await this.realtime.close?.();"
+    }
+   ],
+   "basis": "ast",
+   "logic": {
+    "verdict": "sound",
+    "note": "matcher-worker, MatchingService.confirm và InviteService đều publish match.confirmed sau khi transaction commit."
+   }
+  },
+  {
+   "id": "c3",
+   "label": "call.ended cho 2 bên",
+   "what": "CallingService ở mọi nhánh kết thúc cuộc gọi, sau commit và deleteRoom LiveKit, publish call.ended {callId, matchSessionId, reason, durationSeconds} cho userAId và userBId.",
+   "why": "Khi cuộc gọi kết thúc (ở bất kỳ nhánh nào), bên còn lại phải đóng UI cuộc gọi ngay; chỉ gateway biết socket của họ nên core-api phải đi qua kênh realtime:user:{uid}.",
+   "ifMissing": "Bên kia vẫn nhìn màn hình gọi cho tới khi LiveKit ngắt hoặc client poll, gây trải nghiệm 'gọi ma'.",
+   "with": "calling",
+   "withKind": "service",
+   "direction": "in",
+   "mechanism": "redis-pubsub",
+   "endpoints": [
+    "e52"
+   ],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/calling/calling.service.ts",
+     "line": 710,
+     "quote": "publishRealtimeEvent(this.redis, this.logger, uid, envelope),"
+    }
+   ],
+   "basis": "ast",
+   "logic": {
+    "verdict": "sound",
+    "note": "cleanupEndedCall chạy sau endById commit, sau endVoiceSessionForCall và deleteRoom, rồi publish call.ended cho userAId/userBId."
+   }
+  },
+  {
+   "id": "c4",
+   "label": "soul.message/matched/ended",
+   "what": "SoulMatchService publish soul.message (payload per-recipient senderRole me|partner), soul.matched khi mutual like tạo friendship, soul.ended khi một bên rời phòng, cho cả hai user của session.",
+   "why": "Chat ẩn danh phải đẩy tin tức thì nhưng payload tính sẵn theo người nhận (không bao giờ chứa userId đối phương); gateway chỉ relay nguyên văn nên việc ẩn danh phải được quyết ở core-api lúc publish.",
+   "ifMissing": "Chat ẩn danh phải polling /soul-match/sessions/:id/messages; mất tín hiệu match/rời phòng tức thì.",
+   "with": "soul-match",
+   "withKind": "service",
+   "direction": "in",
+   "mechanism": "redis-pubsub",
+   "endpoints": [
+    "e52"
+   ],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/soul-match/soul-match.service.ts",
+     "line": 112,
+     "quote": "publishRealtimeEvent(this.redis, this.logger, uid, envelope),"
+    },
+    {
+     "file": "apps/core-api/src/modules/soul-match/soul-match.service.ts",
+     "line": 215,
+     "quote": "return publishRealtimeEvent("
+    }
+   ],
+   "basis": "ast",
+   "logic": {
+    "verdict": "sound",
+    "note": "soul.message tính senderRole me/partner per-recipient, payload không có userId đối phương; publish sau persist, replay không bắn lại."
+   }
+  },
+  {
+   "id": "c5",
+   "label": "movie.* trạng thái xem phim",
+   "what": "MovieMatchService publish movie.session.started, movie.state.changed, movie.session.ended, movie.reaction.sent cho hai user (userLowId/userHighId) của phiên.",
+   "why": "Xem phim đồng bộ cần mỗi thao tác play/pause/reaction tới bạn xem gần như tức thì; trạng thái bền nằm DB ở core-api còn gateway chỉ là đường đẩy một chiều.",
+   "ifMissing": "Hai người xem lệch trạng thái play/pause và không thấy reaction cho đến khi refetch.",
+   "with": "movie-match",
+   "withKind": "service",
+   "direction": "in",
+   "mechanism": "redis-pubsub",
+   "endpoints": [
+    "e52"
+   ],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/movie-match/movie-match.service.ts",
+     "line": 182,
+     "quote": "publishRealtimeEvent(this.redis, this.logger, uid, envelope),"
+    },
+    {
+     "file": "apps/core-api/src/modules/movie-match/movie-match.service.ts",
+     "line": 232,
+     "quote": "publishRealtimeEvent(this.redis, this.logger, uid, envelope),"
+    }
+   ],
+   "basis": "ast",
+   "logic": {
+    "verdict": "sound",
+    "note": "movie.session.started/state.changed/ended/reaction.sent đều publish tới cặp user; state bền ở DB."
+   }
+  },
+  {
+   "id": "c6",
+   "label": "minigame.session.*",
+   "what": "MiniGameService publish minigame.session.started {sessionId, gameType, initiatorUserId} và minigame.session.resolved cho hai user.",
+   "why": "Người được mời chơi phải thấy lời mời/kết quả ván ngay; core-api chốt kết quả trong DB rồi mới publish nên gateway không cần biết luật game.",
+   "ifMissing": "Đối thủ không biết ván bắt đầu hoặc đã có kết quả cho tới khi poll.",
+   "with": "mini-game",
+   "withKind": "service",
+   "direction": "in",
+   "mechanism": "redis-pubsub",
+   "endpoints": [
+    "e52"
+   ],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/mini-game/mini-game.service.ts",
+     "line": 130,
+     "quote": "publishRealtimeEvent(this.redis, this.logger, uid, envelope),"
+    },
+    {
+     "file": "apps/core-api/src/modules/mini-game/mini-game.service.ts",
+     "line": 232,
+     "quote": "publishRealtimeEvent(this.redis, this.logger, uid, envelope),"
+    }
+   ],
+   "basis": "ast",
+   "logic": {
+    "verdict": "sound",
+    "note": "minigame.session.resolved publish sau khi UPDATE có điều kiện chốt kết quả trong DB."
+   }
+  },
+  {
+   "id": "c7",
+   "label": "friend.message / streak",
+   "what": "FriendService publish friend.message sau khi lưu tin chat 1-1 và friend.streak.increased khi chạm mốc; job streak-warning publish friend.streak.at_risk cho cả hai bạn.",
+   "why": "Tin chat và cảnh báo streak sắp đứt cần tới cả hai bạn ngay, kể cả job nền không có socket; do đó đi qua kênh theo người nhận và gateway fanout.",
+   "ifMissing": "Tin nhắn bạn bè không hiện tức thì (phải mở lại/refetch) và cảnh báo streak sắp đứt không tới kịp.",
+   "with": "friend",
+   "withKind": "service",
+   "direction": "in",
+   "mechanism": "redis-pubsub",
+   "endpoints": [
+    "e52"
+   ],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/friend/friend.service.ts",
+     "line": 399,
+     "quote": "publishRealtimeEvent(this.redis, this.logger, uid, streakEnvelope),"
+    },
+    {
+     "file": "apps/core-api/src/modules/friend/friend.service.ts",
+     "line": 425,
+     "quote": "publishRealtimeEvent(this.redis, this.logger, uid, envelope),"
+    }
+   ],
+   "basis": "ast",
+   "logic": {
+    "verdict": "sound",
+    "note": "friend.message/streak.increased publish sau khi lưu; streak-warning.job publish friend.streak.at_risk."
+   }
+  },
+  {
+   "id": "c8",
+   "label": "party.* sự kiện phòng",
+   "what": "PartyRoomService publish party.member.joined/left/disconnected/reconnected, party.role.changed, party.speaker.invite.received, party.comment.created, party.host.disconnected/reconnected, party.room.closed cho member active (hoặc đúng người được mời).",
+   "why": "Danh sách member, quyền speaker và việc đóng phòng thay đổi liên tục; core-api quyết ai là member lúc publish (authz theo recipient) rồi gateway fanout, nên client không được tự join room.",
+   "ifMissing": "UI phòng tiệc không cập nhật member/role/bình luận tức thì và không biết phòng đã đóng cho tới khi poll REST.",
+   "with": "party-room",
+   "withKind": "service",
+   "direction": "in",
+   "mechanism": "redis-pubsub",
+   "endpoints": [
+    "e52"
+   ],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/party-room/party-room.service.ts",
+     "line": 559,
+     "quote": "await publishRealtimeEvent(this.redis, this.logger, targetUserId, {"
+    },
+    {
+     "file": "apps/core-api/src/modules/party-room/party-room.service.ts",
+     "line": 1058,
+     "quote": "publishRealtimeEvent(this.redis, this.logger, uid, envelope),"
+    }
+   ],
+   "basis": "ast",
+   "logic": {
+    "verdict": "sound",
+    "note": "publishToRoomMembers liệt kê member active tại thời điểm publish; invite chỉ gửi tới target."
+   }
+  },
+  {
+   "id": "c50",
+   "with": "redis",
+   "withKind": "infra",
+   "direction": "in",
+   "mechanism": "redis-pubsub",
+   "endpoints": [
+    "e52"
+   ],
+   "label": "PSUBSCRIBE realtime:user:*",
+   "what": "Một connection ioredis riêng ở subscriber mode gọi psubscribe(REALTIME_USER_CHANNEL_PATTERN); mỗi pmessage được relay() đổi thành emit vào room user:{userId}.",
+   "why": "Gateway không có DB và không có API nội bộ với core-api, nên Redis pub/sub là kênh duy nhất nhận event; connection phải riêng vì ioredis ở subscriber mode không chạy được lệnh khác.",
+   "ifMissing": "Không có đường nào đưa event của core-api xuống socket; /health/ready trả 503 khi pattern chưa subscribe nên pod không nhận traffic.",
+   "evidence": [
+    {
+     "file": "apps/signaling-gateway/src/app/signaling.gateway.ts",
+     "line": 346,
+     "quote": ".psubscribe(REALTIME_USER_CHANNEL_PATTERN)"
+    }
+   ],
+   "review": {
+    "verdict": "supported"
+   },
+   "logic": {
+    "verdict": "sound",
+    "note": "Subscriber ioredis riêng psubscribe(REALTIME_USER_CHANNEL_PATTERN); isReady() đòi subscriptionReady nên /health/ready trả 503 khi chưa subscribe."
+   }
+  },
+  {
+   "id": "c51",
+   "with": "redis",
+   "withKind": "infra",
+   "direction": "out",
+   "mechanism": "redis-state",
+   "endpoints": [
+    "e50"
+   ],
+   "label": "lease quota + presence",
+   "what": "Lua script ACQUIRE/REFRESH/RELEASE ghi ZSET signaling:connection-quota:{userId} và realtime:presence:{userId}: mỗi socket một lease có TTL WS_CONNECTION_LEASE_MS, refresh mỗi leaseMs/3, release khi disconnect.",
+   "why": "Giới hạn tối đa N socket/user phải đúng trên toàn cụm replica nên cần đếm atomic ở Redis (Lua), không dùng Map cục bộ; TTL để pod chết không giữ slot vĩnh viễn, và cùng lease đó làm tín hiệu presence.",
+   "ifMissing": "Quota chỉ đúng trong từng pod nên user mở nhiều tab vượt giới hạn; Redis lỗi thì handshake fail closed (CONNECTION_QUOTA_UNAVAILABLE) và socket đang sống bị ngắt.",
+   "evidence": [
+    {
+     "file": "apps/signaling-gateway/src/app/connection-quota.service.ts",
+     "line": 15,
+     "quote": "const QUOTA_KEY_PREFIX = 'signaling:connection-quota:';"
+    },
+    {
+     "file": "apps/signaling-gateway/src/app/connection-quota.service.ts",
+     "line": 126,
+     "quote": "const result = await this.redis.eval("
+    }
+   ],
+   "review": {
+    "verdict": "supported"
+   },
+   "logic": {
+    "verdict": "sound",
+    "note": "Lua ACQUIRE/REFRESH/RELEASE ghi cả quota ZSET và presence ZSET, refresh mỗi leaseMs/3, Redis lỗi thì fail closed và ngắt socket đang sống."
+   }
+  },
+  {
+   "id": "c52",
+   "with": "redis",
+   "withKind": "infra",
+   "direction": "both",
+   "mechanism": "sdk",
+   "endpoints": [
+    "e50",
+    "e52"
+   ],
+   "label": "Socket.IO Redis adapter",
+   "what": "SignalingRedisAdapterService mở 2 client Redis (pub + sub) và createAdapter(pubClient, subClient) từ @socket.io/redis-adapter, gắn vào CorsIoAdapter trước app.listen() (main.ts).",
+   "why": "Để server.to(room).emit() ở pod này tới được socket ở pod khác khi scale ngang; phải connect xong trước listen vì afterInit() cần Server đã có adapter. Lưu ý: relay() cũng dùng server.to(...).emit() và mỗi pod đều PSUBSCRIBE, nên với adapter có thể một event tới client nhiều lần (xem finding V1).",
+   "ifMissing": "Mỗi pod chỉ thấy room của chính nó: broadcast/fetchSockets xuyên pod không dùng được và /health/ready trả 503 (redisClusterAdapter down). Tách biệt: relay PSUBSCRIBE tự nó đã đủ phát cho room cục bộ; adapter không cần cho relay mà còn có nguy cơ nhân đôi event.",
+   "evidence": [
+    {
+     "file": "apps/signaling-gateway/src/app/redis-adapter.service.ts",
+     "line": 46,
+     "quote": "return createAdapter(this.pubClient, this.subClient);"
+    }
+   ],
+   "review": {
+    "verdict": "supported"
+   },
+   "logic": {
+    "verdict": "corrected",
+    "note": "Phần what/why đúng; ifMissing cần bỏ ý 'relay vẫn chạy' và nêu rủi ro trùng event khi có adapter (xem mục \"Điểm đáng chú ý\").",
+    "viaVerify": "V1"
+   }
+  },
+  {
+   "id": "c53",
+   "with": "user",
+   "withKind": "service",
+   "direction": "in",
+   "mechanism": "redis-state",
+   "endpoints": [
+    "e50"
+   ],
+   "label": "đọc presence online",
+   "what": "RedisPresenceReader của user module đọc ZSET realtime:presence:{userId} (xoá member hết hạn rồi zcard > 0) để trả isOnline cho GET /users/:id/presence, chỉ khi privacy showOnlineStatus bật.",
+   "why": "Core-api không giữ socket nên không thể tự biết user có online; gateway là nơi duy nhất thấy kết nối thật và công bố qua key Redis dùng chung (cùng helper realtimePresenceKey trong common-dtos).",
+   "ifMissing": "Trạng thái online luôn false hoặc phải gateway có API nội bộ riêng; hiện đọc lỗi thì fail closed trả offline thay vì online giả.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/user/redis/redis-presence-reader.adapter.ts",
+     "line": 15,
+     "quote": "await this.redis.zremrangebyscore(key, '-inf', Date.now());"
+    },
+    {
+     "file": "apps/core-api/src/modules/user/user.controller.ts",
+     "line": 81,
+     "quote": "@Get(':id/presence')"
+    }
+   ],
+   "review": {
+    "verdict": "supported"
+   },
+   "logic": {
+    "verdict": "sound",
+    "note": "RedisPresenceReader fail closed; user.controller chỉ gọi presence.isOnline khi settings.showOnlineStatus bật."
+   }
+  },
+  {
+   "id": "c54",
+   "with": "auth",
+   "withKind": "service",
+   "direction": "in",
+   "mechanism": "config",
+   "endpoints": [
+    "e50"
+   ],
+   "label": "chung JWT_SECRET",
+   "what": "Gateway đăng ký JwtModule với JWT_SECRET (Joi min 32, bắt buộc) chỉ để verifyAsync access token do core-api auth module ký bằng cùng secret; lấy userId từ payload.sub. [10/10] Từ commit 80106a1/54c66ab có xoay khoá không đăng xuất mọi người: core-api và gateway ký bằng JWT_SECRET, chỉ khi CHỮ KÝ không khớp mới thử JWT_SECRET_PREVIOUS (token hết hạn hay sai claim không được thử lại); quy trình 3 bước vì rollout cuốn chiếu làm pod cũ từ chối token do pod mới ký; env validation từ chối JWT_SECRET_PREVIOUS trùng AUTH_GUEST_DEVICE_TOKEN_SECRET.",
+   "why": "Gateway không có DB hay API nội bộ nên cách duy nhất để biết socket thuộc user nào là tự verify chữ ký token; vì vậy hai deployable bắt buộc cùng secret, và gateway không bao giờ được ký token.",
+   "ifMissing": "Lệch secret làm mọi handshake bị connect_error UNAUTHORIZED (realtime chết, client chỉ còn polling); ngược lại nếu gateway tin token không verify thì ai cũng nghe được event của user khác.",
+   "evidence": [
+    {
+     "file": "apps/signaling-gateway/src/app/app.module.ts",
+     "line": 35,
+     "quote": "secret: config.getOrThrow('JWT_SECRET', { infer: true }),"
+    },
+    {
+     "file": "apps/core-api/src/modules/auth/auth.module.ts",
+     "line": 32,
+     "quote": "secret: config.getOrThrow('JWT_SECRET', { infer: true }),"
+    }
+   ],
+   "review": {
+    "verdict": "supported"
+   },
+   "logic": {
+    "verdict": "sound",
+    "note": "env.validation: JWT_SECRET Joi.string().min(32).required(); gateway chỉ verifyAsync, lấy payload.sub."
+   }
+  },
+  {
+   "id": "c55",
+   "with": "web",
+   "withKind": "client",
+   "direction": "both",
+   "mechanism": "socket",
+   "endpoints": [
+    "e50",
+    "e51",
+    "e52"
+   ],
+   "label": "kết nối và nhận event",
+   "what": "Web mở một socket io(NEXT_PUBLIC_SOCKET_URL + '/signaling') với auth callback lấy access token tươi mỗi lần (re)connect, transports websocket; khi connect_error UNAUTHORIZED thì refreshSession rồi connect lại; sau reconnect refetch state qua REST.",
+   "why": "Socket chỉ là kênh delta best-effort nên client phải tự phục hồi: gửi đúng namespace /signaling và token còn hạn, refresh khi hết hạn, và resync REST sau reconnect vì event bị miss không được phát lại.",
+   "ifMissing": "Sai namespace thì client rơi vào namespace / không ai lắng nghe mà không báo lỗi; token hết hạn không refresh thì realtime ngắt vĩnh viễn; không resync thì UI lệch state sau mất mạng.",
+   "evidence": [
+    {
+     "file": "apps/web/src/shared/realtime/socket.ts",
+     "line": 44,
+     "quote": "socket = io(`${env.NEXT_PUBLIC_SOCKET_URL}/signaling`, {"
+    },
+    {
+     "file": "apps/web/src/shared/realtime/socket.ts",
+     "line": 46,
+     "quote": "auth: (cb) => cb({ token: tokenStore.getAccessToken() }),"
+    }
+   ],
+   "review": {
+    "verdict": "supported"
+   },
+   "logic": {
+    "verdict": "sound",
+    "note": "socket.ts: namespace /signaling, auth callback token tươi, connect_error Unauthorized gọi refreshSession, onReconnected invalidate REST."
+   }
+  }
+ ],
+ "waivedEdges": [],
+ "excludedRoutes": [],
+ "notes": [
+  "specs/realtime.asyncapi.yaml chỉ liệt kê 8 event (soul.message, match.confirmed, call.ended, friend.message, party.room.closed, gift.sent, movie.state.changed, minigame.session.resolved) trong khi RealtimeEvents ở libs/common-dtos/src/lib/realtime-events.ts có 26 tên; file nguồn TS mới là hợp đồng đầy đủ (docs cũng nói vậy).",
+  "docs/services/realtime-gateway.md § 2 liệt kê match.matched nhưng KHÔNG tìm thấy RealtimeEvents.MatchMatched được publish ở bất kỳ nơi nào trong apps/core-api/src (chỉ matching.metrics.ts nhắc trong comment): tên event có trong hợp đồng nhưng hiện chưa có producer. Ngược lại party.member.disconnected/reconnected, party.speaker.invite.received, party.comment.created có producer trong code nhưng chưa nằm trong danh sách event của doc.",
+  "Bảng producer ở docs § 4 không có movie-match và mini-game; code thực tế có cả hai (movie.* và minigame.*), cùng friend.streak.* (kể cả job streak-warning.job.ts) và party.* nhiều hơn doc.",
+  "Doc § 5 nói 'Socket chết được dọn bởi ping/pong mặc định của Socket.IO'; code còn có thêm lease refresh mỗi leaseMs/3 và tự disconnect khi refresh thất bại hoặc Redis quota mất kết nối (fail closed).",
+  "Redis adapter (@socket.io/redis-adapter) hiện KHÔNG cần cho relay: mỗi pod tự PSUBSCRIBE toàn bộ realtime:user:* và emit vào room cục bộ; adapter chỉ mở đường cho broadcast xuyên pod và vẫn nằm trong readiness /health/ready.",
+  "Không có dossier AST cho service này (không phải module core-api): endpoint chính (handshake, ping, relay) được thêm tay từ signaling.gateway.ts.",
+  "Quota tối đa schema ràng buộc 1..3 (WS_MAX_CONNECTIONS_PER_USER, mặc định 3)."
+ ],
+ "techniques": [
+  {
+   "slug": "ws-handshake-auth",
+   "name": "Xác thực JWT lúc handshake WebSocket",
+   "model": "Handshake auth",
+   "how": "Xác minh JWT ngay lúc bắt tay WebSocket; không hợp lệ thì từ chối kết nối.",
+   "why": "Không tồn tại socket vô danh; room lấy từ sub đã xác minh chứ không từ client.",
+   "endpoints": [
+    "e50",
+    "e51"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/signaling-gateway/src/app/signaling.gateway.ts",
+     "line": 150,
+     "quote": "handleConnection(client: Socket): void {"
+    }
+   ],
+   "auto": true,
+   "count": 2,
+   "id": "t1",
+   "local": "SignalingGateway chạy middleware server.use verify handshake.auth.token bằng authenticate() trước khi thành socket; handleConnection chỉ xử lý socket đã có userId."
+  },
+  {
+   "slug": "jwt-bearer",
+   "name": "JWT bearer (access token không trạng thái)",
+   "model": "JWT bearer",
+   "how": "Client gửi access token (JWT) trong header Authorization; guard xác minh chữ ký và hạn rồi gắn user vào request, server không giữ phiên.",
+   "why": "Không trạng thái nên scale ngang dễ và không phải tra DB mỗi request; đánh đổi là không thu hồi tức thì trước khi token hết hạn.",
+   "alternative": "Session phía server (cookie + kho phiên) thu hồi được tức thì nhưng cần kho phiên dùng chung.",
+   "endpoints": [
+    "e50"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/signaling-gateway/src/app/signaling.gateway.ts",
+     "line": 69,
+     "quote": "private readonly jwtService: JwtService,"
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "id": "t2",
+   "local": "Gateway inject JwtService và verifyAsync access token (JWT_SECRET dùng chung với core-api, chỉ verify, không ký), lấy userId từ payload.sub."
+  },
+  {
+   "id": "t3",
+   "slug": "server-authoritative",
+   "name": "Server là nguồn sự thật về giá/quyền (client không quyết)",
+   "model": "Server quyết định",
+   "how": "Giá, số dư, trạng thái và quyền do server tính; client chỉ gửi ý định.",
+   "why": "Client có thể bị sửa nên mọi thứ liên quan tiền hoặc quyền phải do server quyết.",
+   "endpoints": [
+    "e50",
+    "e52"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/signaling-gateway/src/app/signaling.gateway.ts",
+     "line": 173,
+     "quote": "void client.join(userRoom(userId));"
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "local": "Room user:{userId} do server gán từ payload.sub của JWT đã verify; client không gửi room/event nào ngoài ping, nên không thể nghe event của user khác.",
+   "addedByLogicReview": true
+  },
+  {
+   "id": "t4",
+   "slug": "derived-state",
+   "name": "Trạng thái suy ra từ dữ liệu gốc/thời gian (không lưu cờ)",
+   "model": "Trạng thái suy ra",
+   "how": "Trạng thái được tính lại từ dữ liệu gốc và giờ server mỗi lần đọc, không lưu cờ.",
+   "why": "Không cần timer hay job để chuyển trạng thái và không có cờ bị lệch.",
+   "endpoints": [
+    "e50"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/user/redis/redis-presence-reader.adapter.ts",
+     "line": 16,
+     "quote": "return (await this.redis.zcard(key)) > 0;"
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "local": "Presence không lưu cờ online: isOnline suy từ ZSET realtime:presence:{userId} do lease ghi, xoá member hết hạn rồi zcard > 0; lỗi Redis trả false (fail closed).",
+   "addedByLogicReview": true
+  },
+  {
+   "id": "t5",
+   "slug": "socketio-rooms",
+   "name": "Socket.IO room theo user",
+   "model": "Room theo user",
+   "how": "Mỗi socket join room theo user id đã xác thực; tin được phát tới room.",
+   "why": "Gửi đúng người nhận và nhiều thiết bị cùng nhận.",
+   "endpoints": [
+    "e50",
+    "e52"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/signaling-gateway/src/app/signaling.gateway.ts",
+     "line": 332,
+     "quote": "this.server.local.to(userRoom(userId)).emit(envelope.event, envelope.data);"
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "local": "Namespace /signaling: handleConnection join socket vào room user:{userId}; relay() emit envelope.event/data vào đúng room, channel lạ hoặc JSON hỏng bị bỏ qua.",
+   "addedByLogicReview": true
+  },
+  {
+   "slug": "redis-pubsub-fanout",
+   "name": "Redis pub/sub fanout (at-most-once, không replay)",
+   "model": "Pub/Sub",
+   "how": "core-api PUBLISH lên kênh realtime:user:{id}; gateway PSUBSCRIBE rồi đẩy xuống socket; không lưu, không replay.",
+   "why": "Sự kiện chỉ là gợi ý còn REST là nguồn sự thật nên at-most-once là đủ và rất rẻ.",
+   "alternative": "Redis Streams hoặc Kafka bền và replay được nhưng cần consumer group + ack: thừa với tin gợi ý.",
+   "endpoints": [
+    "e52"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/signaling-gateway/src/app/signaling.gateway.ts",
+     "line": 14,
+     "quote": "REALTIME_USER_CHANNEL_PATTERN,"
+    }
+   ],
+   "auto": true,
+   "count": 2,
+   "id": "t6",
+   "local": "Gateway subscribe pattern REALTIME_USER_CHANNEL_PATTERN từ Redis và relay envelope sang socket; tin mất thì client đọc lại bằng REST."
+  },
+  {
+   "id": "t7",
+   "slug": "redis-ttl-lease",
+   "name": "Lease có TTL trong Redis (quota, presence)",
+   "model": "Lease",
+   "how": "Khoá hoặc quota có TTL, phải gia hạn định kỳ; chết thì tự hết hạn.",
+   "why": "Không cần dọn thủ công khi tiến trình chết.",
+   "endpoints": [
+    "e50"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/signaling-gateway/src/app/signaling.gateway.ts",
+     "line": 300,
+     "quote": "Math.floor(this.connectionQuota.leaseMs / 3),"
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "local": "Mỗi socket có lease leaseId TTL WS_CONNECTION_LEASE_MS trong ZSET; setInterval refresh mỗi leaseMs/3, refresh thất bại thì ngắt socket, TTL giải phóng slot khi pod chết.",
+   "addedByLogicReview": true
+  },
+  {
+   "id": "t8",
+   "slug": "redis-lua-atomic",
+   "name": "Lua script nguyên tử trong Redis",
+   "model": "Lua nguyên tử",
+   "how": "Script Lua chạy nguyên tử trong Redis: nhiều lệnh không bị xen giữa.",
+   "why": "Rate limit và lease cần đọc-so sánh-ghi không race.",
+   "endpoints": [
+    "e50"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/signaling-gateway/src/app/connection-quota.service.ts",
+     "line": 126,
+     "quote": "const result = await this.redis.eval("
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "local": "ACQUIRE_SCRIPT chạy redis.eval với 2 key (quota và presence): xoá lease hết hạn theo redis TIME, nếu ZCARD đã bằng WS_MAX_CONNECTIONS_PER_USER thì trả 0, nên đếm đúng xuyên replica.",
+   "addedByLogicReview": true
+  },
+  {
+   "id": "t9",
+   "slug": "socketio-redis-adapter",
+   "name": "Socket.IO Redis adapter (nhiều instance)",
+   "model": "Redis adapter",
+   "how": "Adapter Redis đồng bộ việc phát tin giữa nhiều instance gateway.",
+   "why": "Scale ngang gateway theo số kết nối.",
+   "endpoints": [
+    "e52"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/signaling-gateway/src/app/redis-adapter.service.ts",
+     "line": 46,
+     "quote": "return createAdapter(this.pubClient, this.subClient);"
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "local": "main.ts gắn createAdapter(pubClient, subClient) vào CorsIoAdapter trước listen; server.to(room).emit tới được socket ở pod khác, readiness /health/ready đòi adapter ready.",
+   "addedByLogicReview": true
+  },
+  {
+   "slug": "redis-ttl-lease",
+   "name": "Lease có TTL trong Redis (quota, presence)",
+   "model": "Lease",
+   "how": "Khoá hoặc quota có TTL, phải gia hạn định kỳ; chết thì tự hết hạn.",
+   "why": "Không cần dọn thủ công khi tiến trình chết.",
+   "endpoints": [],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/signaling-gateway/src/app/connection-quota.service.ts",
+     "line": 72,
+     "quote": "readonly leaseMs: number;"
+    },
+    {
+     "file": "apps/signaling-gateway/src/app/signaling.gateway.ts",
+     "line": 120,
+     "quote": "leases.map(([leaseId, { userId, timer, client }]) => {"
+    }
+   ],
+   "auto": true,
+   "count": 26,
+   "id": "t10",
+   "local": "ConnectionQuotaService giữ lease với leaseMs trong Redis, gateway refresh định kỳ theo leaseId và release khi đóng; TTL là lưới an toàn cuối."
+  },
+  {
+   "slug": "redis-lua-atomic",
+   "name": "Lua script nguyên tử trong Redis",
+   "model": "Lua nguyên tử",
+   "how": "Script Lua chạy nguyên tử trong Redis: nhiều lệnh không bị xen giữa.",
+   "why": "Rate limit và lease cần đọc-so sánh-ghi không race.",
+   "endpoints": [],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/signaling-gateway/src/app/connection-quota.service.ts",
+     "line": 126,
+     "quote": "const result = await this.redis.eval("
+    }
+   ],
+   "auto": true,
+   "count": 3,
+   "id": "t11",
+   "local": "ConnectionQuotaService.acquire chạy redis.eval(ACQUIRE_SCRIPT, 2, key...) để kiểm tra giới hạn và cấp lease nguyên tử, dùng redis TIME."
+  },
+  {
+   "slug": "socketio-rooms",
+   "name": "Socket.IO room theo user",
+   "model": "Room theo user",
+   "how": "Mỗi socket join room theo user id đã xác thực; tin được phát tới room.",
+   "why": "Gửi đúng người nhận và nhiều thiết bị cùng nhận.",
+   "endpoints": [],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/signaling-gateway/src/app/signaling.gateway.ts",
+     "line": 45,
+     "quote": "@WebSocketGateway({ namespace: '/signaling' })"
+    }
+   ],
+   "auto": true,
+   "count": 2,
+   "id": "t12",
+   "local": "@WebSocketGateway({ namespace: '/signaling' }) đưa mỗi socket vào room user:{userId} của chính nó, không nhận room từ client."
+  },
+  {
+   "slug": "socketio-redis-adapter",
+   "name": "Socket.IO Redis adapter (nhiều instance)",
+   "model": "Redis adapter",
+   "how": "Adapter Redis đồng bộ việc phát tin giữa nhiều instance gateway.",
+   "why": "Scale ngang gateway theo số kết nối.",
+   "endpoints": [],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/signaling-gateway/src/app/redis-adapter.service.ts",
+     "line": 46,
+     "quote": "return createAdapter(this.pubClient, this.subClient);"
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "id": "t13",
+   "local": "RedisAdapterService dựng createAdapter(pubClient, subClient) cho Socket.IO để nhiều replica gateway cùng phát tới socket của một user."
+  },
+  {
+   "id": "t14",
+   "slug": "interval-worker",
+   "name": "Worker lặp (interval / ManagedInterval)",
+   "model": "Worker lặp",
+   "how": "Vòng lặp theo chu kỳ trong process (ManagedInterval).",
+   "why": "Worker nền đơn giản, không cần hạ tầng queue riêng.",
+   "endpoints": [
+    "e50"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/signaling-gateway/src/app/signaling.gateway.ts",
+     "line": 287,
+     "quote": "const timer = setInterval("
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "local": "startLeaseRefresh tạo setInterval (unref) theo từng socket gọi connectionQuota.refresh(userId, leaseId); dừng ở handleDisconnect hoặc onModuleDestroy.",
+   "addedByLogicReview": true
+  },
+  {
+   "slug": "interval-worker",
+   "name": "Worker lặp (interval / ManagedInterval)",
+   "model": "Worker lặp",
+   "how": "Vòng lặp theo chu kỳ trong process (ManagedInterval).",
+   "why": "Worker nền đơn giản, không cần hạ tầng queue riêng.",
+   "endpoints": [],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/signaling-gateway/src/app/signaling.gateway.ts",
+     "line": 277,
+     "quote": "const timer = setInterval("
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "id": "t15",
+   "local": "Mỗi kết nối có setInterval gọi connectionQuota.refresh(userId, leaseId) để gia hạn lease cho tới khi disconnect."
+  },
+  {
+   "slug": "quota-lease",
+   "name": "Quota kết nối bằng lease",
+   "model": "Quota lease",
+   "how": "Mỗi kết nối giữ một lease trong Redis; vượt hạn mức thì từ chối.",
+   "why": "Giới hạn số kết nối mỗi user trên toàn cụm.",
+   "endpoints": [
+    "e50"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/signaling-gateway/src/app/app.module.ts",
+     "line": 42,
+     "quote": "ConnectionQuotaService,"
+    },
+    {
+     "file": "apps/signaling-gateway/src/app/connection-quota.service.ts",
+     "line": 15,
+     "quote": "const QUOTA_KEY_PREFIX = 'signaling:connection-quota:';"
+    },
+    {
+     "file": "apps/signaling-gateway/src/app/signaling.gateway.ts",
+     "line": 71,
+     "quote": "private readonly connectionQuota: ConnectionQuotaService,"
+    }
+   ],
+   "auto": true,
+   "count": 17,
+   "id": "t16",
+   "local": "WS_MAX_CONNECTIONS_PER_USER được thực thi bằng ConnectionQuotaService lease theo key signaling:connection-quota:{userId} dùng chung giữa các replica."
+  },
+  {
+   "slug": "fail-closed",
+   "name": "Lỗi thì chặn (fail closed)",
+   "model": "Fail closed",
+   "how": "Khi thành phần kiểm tra lỗi thì từ chối thay vì cho qua.",
+   "why": "An toàn hơn khi mất Redis hoặc quota.",
+   "endpoints": [
+    "e50"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/signaling-gateway/src/app/signaling.gateway.ts",
+     "line": 36,
+     "quote": "const CONNECTION_QUOTA_UNAVAILABLE_ERROR = 'CONNECTION_QUOTA_UNAVAILABLE';"
+    }
+   ],
+   "auto": true,
+   "count": 5,
+   "id": "t17",
+   "local": "Redis lỗi hoặc đang shutdown thì từ chối kết nối với CONNECTION_QUOTA_UNAVAILABLE thay vì cho qua; hết quota trả CONNECTION_LIMIT."
+  },
+  {
+   "slug": "best-effort-degrade",
+   "name": "Best-effort: lỗi phụ không phá nghiệp vụ chính",
+   "model": "Best-effort",
+   "how": "Việc phụ (push, realtime) lỗi chỉ ghi log, không phá nghiệp vụ chính.",
+   "why": "Nghiệp vụ đã commit không nên hỏng vì kênh phụ.",
+   "endpoints": [
+    "e52"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/signaling-gateway/src/app/signaling.gateway.ts",
+     "line": 245,
+     "quote": "// the final safety net when Redis is too unavailable for this best-effort cleanup."
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "id": "t18",
+   "local": "Khi acquire lỗi hoặc disconnect, release lease là best-effort (.catch rỗng hoặc chỉ warn); TTL WS_CONNECTION_LEASE_MS là lưới an toàn khi Redis không khả dụng (áp cho e50)."
+  },
+  {
+   "id": "t19",
+   "slug": "cors-allowlist",
+   "name": "CORS allowlist chính xác",
+   "model": "CORS allowlist",
+   "how": "Chỉ origin trong danh sách chính xác mới được gọi cross-site.",
+   "why": "Cookie khác site chỉ an toàn khi origin được liệt kê đúng.",
+   "endpoints": [
+    "e50"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/signaling-gateway/src/app/cors-io.adapter.ts",
+     "line": 28,
+     "quote": "origin: this.allowedOrigins.length > 0 ? this.allowedOrigins : false,"
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "local": "CorsIoAdapter đặt cors.origin = allowedOrigins (từ CORS_ORIGINS) hoặc false khi danh sách rỗng, áp cho cả polling và WebSocket handshake.",
+   "addedByLogicReview": true
+  },
+  {
+   "slug": "cors-allowlist",
+   "name": "CORS allowlist chính xác",
+   "model": "CORS allowlist",
+   "how": "Chỉ origin trong danh sách chính xác mới được gọi cross-site.",
+   "why": "Cookie khác site chỉ an toàn khi origin được liệt kê đúng.",
+   "endpoints": [],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/signaling-gateway/src/app/cors-io.adapter.ts",
+     "line": 14,
+     "quote": "private readonly allowedOrigins: string[],"
+    },
+    {
+     "file": "apps/signaling-gateway/src/config/env.validation.ts",
+     "line": 15,
+     "quote": "CORS_ORIGINS: string;"
+    },
+    {
+     "file": "apps/signaling-gateway/src/main.ts",
+     "line": 34,
+     "quote": ".getOrThrow('CORS_ORIGINS', { infer: true })"
+    }
+   ],
+   "auto": true,
+   "count": 6,
+   "id": "t20",
+   "local": "CorsIoAdapter nhận allowedOrigins từ env CORS_ORIGINS để chỉ cho phép origin trong allowlist ở handshake Socket.IO."
+  },
+  {
+   "id": "t21",
+   "slug": "health-readiness",
+   "name": "Liveness / readiness probe",
+   "model": "Probe",
+   "how": "Liveness và readiness probe cho orchestrator.",
+   "why": "K8s biết khi nào gửi traffic hoặc khởi động lại.",
+   "endpoints": [
+    "e1",
+    "e2",
+    "e3"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/signaling-gateway/src/app/health.controller.ts",
+     "line": 25,
+     "quote": "@Get('ready')"
+    }
+   ],
+   "auto": true,
+   "count": 3,
+   "local": "/health/ready kiểm signaling.isReady() (subscriber ready, PSUBSCRIBE xong, quota Redis ready) và redisAdapter.isReady(), fail thì 503; /health và /health/live không kiểm Redis."
+  },
+  {
+   "slug": "structured-logging",
+   "name": "Log có cấu trúc (pino)",
+   "model": "Log JSON",
+   "how": "Log có cấu trúc dạng JSON bằng pino thay vì chuỗi tự do.",
+   "why": "Truy vết và tìm kiếm log theo từng trường thay vì đọc chuỗi tự do.",
+   "endpoints": [],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/signaling-gateway/src/app/app.module.ts",
+     "line": 24,
+     "quote": "pinoHttp: buildPinoHttpOptions({"
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "id": "t22",
+   "local": "LoggerModule.forRootAsync dùng buildPinoHttpOptions với level theo LOG_LEVEL và pretty chỉ ở development để log pino có cấu trúc."
+  }
+ ]
+}

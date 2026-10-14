@@ -1,0 +1,392 @@
+{
+ "id": "media",
+ "title": "Media (uploads)",
+ "tagline": "Presigned upload ảnh, xác thực asset",
+ "deployable": "core-api",
+ "role": "Cấp presigned PUT URL để client upload ảnh thẳng lên object storage và là nơi DUY NHẤT xác nhận asset hợp lệ (đúng chủ, đúng purpose, đã upload, MIME/size khớp magic bytes) trước khi Feed/Friend lưu URL ảnh. Không nhận body binary, không phải LiveKit media-server, không xử lý video (Short Video có VideoStoragePort riêng).",
+ "owns": [
+  "bảng image_assets (ownerUserId, status pending/ready, purpose, contentType, sizeBytes, storageKey)",
+  "object key quarantine rồi key final bất biến trên S3/R2/MinIO"
+ ],
+ "confidence": "high",
+ "endpoints": [
+  {
+   "id": "e1",
+   "kind": "rest",
+   "method": "POST",
+   "path": "/api/v1/media/images/upload-intent",
+   "purpose": "Xin presigned PUT URL + assetId (purpose post/message/story); kiểm content type cho phép, sizeBytes <= MEDIA_IMAGE_MAX_BYTES, chặn guest.",
+   "auth": "jwt",
+   "file": "apps/core-api/src/modules/media/media.controller.ts",
+   "line": 24,
+   "quote": "@Post('images/upload-intent')"
+  }
+ ],
+ "collaborators": [
+  {
+   "id": "c1",
+   "label": "image_assets: owner/status",
+   "what": "Ghi hàng image_assets khi cấp intent (status pending, ownerUserId, storageKey quarantine) và đọc/cập nhật khi resolveImageUrl (kiểm owner + purpose, chuyển sang ready với key final).",
+   "why": "Lúc gắn ảnh vào Post/Story/Chat phải chứng minh asset thuộc đúng caller, đúng purpose và đã được kiểm tra; trạng thái đó chỉ bền vững nếu nằm trong DB, không thể tin client.",
+   "ifMissing": "Không xác thực được quyền sở hữu asset: user có thể dùng assetId của người khác hoặc asset chưa upload/chưa kiểm tra.",
+   "with": "postgres",
+   "withKind": "infra",
+   "direction": "out",
+   "mechanism": "shared-db",
+   "endpoints": [
+    "e1"
+   ],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/media/entities/image-asset.entity.ts",
+     "line": 6,
+     "quote": "@Entity({ name: 'image_assets' })"
+    }
+   ],
+   "review": {
+    "verdict": "supported"
+   },
+   "logic": {
+    "verdict": "sound",
+    "note": "image_assets lưu ownerUserId, purpose, status pending; resolveImageUrl lọc theo owner và purpose rồi set ready. Với provider dev không kiểm object."
+   }
+  },
+  {
+   "id": "c2",
+   "label": "resolveImageUrl (Post/Story)",
+   "what": "FeedController (đăng Post) và StoryController (đăng Story) gọi MediaService.resolveImageUrl(userId, assetId, purpose) để đổi assetId thành URL final đã kiểm chứng trước khi tạo nội dung.",
+   "why": "DTO của Post/Story chỉ nhận assetId chứ không nhận URL; việc đổi sang URL phải đi qua Media để kiểm owner/purpose/status/object trên storage, nên Feed bắt buộc phối hợp với Media ở bước tạo nội dung.",
+   "ifMissing": "Feed phải tin URL do client gửi, bỏ qua kiểm tra chủ sở hữu và quarantine: có thể gắn ảnh người khác hoặc URL ngoài kiểm soát.",
+   "with": "feed",
+   "withKind": "service",
+   "direction": "in",
+   "mechanism": "di-call",
+   "endpoints": [
+    "e1"
+   ],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/feed/controllers/story.controller.ts",
+     "line": 57,
+     "quote": "? await this.mediaService.resolveImageUrl("
+    },
+    {
+     "file": "apps/core-api/src/modules/feed/feed.controller.ts",
+     "line": 66,
+     "quote": "? await this.mediaService.resolveImageUrl("
+    }
+   ],
+   "basis": "ast",
+   "logic": {
+    "verdict": "sound",
+    "note": "Story/Feed controller gọi resolveImageUrl với đúng purpose; guest bỏ qua bước resolve và bị service từ chối."
+   }
+  },
+  {
+   "id": "c3",
+   "label": "resolveImageUrl (chat)",
+   "what": "FriendController gọi MediaService.resolveImageUrl cho ảnh gửi trong chat 1-1 (purpose message) trước khi lưu message.",
+   "why": "Ảnh chat cũng chỉ được nhận qua assetId đã upload của chính người gửi, cùng một chốt chặn với Post/Story để không có đường tắt nhận URL tuỳ ý.",
+   "ifMissing": "Người dùng có thể nhét URL ảnh bất kỳ vào tin nhắn, vượt qua kiểm soát nội dung/quyền sở hữu.",
+   "with": "friend",
+   "withKind": "service",
+   "direction": "in",
+   "mechanism": "di-call",
+   "endpoints": [
+    "e1"
+   ],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/friend/friend.controller.ts",
+     "line": 210,
+     "quote": "? await this.mediaService.resolveImageUrl("
+    }
+   ],
+   "basis": "ast",
+   "logic": {
+    "verdict": "sound",
+    "note": "FriendController dùng ImageAssetPurpose.Message; cùng chốt chặn owner/purpose với Post/Story."
+   }
+  },
+  {
+   "id": "c50",
+   "with": "external:object-storage",
+   "withKind": "external",
+   "direction": "out",
+   "mechanism": "sdk",
+   "endpoints": [
+    "e1"
+   ],
+   "label": "presigned PUT + promote",
+   "what": "Ký presigned PUT URL (getSignedUrl + PutObjectCommand) cho key quarantine; khi resolveImageUrl: head + readPrefix(4096 byte) kiểm size/MIME/magic bytes rồi CopyObject sang key final xác định images/{owner}/{asset} và xoá key cũ (S3/R2/MinIO theo MEDIA_STORAGE_PROVIDER; provider dev bỏ qua kiểm tra).",
+   "why": "Body ảnh không được đi qua core-api (tốn băng thông, dễ bị DoS) nên storage giữ file; nhưng chỉ storage mới biết object có thật, kích thước và nội dung thật, nên core-api bắt buộc hỏi lại storage trước khi công bố URL final.",
+   "ifMissing": "Client phải gửi URL ảnh tuỳ ý hoặc core-api phải nhận binary: mở đường cho ảnh độc hại/URL ngoài kiểm soát và làm core-api nghẽn vì upload.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/media/ports/s3-image-storage.provider.ts",
+     "line": 101,
+     "quote": "const uploadUrl = await getSignedUrl("
+    },
+    {
+     "file": "apps/core-api/src/modules/media/media.service.ts",
+     "line": 114,
+     "quote": "await this.storage.promote(asset.storageKey, finalStorageKey);"
+    }
+   ],
+   "review": {
+    "verdict": "partial",
+    "note": "Chưa xác nhận head+readPrefix kiểm size/MIME/magic bytes và CopyObject xoá key cũ; chỉ thấy getSignedUrl PutObjectCommand và storage.promote."
+   },
+   "logic": {
+    "verdict": "corrected",
+    "note": "Key final chỉ xác định chứ không bất biến (không có object-lock); provider dev bỏ qua head/magic bytes. head, readPrefix và Copy rồi Delete đã xác nhận."
+   }
+  },
+  {
+   "id": "c51",
+   "with": "web",
+   "withKind": "client",
+   "direction": "in",
+   "mechanism": "http",
+   "endpoints": [
+    "e1"
+   ],
+   "label": "xin intent rồi PUT thẳng",
+   "what": "apps/web gọi POST upload-intent, rồi putPresignedFile PUT file thẳng tới uploadUrl với đúng Content-Type đã khai báo, cuối cùng gửi assetId (không gửi URL) vào endpoint Post/Story/Chat.",
+   "why": "Presigned URL chỉ ký Content-Type nên client phải PUT đúng type đã khai báo; sizeBytes không được ký nên kích thước/MIME/magic bytes chỉ bị chặn khi resolveImageUrl (ASSET_NOT_READY 422). core-api chỉ tin assetId nên client phải làm đủ 3 bước: xin intent, PUT file, gắn assetId.",
+   "ifMissing": "Không có file trên storage nên resolveImageUrl trả 422; hoặc client gửi URL tự do bị DTO từ chối.",
+   "evidence": [
+    {
+     "file": "apps/web/src/shared/media/image-upload.ts",
+     "line": 44,
+     "quote": "await putPresignedFile({"
+    }
+   ],
+   "review": {
+    "verdict": "supported"
+   },
+   "logic": {
+    "verdict": "corrected",
+    "note": "Size không nằm trong chữ ký presigned; storage không từ chối theo size, resolveImageUrl mới chặn bằng ASSET_NOT_READY 422."
+   }
+  }
+ ],
+ "waivedEdges": [],
+ "excludedRoutes": [],
+ "notes": [
+  "Short Video KHÔNG dùng module Media: nó có VideoStoragePort riêng và endpoint upload-intent riêng (short-video.controller.ts).",
+  "Với MEDIA_STORAGE_PROVIDER=dev, resolveImageUrl bỏ qua head/promote/kiểm magic bytes và chỉ đổi storageKey sang key final rồi đánh dấu Ready (media.service.ts:119-125); provider dev bị chặn ở production nên kiểm tra thật chỉ có với r2/s3/minio.",
+  "resolveImageUrl được controller Feed/Story/Friend gọi TRƯỚC khi tạo nội dung và nằm ngoài transaction tạo nội dung: asset có thể chuyển sang Ready/đã promote rồi mới tạo nội dung thất bại, asset đó vẫn còn nhưng chưa gắn vào đâu.",
+  "createUploadIntent chặn guest (assertNotGuest); story controller cũng bỏ qua ảnh nếu user là guest.",
+  "Doc media-service.md khớp code ở các điểm chính (quarantine, magic bytes, promote); không thấy lệch."
+ ],
+ "techniques": [
+  {
+   "id": "t1",
+   "slug": "other:magic-byte-sniffing",
+   "name": "Kiểm magic bytes ảnh",
+   "how": "Asset do e1 cấp chỉ thành ready khi resolveImageUrl đọc 4096 byte đầu và detectImageMime (png/jpeg/gif/webp) khớp contentType đã khai báo; sai thì xoá object và trả ASSET_NOT_READY 422.",
+   "why": "Asset do e1 cấp chỉ thành ready khi resolveImageUrl đọc 4096 byte đầu và detectImageMime (png/jpeg/gif/webp) khớp contentType đã khai báo; sai thì xoá object và trả ASSET_NOT_READY 422.",
+   "endpoints": [
+    "e1"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/media/media.service.ts",
+     "line": 150,
+     "quote": "this.detectImageMime(prefix) !== asset.contentType"
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "local": "Asset do e1 cấp chỉ thành ready khi resolveImageUrl đọc 4096 byte đầu và detectImageMime (png/jpeg/gif/webp) khớp contentType đã khai báo; sai thì xoá object và trả ASSET_NOT_READY 422.",
+   "addedByLogicReview": true
+  },
+  {
+   "slug": "jwt-bearer",
+   "name": "JWT bearer (access token không trạng thái)",
+   "model": "JWT bearer",
+   "how": "Client gửi access token (JWT) trong header Authorization; guard xác minh chữ ký và hạn rồi gắn user vào request, server không giữ phiên.",
+   "why": "Không trạng thái nên scale ngang dễ và không phải tra DB mỗi request; đánh đổi là không thu hồi tức thì trước khi token hết hạn.",
+   "alternative": "Session phía server (cookie + kho phiên) thu hồi được tức thì nhưng cần kho phiên dùng chung.",
+   "endpoints": [
+    "e1"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/app/app.module.ts",
+     "line": 117,
+     "quote": "{ provide: APP_GUARD, useClass: JwtAuthGuard },"
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "id": "t2",
+   "local": "Mọi endpoint của service được bảo vệ bởi `JwtAuthGuard` đăng ký qua `APP_GUARD` toàn cục trong app.module.ts, nên cần bearer JWT hợp lệ mới vào được controller."
+  },
+  {
+   "slug": "abac-attribute-policy",
+   "name": "ABAC theo thuộc tính (guest, ban, VIP, giới tính, tuổi…)",
+   "model": "ABAC",
+   "how": "Quyết định dựa trên thuộc tính của người dùng hoặc tài nguyên như guest, bị ban, hạng VIP, giới tính, tuổi.",
+   "why": "Nghiệp vụ có quy tắc theo ngữ cảnh mà vai trò đơn thuần không diễn đạt được.",
+   "alternative": "Policy engine (OPA/Casbin/CASL) tách chính sách khỏi mã nhưng thêm thành phần vận hành.",
+   "endpoints": [
+    "e1"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/media/media.service.ts",
+     "line": 225,
+     "quote": "if (user.isGuest) {"
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "id": "t3",
+   "local": "`assertNotGuest(user)` ném `MediaErrors.GUEST_FORBIDDEN` khi `user.isGuest`, guest không được xin upload ảnh."
+  },
+  {
+   "id": "t4",
+   "slug": "ownership-check",
+   "name": "Kiểm tra quyền sở hữu tài nguyên",
+   "model": "Kiểm tra chủ sở hữu",
+   "how": "So userId của tài nguyên với userId người gọi trước khi đọc hoặc sửa.",
+   "why": "Ngăn IDOR: không thao tác được trên tài nguyên của người khác bằng cách đoán id.",
+   "endpoints": [
+    "e1"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/media/media.service.ts",
+     "line": 86,
+     "quote": "where: { id: assetId, ownerUserId },"
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "local": "assetId do e1 gắn với ownerUserId; resolveImageUrl tìm theo {id, ownerUserId} và kiểm purpose, sai thì ASSET_NOT_FOUND 404 (không phân biệt asset không có hay của người khác).",
+   "addedByLogicReview": true
+  },
+  {
+   "slug": "unique-constraint-guard",
+   "name": "Ràng buộc unique ở DB làm chốt chặn cuối",
+   "model": "Ràng buộc DB",
+   "how": "Ràng buộc unique hoặc index duy nhất ở DB là chốt chặn cuối cho trùng lặp.",
+   "why": "Check-rồi-insert ở tầng code vẫn dính race; DB mới bảo đảm tuyệt đối.",
+   "endpoints": [],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/media/entities/image-asset.entity.ts",
+     "line": 13,
+     "quote": "@Column({ type: 'varchar', length: 1024, unique: true })"
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "id": "t5",
+   "local": "Cột `storageKey` của `ImageAsset` có `unique: true` đảm bảo mỗi object storage chỉ gắn một asset."
+  },
+  {
+   "slug": "rate-limit-throttler",
+   "name": "Rate limit (@nestjs/throttler)",
+   "model": "Rate limit",
+   "how": "@Throttle giới hạn số request theo khoảng thời gian cho từng route.",
+   "why": "Chặn spam và dò quét bằng cách giới hạn số request theo thời gian, trước khi request tới logic nghiệp vụ.",
+   "endpoints": [
+    "e1"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/app/app.module.ts",
+     "line": 116,
+     "quote": "{ provide: APP_GUARD, useClass: ThrottlerGuard },"
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "id": "t6",
+   "local": "Giới hạn tốc độ qua `ThrottlerGuard` đăng ký `APP_GUARD` toàn cục, chạy trước JwtAuthGuard; áp cho mọi route của service."
+  },
+  {
+   "slug": "presigned-upload",
+   "name": "Upload presigned thẳng lên object storage",
+   "model": "Presigned URL",
+   "how": "Server cấp URL ký sẵn; client upload thẳng lên object storage.",
+   "why": "Body lớn không đi qua core-api.",
+   "endpoints": [
+    "e1"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/media/media.controller.ts",
+     "line": 24,
+     "quote": "@Post('images/upload-intent')"
+    },
+    {
+     "file": "apps/core-api/src/modules/media/media.service.ts",
+     "line": 37,
+     "quote": "async createUploadIntent("
+    },
+    {
+     "file": "apps/core-api/src/modules/media/ports/s3-image-storage.provider.ts",
+     "line": 101,
+     "quote": "const uploadUrl = await getSignedUrl("
+    }
+   ],
+   "auto": true,
+   "count": 5,
+   "id": "t7",
+   "local": "createUploadIntent trả presigned PUT (getSignedUrl, ký ContentType, TTL MEDIA_UPLOAD_URL_TTL_SECONDS); sizeBytes không được ký nên kích thước/MIME được kiểm lại bằng head + readPrefix khi resolveImageUrl."
+  },
+  {
+   "slug": "openapi-contract",
+   "name": "Hợp đồng OpenAPI + client sinh tự động",
+   "model": "OpenAPI",
+   "how": "OpenAPI sinh từ code và client TypeScript sinh tự động.",
+   "why": "Client và server không lệch hợp đồng.",
+   "endpoints": [
+    "e1"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/media/media.controller.ts",
+     "line": 25,
+     "quote": "@ApiOperation({"
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "id": "t8",
+   "local": "`@ApiOperation` và `@ApiCreatedResponse({ type: ImageUploadIntentDto })` mô tả hợp đồng OpenAPI của upload-intent."
+  },
+  {
+   "slug": "quarantine-promote",
+   "name": "Quarantine → promote (kiểm trước khi công bố)",
+   "model": "Cách ly rồi duyệt",
+   "how": "Object upload nằm ở khu cách ly, kiểm xong mới chuyển sang key công khai.",
+   "why": "Không công bố file chưa kiểm.",
+   "endpoints": [],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/media/media.service.ts",
+     "line": 114,
+     "quote": "await this.storage.promote(asset.storageKey, finalStorageKey);"
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "id": "t9",
+   "local": "resolveImageUrl: assertUploadedImage (head + magic bytes) rồi storage.promote (CopyObject sang images/{owner}/{asset} + xoá key cũ), status sang ready; với MEDIA_STORAGE_PROVIDER=dev bước kiểm/promote bị bỏ qua."
+  }
+ ]
+}

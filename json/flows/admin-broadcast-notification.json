@@ -1,0 +1,42 @@
+{
+ "id": "admin-broadcast-notification",
+ "title": "Admin gửi thông báo hàng loạt",
+ "summary": "Admin broadcast thông báo tới mọi user active: Admin điều phối, User cấp danh sách người nhận, Economy cấp danh sách VIP để lọc audience, Notification ghi thông báo theo lô rồi đẩy push, vì mỗi module chỉ được đọc/ghi dữ liệu của mình.",
+ "caption": "Admin lấy người nhận từ User/Economy, ghi thông báo và audit trong một transaction, rồi mới đẩy push best-effort qua Notification.",
+ "participants": [
+  {"id": "admin-console", "label": "Admin console", "kind": "client"},
+  {"id": "admin", "label": "Admin", "kind": "service"},
+  {"id": "user", "label": "User", "kind": "service"},
+  {"id": "economy", "label": "Economy", "kind": "service"},
+  {"id": "notification", "label": "Notification", "kind": "service"},
+  {"id": "postgres", "label": "PostgreSQL", "kind": "infra"}
+ ],
+ "steps": [
+  {"from": "admin-console", "to": "admin", "label": "POST /admin/notifications/broadcast (title, body, audience)", "kind": "call", "mechanism": "http", "note": "Route cần quyền ManageConfig qua @RequireAdminPermission.", "evidence": [{"file": "apps/core-api/src/modules/admin/admin.controller.ts", "line": 490, "quote": "@Post('notifications/broadcast')"}]},
+  {"from": "admin", "to": "user", "label": "Lấy danh sách id user đang active", "kind": "call", "mechanism": "di-call", "evidence": [{"file": "apps/core-api/src/modules/admin/admin.service.ts", "line": 424, "quote": "const activeUserIds = await this.userService.listActiveUserIds();"}]},
+  {"from": "user", "to": "postgres", "label": "SELECT id FROM users WHERE status = Active (loại banned)", "kind": "call", "mechanism": "shared-db", "evidence": [{"file": "apps/core-api/src/modules/user/user.service.ts", "line": 113, "quote": "where: { status: UserStatus.Active },"}]},
+  {"from": "admin", "to": "economy", "label": "Lấy id user VIP còn hạn (chỉ khi audience không phải All)", "kind": "call", "mechanism": "di-call", "evidence": [{"file": "apps/core-api/src/modules/admin/admin.service.ts", "line": 428, "quote": ": await this.economyService.listActiveVipUserIds(),"}]},
+  {"from": "economy", "to": "postgres", "label": "SELECT userId FROM wallets WHERE vipExpiresAt > now", "kind": "call", "mechanism": "shared-db", "evidence": [{"file": "apps/core-api/src/modules/economy/economy.service.ts", "line": 225, "quote": "where: { vipExpiresAt: MoreThan(new Date()) },"}]},
+  {"from": "admin", "to": "notification", "label": "Mở transaction, gọi tạo thông báo broadcast cho recipientIds", "kind": "call", "mechanism": "di-call", "note": "recipientIds được lọc trong Admin theo audience (All/Vip/không VIP).", "evidence": [{"file": "apps/core-api/src/modules/admin/admin.service.ts", "line": 438, "quote": "const created = await this.notificationService.createBroadcastWithManager("}]},
+  {"from": "notification", "to": "postgres", "label": "INSERT notifications loại AdminBroadcast, chia lô 500 bản ghi", "kind": "call", "mechanism": "shared-db", "note": "Dùng manager của transaction nên cùng transaction với audit.", "evidence": [{"file": "apps/core-api/src/modules/notification/notification.service.ts", "line": 85, "quote": "{ chunk: 500 },"}]},
+  {"from": "admin", "to": "postgres", "label": "Ghi audit notification.broadcast.sent cùng transaction", "kind": "call", "mechanism": "shared-db", "evidence": [{"file": "apps/core-api/src/modules/admin/admin.service.ts", "line": 443, "quote": "await this.auditLogService.record("}]},
+  {"from": "admin", "to": "notification", "label": "Sau commit: đẩy push cho từng thông báo đã tạo", "kind": "async", "mechanism": "di-call", "note": "sendPush bọc try/catch, lỗi chỉ log cảnh báo, không throw.", "evidence": [{"file": "apps/core-api/src/modules/admin/admin.service.ts", "line": 463, "quote": "this.notificationService.sendPush(notification),"}]},
+  {"from": "admin", "to": "admin-console", "label": "Trả broadcastId và recipientCount", "kind": "return", "mechanism": "http"}
+ ],
+ "groups": [
+  {"from": 6, "to": 8, "label": "Transaction: thông báo + audit", "kind": "transaction"},
+  {"from": 9, "to": 9, "label": "Push best-effort sau commit", "kind": "besteffort"}
+ ],
+ "invariants": [
+  "Admin phải lấy id từ User và Economy qua service của họ, không tự đọc bảng users hay wallets, để mỗi module giữ quyền sở hữu dữ liệu.",
+  "Thông báo in-app và audit log nằm cùng một transaction: broadcast chỉ được ghi nếu có dấu vết audit, và ngược lại.",
+  "Push chỉ chạy sau khi transaction commit, nên không thể gửi push cho thông báo chưa được lưu."
+ ],
+ "failureModes": [
+  {"when": "Ghi thông báo hoặc audit lỗi trong transaction", "effect": "Transaction rollback, không có thông báo nào được lưu và không có push nào được gửi."},
+  {"when": "Push provider hoặc web push lỗi", "effect": "sendPush nuốt lỗi và chỉ log cảnh báo; thông báo in-app đã commit vẫn được giữ."},
+  {"when": "Không có người nhận (recipientIds rỗng)", "effect": "createBroadcastWithManager trả mảng rỗng, không ghi thông báo, không gửi push."}
+ ],
+ "dataIssues": [],
+ "uncertain": []
+}

@@ -1,0 +1,48 @@
+{
+ "id": "economy-outbox-relay",
+ "title": "Relay outbox của Economy ra Kafka",
+ "summary": "Economy ghi OutboxEvent cùng giao dịch sổ cái; một job nền định kỳ đọc các dòng chưa gửi, publish lên Kafka rồi đánh dấu đã gửi, nên cần phối hợp giữa PostgreSQL (khóa dòng) và Kafka (broker).",
+ "caption": "Job relay khóa lô OutboxEvent trong PostgreSQL, publish từng event lên Kafka, chuyển DLQ khi quá số lần thử rồi lưu trạng thái.",
+ "participants": [
+  {"id": "economy", "label": "Economy (OutboxRelayService)", "kind": "service"},
+  {"id": "postgres", "label": "PostgreSQL", "kind": "infra"},
+  {"id": "kafka", "label": "Kafka", "kind": "infra"}
+ ],
+ "steps": [
+  {"from": "economy", "to": "postgres", "label": "Mở transaction, chọn tối đa 100 event chưa publish bằng FOR UPDATE SKIP LOCKED", "kind": "call", "mechanism": "shared-db",
+   "note": "Job chạy theo setInterval khi ECONOMY_OUTBOX_RELAY_ENABLED bật; runExclusive bỏ qua tick nếu vòng trước còn chạy. Lọc published_at IS NULL và dead_lettered_at IS NULL, sắp theo created_at.",
+   "evidence": [
+    {"file": "apps/core-api/src/modules/economy/jobs/outbox-relay.service.ts", "line": 67, "quote": "return await this.dataSource.transaction(async (manager) => {"},
+    {"file": "apps/core-api/src/modules/economy/jobs/outbox-relay.service.ts", "line": 72, "quote": ".setOnLocked('skip_locked')"}]},
+  {"from": "postgres", "to": "economy", "label": "Trả lô OutboxEvent; nếu rỗng thì kết thúc vòng, trả 0", "kind": "return", "mechanism": "shared-db"},
+  {"from": "economy", "to": "kafka", "label": "Publish từng event (key = transactionId/userId/id) lên topic của event", "kind": "async", "mechanism": "kafka",
+   "note": "Thành công thì set publishedAt và xóa lastError; lỗi thì tăng attempts, lưu lastError và ghi log, các event khác vẫn tiếp tục.",
+   "evidence": [
+    {"file": "apps/core-api/src/modules/economy/jobs/outbox-relay.service.ts", "line": 82, "quote": "await this.eventBus.publish(toEventEnvelope(event));"},
+    {"file": "apps/core-api/src/common/events/kafka-event-bus.adapter.ts", "line": 109, "quote": "await producer.send({"}]},
+  {"from": "economy", "to": "kafka", "label": "Khi attempts đạt ngưỡng tối đa thì publish sang topic dead-letter (.DLQ)", "kind": "async", "mechanism": "kafka",
+   "note": "Nếu publish DLQ cũng lỗi thì chỉ ghi log; finally vẫn đặt deadLetteredAt để dòng không bị thử lại vô hạn và còn lại làm nguồn replay.",
+   "evidence": [
+    {"file": "apps/core-api/src/modules/economy/jobs/outbox-relay.service.ts", "line": 117, "quote": "await this.eventBus.publishDeadLetter("},
+    {"file": "apps/core-api/src/modules/economy/jobs/outbox-relay.service.ts", "line": 144, "quote": "event.deadLetteredAt = new Date();"}]},
+  {"from": "economy", "to": "postgres", "label": "Lưu cả lô (publishedAt, attempts, lastError, deadLetteredAt) rồi commit", "kind": "call", "mechanism": "shared-db",
+   "evidence": [
+    {"file": "apps/core-api/src/modules/economy/jobs/outbox-relay.service.ts", "line": 103, "quote": "await manager.save(events);"}]}
+ ],
+ "groups": [
+  {"from": 1, "to": 5, "label": "Transaction giữ khóa dòng suốt vòng relay", "kind": "transaction"},
+  {"from": 3, "to": 4, "label": "Gọi Kafka bên ngoài DB", "kind": "external"}
+ ],
+ "invariants": [
+  "Khóa FOR UPDATE SKIP LOCKED giữ đến khi lưu xong, nên nhiều instance chạy song song lấy các lô khác nhau và không publish trùng cùng một dòng.",
+  "Publish diễn ra trước khi đánh dấu publishedAt: nếu process chết giữa chừng thì transaction rollback và event được gửi lại, tức at-least-once; consumer phải dedupe theo id event nằm trong message.",
+  "Lỗi publish được bắt trong từng event nên một event hỏng không chặn cả lô; chỉ khi vượt ECONOMY_OUTBOX_MAX_ATTEMPTS mới chuyển DLQ và đánh dấu terminal."
+ ],
+ "failureModes": [
+  {"when": "Kafka lỗi khi publish một event", "effect": "attempts tăng, lastError được lưu, dòng vẫn chưa publish và được thử lại ở vòng sau cho đến ngưỡng tối đa."},
+  {"when": "Publish DLQ cũng lỗi", "effect": "Chỉ ghi log; dòng vẫn được đặt deadLetteredAt và giữ lại trong bảng làm nguồn replay cho vận hành."},
+  {"when": "Vòng trước còn chạy khi tick kế đến", "effect": "runExclusive trả 0 và bỏ qua tick, không chồng vòng trong cùng process."}
+ ],
+ "dataIssues": [],
+ "uncertain": []
+}

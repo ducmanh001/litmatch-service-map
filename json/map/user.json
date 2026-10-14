@@ -1,0 +1,984 @@
+{
+ "id": "user",
+ "title": "User",
+ "tagline": "Hồ sơ người dùng, quyền riêng tư, trạng thái",
+ "deployable": "core-api",
+ "role": "Sở hữu bảng users (hồ sơ, status, role, isGuest, trustScore) và user_privacy_settings; cung cấp UserService/PrivacySettingsService/PublicProfileDto cho gần như mọi module khác. Không sở hữu danh tính đăng nhập (auth), không biết khái niệm block/report (safety) và không tự ghi presence (signaling-gateway ghi, user chỉ đọc).",
+ "owns": [
+  "bảng users (nickname, gender, birthDate, region, interests, seeking*, trustScore, status, isGuest, role)",
+  "bảng user_privacy_settings (searchableByPhone, hideProfile, showOnlineStatus)",
+  "đọc Redis ZSET presence realtimePresenceKey(userId) (do signaling-gateway ghi)"
+ ],
+ "confidence": "high",
+ "endpoints": [
+  {
+   "id": "e1",
+   "kind": "rest",
+   "method": "GET",
+   "path": "/api/v1/users/me",
+   "purpose": "Đọc hồ sơ đầy đủ của chính mình (MyProfileDto) qua UserService.getByIdOrThrow.",
+   "auth": "jwt",
+   "file": "apps/core-api/src/modules/user/user.controller.ts",
+   "line": 41,
+   "quote": "@Get('me')"
+  },
+  {
+   "id": "e2",
+   "kind": "rest",
+   "method": "PATCH",
+   "path": "/api/v1/users/me",
+   "purpose": "Sửa hồ sơ của mình (nickname, gender, birthDate không ở tương lai, region, interests, seeking*); kiểm khoảng tuổi seeking sau khi gộp giá trị cũ và mới.",
+   "auth": "jwt",
+   "file": "apps/core-api/src/modules/user/user.controller.ts",
+   "line": 50,
+   "quote": "@Patch('me')"
+  },
+  {
+   "id": "e3",
+   "kind": "rest",
+   "method": "GET",
+   "path": "/api/v1/users/me/privacy",
+   "purpose": "Đọc privacy settings của mình; chưa có row thì trả DEFAULT_PRIVACY_SETTINGS.",
+   "auth": "jwt",
+   "file": "apps/core-api/src/modules/user/user.controller.ts",
+   "line": 62,
+   "quote": "@Get('me/privacy')"
+  },
+  {
+   "id": "e4",
+   "kind": "rest",
+   "method": "PUT",
+   "path": "/api/v1/users/me/privacy",
+   "purpose": "Ghi privacy settings của mình bằng upsert theo userId (searchableByPhone, hideProfile, showOnlineStatus), giá trị thiếu quay về mặc định.",
+   "auth": "jwt",
+   "file": "apps/core-api/src/modules/user/user.controller.ts",
+   "line": 71,
+   "quote": "@Put('me/privacy')"
+  },
+  {
+   "id": "e5",
+   "kind": "rest",
+   "method": "GET",
+   "path": "/api/v1/users/:id/presence",
+   "purpose": "Cho biết user khác có đang online không: chỉ true khi họ bật showOnlineStatus VÀ Redis presence còn lease; không kiểm user tồn tại.",
+   "auth": "jwt",
+   "file": "apps/core-api/src/modules/user/user.controller.ts",
+   "line": 81,
+   "quote": "@Get(':id/presence')"
+  },
+  {
+   "id": "e6",
+   "kind": "rest",
+   "method": "GET",
+   "path": "/api/v1/users/:id",
+   "purpose": "Hồ sơ công khai tối thiểu (PublicProfileDto) của user khác theo id; không kiểm hideProfile/ban (xem notes).",
+   "auth": "jwt",
+   "file": "apps/core-api/src/modules/user/user.controller.ts",
+   "line": 96,
+   "quote": "@Get(':id')"
+  }
+ ],
+ "collaborators": [
+  {
+   "id": "c1",
+   "label": "đọc presence online",
+   "what": "RedisPresenceReader.isOnline: ZREMRANGEBYSCORE key -inf now để xoá lease hết hạn rồi ZCARD > 0 trên key realtimePresenceKey(userId); lỗi Redis trả false.",
+   "why": "Online/offline là trạng thái dẫn xuất từ socket lease của signaling-gateway, không có trong Postgres, nên user module phải đọc Redis để trả lời e5. Fail-closed vì báo online sai là lộ thông tin riêng tư, còn thiếu thì chỉ mất dấu chấm xanh.",
+   "ifMissing": "Không có chỉ báo online; nếu đọc fail-open (trả true khi Redis lỗi) thì Redis chập chờn làm user bật showOnlineStatus bị báo 'online' sai dù đã offline (người tắt hiển thị đã bị chặn trước đó ở controller).",
+   "with": "redis",
+   "withKind": "infra",
+   "direction": "out",
+   "mechanism": "redis-state",
+   "endpoints": [
+    "e5"
+   ],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/user/redis/redis-presence-reader.adapter.ts",
+     "line": 23,
+     "quote": "await closeCoreRedisClient(this.redis);"
+    }
+   ],
+   "review": {
+    "verdict": "supported"
+   },
+   "logic": {
+    "verdict": "corrected",
+    "note": "e5 đã short-circuit bằng settings.showOnlineStatus trước khi đọc Redis; fail-open chỉ gây báo online sai, không làm lộ người đã tắt hiển thị."
+   }
+  },
+  {
+   "id": "c2",
+   "label": "users, privacy settings",
+   "what": "Đọc/ghi bảng users (findOneBy, save, find In, countBy, query builder cho browse/stats) và user_privacy_settings (upsert theo userId).",
+   "why": "Hồ sơ và privacy là dữ liệu bền vững của chính module; upsert theo khoá userId đảm bảo mỗi user đúng một dòng privacy, còn browsePage dùng NOT EXISTS trên hide_profile để lọc ngay trong SQL thay vì lọc sau phân trang.",
+   "ifMissing": "Không có nguồn sự thật về user; lọc hideProfile sau khi phân trang sẽ làm trang trả thiếu hoặc rỗng.",
+   "with": "postgres",
+   "withKind": "infra",
+   "direction": "out",
+   "mechanism": "shared-db",
+   "endpoints": [
+    "e1",
+    "e2",
+    "e3",
+    "e4",
+    "e5",
+    "e6"
+   ],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/user/entities/privacy-setting.entity.ts",
+     "line": 4,
+     "quote": "@Entity({ name: 'user_privacy_settings' })"
+    },
+    {
+     "file": "apps/core-api/src/modules/user/entities/user.entity.ts",
+     "line": 27,
+     "quote": "@Entity({ name: 'users' })"
+    }
+   ],
+   "review": {
+    "verdict": "supported"
+   },
+   "logic": {
+    "verdict": "sound"
+   }
+  },
+  {
+   "id": "c3",
+   "label": "admin: ban, role, list user",
+   "what": "AdminService gọi UserService.banUser/unbanUser(manager, id), findPage, getByIdOrThrow, listStaff, lockRoleAssignmentContext + setRoleWithManager, getAdminStats, listActiveUserIds, findByIds.",
+   "why": "Ban/unban nhận EntityManager của admin để đổi users.status và ghi audit log cùng một transaction (hành động nhạy cảm không được thành công một nửa). Đổi role khoá toàn bộ admin hiện có bằng pessimistic_write để hai request hạ quyền song song không cùng thấy 'còn admin khác' rồi hạ cả hai.",
+   "ifMissing": "Ban đổi status mà audit lỗi (hoặc ngược lại); race demote làm hệ thống không còn admin nào.",
+   "with": "admin",
+   "withKind": "service",
+   "direction": "in",
+   "mechanism": "di-call",
+   "endpoints": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/admin/admin.service.ts",
+     "line": 53,
+     "quote": "return this.userService.getByIdOrThrow(userId);"
+    },
+    {
+     "file": "apps/core-api/src/modules/admin/admin.service.ts",
+     "line": 61,
+     "quote": "return this.userService.findPage(filter, limit, offset);"
+    },
+    {
+     "file": "apps/core-api/src/modules/admin/admin.service.ts",
+     "line": 77,
+     "quote": "const user = await this.userService.banUser(manager, targetUserId);"
+    }
+   ],
+   "basis": "ast",
+   "logic": {
+    "verdict": "sound"
+   }
+  },
+  {
+   "id": "c4",
+   "label": "auth: nạp/tạo user",
+   "what": "AuthService gọi getByIdOrThrow (kiểm status/isGuest/role trước khi cấp token, kể cả lúc refresh), createWithManager(manager, {nickname, isGuest}) và PrivacySettingsService.isSearchableByPhone cho search-by-phone.",
+   "why": "createWithManager nhận manager của auth để users và auth_identities được tạo cùng một transaction, tránh user mồ côi khi một bước fail. Khi refresh, auth hỏi lại status để user bị ban giữa hai lần refresh không nhận phiên mới.",
+   "ifMissing": "Có user không có identity (không đăng nhập lại được) hoặc ban không chặn được refresh.",
+   "with": "auth",
+   "withKind": "service",
+   "direction": "in",
+   "mechanism": "di-call",
+   "endpoints": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/auth/auth.service.ts",
+     "line": 128,
+     "quote": "const user = await this.userService.getByIdOrThrow(userId);"
+    },
+    {
+     "file": "apps/core-api/src/modules/auth/auth.service.ts",
+     "line": 162,
+     "quote": "await this.userService.getByIdOrThrow(existing.userId),"
+    },
+    {
+     "file": "apps/core-api/src/modules/auth/auth.service.ts",
+     "line": 170,
+     "quote": "const user = await this.userService.createWithManager(manager, {"
+    }
+   ],
+   "basis": "ast",
+   "logic": {
+    "verdict": "sound"
+   }
+  },
+  {
+   "id": "c5",
+   "label": "calling: region chọn LiveKit",
+   "what": "CallingService.resolveCallLivekitUrl gọi getByIdOrThrow cho userA và userB để lấy region khi LIVEKIT_REGION_URLS được bật.",
+   "why": "Region của hồ sơ quyết định cụm LiveKit nào phục vụ cuộc gọi; dữ liệu này nằm ở users nên calling phải hỏi user và dùng region userA khi hai bên lệch (quy tắc tất định).",
+   "ifMissing": "Không chọn được cụm LiveKit gần người dùng; mọi cuộc gọi rơi về LIVEKIT_URL mặc định.",
+   "with": "calling",
+   "withKind": "service",
+   "direction": "in",
+   "mechanism": "di-call",
+   "endpoints": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/calling/calling.service.ts",
+     "line": 583,
+     "quote": "this.userService.getByIdOrThrow(call.userAId),"
+    },
+    {
+     "file": "apps/core-api/src/modules/calling/calling.service.ts",
+     "line": 584,
+     "quote": "this.userService.getByIdOrThrow(call.userBId),"
+    }
+   ],
+   "basis": "ast",
+   "logic": {
+    "verdict": "sound"
+   }
+  },
+  {
+   "id": "c6",
+   "label": "discovery: duyệt user hợp lệ",
+   "what": "DiscoveryService.browsePage(filter, limit, after) và NearbyService gọi findActiveByIds cùng PrivacySettingsService.findForUsers để lấy user active theo gender/tuổi/guest kèm privacy.",
+   "why": "Luật 'user nào được hiển thị' (active, không hideProfile, tuổi, guest) phải định nghĩa một chỗ duy nhất ở user; Discovery chỉ tự lọc theo vị trí/settings của nó và truyền excludeUserIds (self + block từ safety) vì user module không biết block/report.",
+   "ifMissing": "Hai nơi định nghĩa 'hợp lệ để hiện' lệch nhau: user banned hoặc hideProfile vẫn xuất hiện trong khám phá.",
+   "with": "discovery",
+   "withKind": "service",
+   "direction": "in",
+   "mechanism": "di-call",
+   "endpoints": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/discovery/discovery.service.ts",
+     "line": 63,
+     "quote": "const page = await this.userService.browsePage(filter, query.limit, after);"
+    },
+    {
+     "file": "apps/core-api/src/modules/discovery/nearby.service.ts",
+     "line": 188,
+     "quote": "const users = await this.userService.findActiveByIds("
+    },
+    {
+     "file": "apps/core-api/src/modules/discovery/nearby.service.ts",
+     "line": 200,
+     "quote": "const privacyByUserId = await this.privacySettings.findForUsers("
+    }
+   ],
+   "basis": "ast",
+   "logic": {
+    "verdict": "sound"
+   }
+  },
+  {
+   "id": "c7",
+   "label": "feed: tác giả và hideProfile",
+   "what": "FeedController dựng PublicProfileDto cho tác giả qua getByIdOrThrow/findByIds; FeedService gọi PrivacySettingsService.isHidden(authorUserId) trước khi liệt kê bài của người khác.",
+   "why": "Bài đăng chỉ lưu authorUserId nên hồ sơ tác giả phải lấy từ user (batch findByIds tránh N+1); hideProfile là cờ của user, nên feed phải hỏi để không lộ bài của người đã ẩn hồ sơ.",
+   "ifMissing": "Post không có tên/avatar tác giả; user bật ẩn hồ sơ vẫn bị xem bài qua feed.",
+   "with": "feed",
+   "withKind": "service",
+   "direction": "in",
+   "mechanism": "di-call",
+   "endpoints": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/feed/feed.controller.ts",
+     "line": 208,
+     "quote": "return PublicProfileDto.from(await this.userService.getByIdOrThrow(userId));"
+    },
+    {
+     "file": "apps/core-api/src/modules/feed/feed.controller.ts",
+     "line": 215,
+     "quote": "const users = await this.userService.findByIds("
+    },
+    {
+     "file": "apps/core-api/src/modules/feed/feed.service.ts",
+     "line": 153,
+     "quote": "if (await this.privacySettings.isHidden(authorUserId)) {"
+    }
+   ],
+   "basis": "ast",
+   "logic": {
+    "verdict": "sound"
+   }
+  },
+  {
+   "id": "c8",
+   "label": "friend: hồ sơ danh sách bạn",
+   "what": "FriendController.listFriends gọi findByIds để dựng FriendDto kèm PublicProfileDto; nếu thiếu profile thì getByIdOrThrow để ném 404.",
+   "why": "Bảng friend chỉ giữ partnerId; tên và avatar của bạn thuộc user nên phải lấy theo lô. Thiếu profile là dữ liệu hỏng nên bị bật thành lỗi thay vì trả danh sách thiếu.",
+   "ifMissing": "Danh sách chat/bạn chỉ có UUID, không có hồ sơ hiển thị.",
+   "with": "friend",
+   "withKind": "service",
+   "direction": "in",
+   "mechanism": "di-call",
+   "endpoints": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/friend/friend.controller.ts",
+     "line": 63,
+     "quote": "const profiles = await this.userService.findByIds("
+    },
+    {
+     "file": "apps/core-api/src/modules/friend/friend.controller.ts",
+     "line": 73,
+     "quote": "await this.userService.getByIdOrThrow(missingPartnerId);"
+    },
+    {
+     "file": "apps/core-api/src/modules/friend/services/profile-social.service.ts",
+     "line": 467,
+     "quote": "const profile = await manager.findOne(User, {"
+    }
+   ],
+   "basis": "ast",
+   "logic": {
+    "verdict": "sound"
+   }
+  },
+  {
+   "id": "c9",
+   "label": "gift: guest không nhận điểm",
+   "what": "GiftService gọi getByIdOrThrow(receiverUserId) để đọc receiver.isGuest trước economy.sendGift và tính pointsAwarded.",
+   "why": "Quy tắc docs/06: người nhận là guest vẫn được tặng quà nhưng chân PTS = 0; isGuest nằm ở users nên Gift phải đọc trước khi chuyển số tiền cho Economy.",
+   "ifMissing": "Guest nhận điểm quy đổi, vi phạm quy tắc guest bị giới hạn tính năng.",
+   "with": "gift",
+   "withKind": "service",
+   "direction": "in",
+   "mechanism": "di-call",
+   "endpoints": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/gift/gift.service.ts",
+     "line": 201,
+     "quote": "const receiver = await this.userService.getByIdOrThrow(receiverUserId);"
+    },
+    {
+     "file": "apps/core-api/src/modules/gift/gift.service.ts",
+     "line": 299,
+     "quote": "const receiver = await this.userService.getByIdOrThrow(receiverUserId);"
+    },
+    {
+     "file": "apps/core-api/src/modules/gift/gift.service.ts",
+     "line": 392,
+     "quote": "const receiver = await this.userService.getByIdOrThrow(profileUserId);"
+    }
+   ],
+   "basis": "ast",
+   "logic": {
+    "verdict": "sound"
+   }
+  },
+  {
+   "id": "c10",
+   "label": "matching: hồ sơ người mời",
+   "what": "InviteController gọi getByIdOrThrow/findByIds để dựng MatchInviteDto kèm hồ sơ inviter cho lời mời ghép.",
+   "why": "MatchInvite chỉ lưu inviterUserId; invitee cần thấy ai mời nên matching phải lấy hồ sơ từ user, batch cho danh sách lời mời.",
+   "ifMissing": "Lời mời ghép hiển thị không có thông tin người mời.",
+   "with": "matching",
+   "withKind": "service",
+   "direction": "in",
+   "mechanism": "di-call",
+   "endpoints": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/matching/controllers/invite.controller.ts",
+     "line": 107,
+     "quote": "await this.userService.getByIdOrThrow(result.invite.inviterUserId),"
+    },
+    {
+     "file": "apps/core-api/src/modules/matching/controllers/invite.controller.ts",
+     "line": 138,
+     "quote": "await this.userService.getByIdOrThrow(invite.inviterUserId),"
+    },
+    {
+     "file": "apps/core-api/src/modules/matching/controllers/invite.controller.ts",
+     "line": 145,
+     "quote": "const inviters = await this.userService.findByIds("
+    }
+   ],
+   "basis": "ast",
+   "logic": {
+    "verdict": "sound"
+   }
+  },
+  {
+   "id": "c11",
+   "label": "party-room: member, region",
+   "what": "PartyRoomService gọi findByIds để dựng hồ sơ thành viên phòng và getByIdOrThrow(hostUserId) lấy host.region để chọn LiveKit URL khi tạo phòng.",
+   "why": "Phòng chỉ lưu userId; hồ sơ hiển thị lấy từ user theo lô. Region của host (không phải của người vào) quyết định cụm LiveKit được snapshot cho phòng nên cần đọc lúc tạo.",
+   "ifMissing": "Phòng không hiển thị được thành viên và luôn dùng LiveKit mặc định.",
+   "with": "party-room",
+   "withKind": "service",
+   "direction": "in",
+   "mechanism": "di-call",
+   "endpoints": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/party-room/party-room.service.ts",
+     "line": 698,
+     "quote": "? await this.userService.findByIds(members.map((member) => member.userId))"
+    },
+    {
+     "file": "apps/core-api/src/modules/party-room/party-room.service.ts",
+     "line": 1155,
+     "quote": "const host = await this.userService.getByIdOrThrow(hostUserId);"
+    }
+   ],
+   "basis": "ast",
+   "logic": {
+    "verdict": "sound"
+   }
+  },
+  {
+   "id": "c12",
+   "label": "trừ trust score cùng tx",
+   "what": "SafetyService gọi getByIdOrThrow(targetUserId) trước khi report và UserService.adjustTrustScore(manager, userId, -penalty, floor) trong transaction tạo Report.",
+   "why": "adjustTrustScore nhận manager của safety để ghi Report và trừ trustScore cùng transaction, UPDATE GREATEST(floor, trust_score + delta) clamp ở sàn nguyên tử. Không có nó, report ghi xong mà điểm không trừ (hoặc ngược lại).",
+   "ifMissing": "Report ghi mà trustScore không trừ (hoặc ngược lại) khi một bước fail; nếu không clamp GREATEST trong cùng UPDATE thì điểm có thể xuống dưới SAFETY_TRUST_SCORE_FLOOR. Chống vượt trần phạt/ngày do khoá hàng user lo.",
+   "with": "safety",
+   "withKind": "service",
+   "direction": "in",
+   "mechanism": "di-call",
+   "endpoints": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/safety/safety.service.ts",
+     "line": 66,
+     "quote": "await this.userService.getByIdOrThrow(targetUserId);"
+    },
+    {
+     "file": "apps/core-api/src/modules/safety/safety.service.ts",
+     "line": 87,
+     "quote": "await manager.getRepository(User).findOne({"
+    },
+    {
+     "file": "apps/core-api/src/modules/safety/safety.service.ts",
+     "line": 128,
+     "quote": "await this.userService.adjustTrustScore("
+    }
+   ],
+   "basis": "ast",
+   "logic": {
+    "verdict": "corrected",
+    "note": "Trần phạt/ngày và cooldown được chặn bởi khoá hàng user (user.c52); GREATEST chỉ clamp sàn trong một UPDATE nguyên tử, không liên quan số report song song."
+   }
+  },
+  {
+   "id": "c13",
+   "label": "short-video: hồ sơ tác giả",
+   "what": "ShortVideoController dựng PublicProfileDto cho tác giả video qua getByIdOrThrow (một video) và findByIds (cả trang).",
+   "why": "Video chỉ lưu authorUserId; thông tin tác giả thuộc user và cần batch cho cả trang để không sinh N truy vấn.",
+   "ifMissing": "Video hiển thị không có tác giả hoặc phát sinh N+1 truy vấn.",
+   "with": "short-video",
+   "withKind": "service",
+   "direction": "in",
+   "mechanism": "di-call",
+   "endpoints": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/short-video/short-video.controller.ts",
+     "line": 209,
+     "quote": "return PublicProfileDto.from(await this.userService.getByIdOrThrow(userId));"
+    },
+    {
+     "file": "apps/core-api/src/modules/short-video/short-video.controller.ts",
+     "line": 216,
+     "quote": "const users = await this.userService.findByIds("
+    }
+   ],
+   "basis": "ast",
+   "logic": {
+    "verdict": "sound"
+   }
+  },
+  {
+   "id": "c14",
+   "label": "kiểm ban, mở hồ sơ đối tác",
+   "what": "SoulMatchService gọi getByIdOrThrow(user.userId) để chặn UserStatus.Banned và getByIdOrThrow(partnerId) để trả PublicProfileDto đối tác sau khi hai bên cùng Thích.",
+   "why": "Trạng thái ban nằm ở users; soul-match phải kiểm trước khi vào phòng. Hồ sơ đối tác chỉ được mở khi cả hai cùng thích (PARTNER_LOCKED), nên chỉ gọi user ở nhánh đã đủ điều kiện.",
+   "ifMissing": "User bị khoá vẫn chơi soul-match; không có dữ liệu để mở khoá hồ sơ đối tác.",
+   "with": "soul-match",
+   "withKind": "service",
+   "direction": "in",
+   "mechanism": "di-call",
+   "endpoints": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/soul-match/soul-match.service.ts",
+     "line": 137,
+     "quote": "const profile = await this.userService.getByIdOrThrow(user.userId);"
+    },
+    {
+     "file": "apps/core-api/src/modules/soul-match/soul-match.service.ts",
+     "line": 420,
+     "quote": "await this.userService.getByIdOrThrow(partnerId),"
+    }
+   ],
+   "basis": "ast",
+   "logic": {
+    "verdict": "sound"
+   }
+  },
+  {
+   "id": "c50",
+   "with": "signaling-gateway",
+   "withKind": "service",
+   "direction": "both",
+   "mechanism": "redis-state",
+   "endpoints": [
+    "e5"
+   ],
+   "label": "gateway ghi presence lease",
+   "what": "ConnectionQuotaService trong signaling-gateway chạy Lua acquire/refresh/release trên key realtimePresenceKey(userId) (ZSET lease theo connection) cùng với key quota.",
+   "why": "Gateway là nơi duy nhất biết socket nào đang mở nên chỉ nó ghi presence; user chỉ đọc cùng key (hợp đồng key nằm ở libs/common-dtos realtimePresenceKey) để core-api không phải hỏi gateway qua mạng.",
+   "ifMissing": "Đổi tên key ở một phía làm e5 luôn trả offline mà không có lỗi; nếu core-api tự ghi presence sẽ lệch với số socket thật.",
+   "evidence": [
+    {
+     "file": "apps/signaling-gateway/src/app/connection-quota.service.ts",
+     "line": 130,
+     "quote": "realtimePresenceKey(userId),"
+    }
+   ],
+   "review": {
+    "verdict": "supported"
+   },
+   "logic": {
+    "verdict": "sound"
+   }
+  },
+  {
+   "id": "c51",
+   "with": "auth",
+   "withKind": "service",
+   "direction": "in",
+   "mechanism": "shared-db",
+   "endpoints": [],
+   "label": "auth khoá hàng users",
+   "what": "AuthService.linkIdentityAndUpgrade dùng manager.findOne(User, lock pessimistic_write) rồi manager.update/save isGuest=false trong transaction nâng cấp guest.",
+   "why": "Nâng cấp guest phải gắn identity, xoá credential guest, đổi isGuest và thu hồi refresh session thành một transaction; khoá hàng users để hai request upgrade song song không cùng thành công.",
+   "ifMissing": "Hai upgrade song song cùng gắn identity, hoặc guest đổi cờ mà refresh session cũ còn sống.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/auth/auth.service.ts",
+     "line": 225,
+     "quote": "const user = await manager.findOne(User, {"
+    }
+   ],
+   "review": {
+    "verdict": "supported"
+   },
+   "logic": {
+    "verdict": "sound"
+   }
+  },
+  {
+   "id": "c52",
+   "with": "safety",
+   "withKind": "service",
+   "direction": "in",
+   "mechanism": "shared-db",
+   "endpoints": [],
+   "label": "safety khoá hàng users",
+   "what": "SafetyService trong transaction report gọi manager.getRepository(User).findOne({lock: pessimistic_write}) trên targetUserId trước khi tính cooldown và trần phạt/ngày.",
+   "why": "Khoá hàng user bền vững để tuần tự hoá mọi lần phạt trust của cùng một đối tượng; nếu không, hai report song song cùng đọc tổng hôm nay và cùng vượt dailyCap trước khi cái nào thấy cái kia.",
+   "ifMissing": "Trust penalty vượt trần SAFETY_TRUST_PENALTY_DAILY_CAP và cooldown theo cặp bị bỏ qua khi report đồng thời.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/safety/safety.service.ts",
+     "line": 87,
+     "quote": "await manager.getRepository(User).findOne({"
+    }
+   ],
+   "review": {
+    "verdict": "supported"
+   },
+   "logic": {
+    "verdict": "sound"
+   }
+  },
+  {
+   "id": "c53",
+   "with": "friend",
+   "withKind": "service",
+   "direction": "in",
+   "mechanism": "shared-db",
+   "endpoints": [],
+   "label": "friend khoá hồ sơ để chat",
+   "what": "ProfileSocialService.lockProfileForChatInManager khoá hàng users của profileUserId (pessimistic_write) bằng manager.findOne(User) trước khi mở chat free/gift.",
+   "why": "openConversation khoá hàng users của profileUserId để check số first-contact trong ngày (countDailyFirstChatsWithManager vs ngưỡng) và insert conversation không bị tách đôi khi nhiều người nhắn đồng thời; free và gift first-contact cạnh tranh cùng một khoá theo cùng thứ tự nên không deadlock chéo.",
+   "ifMissing": "Nhiều người nhắn song song cùng đọc số first-contact cũ rồi cùng vượt ngưỡng dailyFirstChatCount, hoặc free và gift khoá theo thứ tự khác nhau gây deadlock.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/friend/services/profile-social.service.ts",
+     "line": 467,
+     "quote": "const profile = await manager.findOne(User, {"
+    }
+   ],
+   "review": {
+    "verdict": "supported"
+   },
+   "logic": {
+    "verdict": "corrected",
+    "note": "Lý do chính theo code là check ngưỡng first-contact/ngày và insert không bị tách đôi; 'duplicate chat' do canonicalPair/unique chứ không chỉ do khoá này."
+   }
+  },
+  {
+   "id": "c54",
+   "with": "matching",
+   "withKind": "service",
+   "direction": "in",
+   "mechanism": "shared-db",
+   "endpoints": [],
+   "label": "matching khoá/đọc users",
+   "what": "GuestMatchQuotaService khoá hàng users (findOneOrFail + pessimistic_write); MatcherWorker và InviteService đọc manager.find(User, In(ids)) trong transaction ghép/nhận lời mời.",
+   "why": "GuestMatchQuotaService.authorize khoá hàng users (pessimistic_write) để guest-upgrade của auth và việc join queue có thứ tự rõ ràng; isGuest đọc từ DB chứ không từ JWT nên JWT cũ sau upgrade không giữ quota guest (comment guest-match-quota.service.ts:45-47). Bộ đếm quota không nằm ở users mà ở guest_match_quotas (khoá băm user/device/network, sắp xếp key và insert-before-lock để tránh deadlock/lost update, :83-104). MatcherWorker/InviteService chỉ đọc manager.find(User, In(ids)) trong transaction ghép/nhận lời mời.",
+   "ifMissing": "Guest vào queue song song có thể vượt quota.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/matching/services/guest-match-quota.service.ts",
+     "line": 53,
+     "quote": "const user = await manager.findOneOrFail(User, {"
+    }
+   ],
+   "miss": "Upgrade guest và join queue song song có thể cùng thấy isGuest cũ: guest vừa nâng cấp vẫn bị tính quota hoặc ngược lại. Việc chặn vượt quota là của guest_match_quotas, không phải của khoá hàng users.",
+   "review": {
+    "verdict": "supported"
+   },
+   "logic": {
+    "verdict": "sound"
+   }
+  }
+ ],
+ "waivedEdges": [],
+ "excludedRoutes": [],
+ "notes": [
+  "Không có docs/services cho user; mô tả dựa trên code.",
+  "GET /users/:id (getPublicProfile) trả PublicProfileDto cho MỌI user tồn tại: không kiểm hideProfile hay status banned. hideProfile chỉ được áp ở browsePage/findActiveByIds (NOT EXISTS user_privacy_settings.hide_profile), feed (isHidden) và search-by-phone. Doc/ý định 'ẩn hồ sơ' có thể kỳ vọng route này cũng ẩn; cần xác nhận.",
+  "GET /users/:id/presence không kiểm user tồn tại: id lạ trả isOnline=false (getForUser trả mặc định nếu chưa có row privacy), không 404.",
+  "Presence đọc fail-closed: Redis lỗi trả false, không bao giờ báo online sai.",
+  "Nhiều module (auth, safety, friend, matching) đọc/khoá entity User trực tiếp bằng manager dù có UserService; đây là chỗ biên module bị xuyên qua để lấy khoá hàng pessimistic_write cùng transaction.",
+  "docs/06-domain-rules.md:87-91 chỉ yêu cầu hideProfile loại user khỏi Discovery và Feed (và search-by-phone trả null như user không tồn tại); không nêu GET /users/:id. Vì vậy việc route này không kiểm hideProfile/ban là khoảng trống đặc tả chưa rõ chủ ý, chưa đủ để kết luận là bug; soul-match tự kiểm ban ở phía nó (soul-match.service.ts:137).",
+  "banUser/unbanUser (setStatus, user.service.ts:240-256) đọc rồi save entity users bằng manager của admin, không khoá hàng và không thu hồi refresh session của auth; ban chỉ chặn ở lần refresh kế tiếp (xem auth)."
+ ],
+ "techniques": [
+  {
+   "slug": "jwt-bearer",
+   "name": "JWT bearer (access token không trạng thái)",
+   "model": "JWT bearer",
+   "how": "Client gửi access token (JWT) trong header Authorization; guard xác minh chữ ký và hạn rồi gắn user vào request, server không giữ phiên.",
+   "why": "Không trạng thái nên scale ngang dễ và không phải tra DB mỗi request; đánh đổi là không thu hồi tức thì trước khi token hết hạn.",
+   "alternative": "Session phía server (cookie + kho phiên) thu hồi được tức thì nhưng cần kho phiên dùng chung.",
+   "endpoints": [
+    "e1",
+    "e2",
+    "e3",
+    "e4",
+    "e5",
+    "e6"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/app/app.module.ts",
+     "line": 117,
+     "quote": "{ provide: APP_GUARD, useClass: JwtAuthGuard },"
+    }
+   ],
+   "auto": true,
+   "count": 6,
+   "id": "t1",
+   "local": "JwtAuthGuard đăng ký APP_GUARD toàn cục nên mọi route /users/* yêu cầu access token JWT, user lấy từ @CurrentUser()."
+  },
+  {
+   "id": "t2",
+   "slug": "ownership-check",
+   "name": "Kiểm tra quyền sở hữu tài nguyên",
+   "model": "Kiểm tra chủ sở hữu",
+   "how": "So userId của tài nguyên với userId người gọi trước khi đọc hoặc sửa.",
+   "why": "Ngăn IDOR: không thao tác được trên tài nguyên của người khác bằng cách đoán id.",
+   "endpoints": [
+    "e1",
+    "e2",
+    "e3",
+    "e4"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/user/user.controller.ts",
+     "line": 46,
+     "quote": "getByIdOrThrow(user.userId)"
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "local": "Các route /users/me và /users/me/privacy luôn dùng user.userId từ JWT (CurrentUser), không nhận id trong path hay body, nên chỉ đọc/ghi hồ sơ và privacy của chính mình.",
+   "addedByLogicReview": true
+  },
+  {
+   "slug": "abac-attribute-policy",
+   "name": "ABAC theo thuộc tính (guest, ban, VIP, giới tính, tuổi…)",
+   "model": "ABAC",
+   "how": "Quyết định dựa trên thuộc tính của người dùng hoặc tài nguyên như guest, bị ban, hạng VIP, giới tính, tuổi.",
+   "why": "Nghiệp vụ có quy tắc theo ngữ cảnh mà vai trò đơn thuần không diễn đạt được.",
+   "alternative": "Policy engine (OPA/Casbin/CASL) tách chính sách khỏi mã nhưng thêm thành phần vận hành.",
+   "endpoints": [],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/user/dto/user-profile.dto.ts",
+     "line": 13,
+     "quote": "@ApiProperty() isGuest!: boolean;"
+    },
+    {
+     "file": "apps/core-api/src/modules/user/entities/user.entity.ts",
+     "line": 66,
+     "quote": "isGuest!: boolean;"
+    },
+    {
+     "file": "apps/core-api/src/modules/user/user.service.ts",
+     "line": 18,
+     "quote": "isGuest: boolean;"
+    }
+   ],
+   "auto": true,
+   "count": 8,
+   "id": "t3",
+   "local": "User có cột isGuest và status (UserStatus), DTO profile trả isGuest; các thuộc tính này làm đầu vào cho chính sách theo thuộc tính."
+  },
+  {
+   "slug": "unique-constraint-guard",
+   "name": "Ràng buộc unique ở DB làm chốt chặn cuối",
+   "model": "Ràng buộc DB",
+   "how": "Ràng buộc unique hoặc index duy nhất ở DB là chốt chặn cuối cho trùng lặp.",
+   "why": "Check-rồi-insert ở tầng code vẫn dính race; DB mới bảo đảm tuyệt đối.",
+   "endpoints": [
+    "e4"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/user/services/privacy-settings.service.ts",
+     "line": 29,
+     "quote": "await this.settingRepo.upsert("
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "id": "t4",
+   "local": "PrivacySettingsService cập nhật bằng settingRepo.upsert theo userId, dựa vào khoá duy nhất để tạo hoặc cập nhật nguyên tử."
+  },
+  {
+   "id": "t5",
+   "slug": "derived-state",
+   "name": "Trạng thái suy ra từ dữ liệu gốc/thời gian (không lưu cờ)",
+   "model": "Trạng thái suy ra",
+   "how": "Trạng thái được tính lại từ dữ liệu gốc và giờ server mỗi lần đọc, không lưu cờ.",
+   "why": "Không cần timer hay job để chuyển trạng thái và không có cờ bị lệch.",
+   "endpoints": [
+    "e5"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/user/user.controller.ts",
+     "line": 92,
+     "quote": "settings.showOnlineStatus && (await this.presence.isOnline(id));"
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "local": "isOnline không lưu trong Postgres: e5 tính từ showOnlineStatus (privacy) AND lease ZSET realtimePresenceKey do signaling-gateway ghi; short-circuit nên không chạm Redis khi user tắt hiển thị.",
+   "addedByLogicReview": true
+  },
+  {
+   "slug": "entity-manager-propagation",
+   "name": "Truyền EntityManager giữa module (chung một transaction)",
+   "model": "Chung transaction",
+   "how": "Module sở hữu dữ liệu nhận EntityManager của giao dịch đang chạy để việc của nó nằm trong cùng transaction.",
+   "why": "Nhiều module dùng chung DB nên atomicity xuyên module không cần saga hay 2PC.",
+   "alternative": "Saga/outbox xuyên service: cần khi tách deployable, thừa khi cùng process.",
+   "endpoints": [],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/user/user.service.ts",
+     "line": 71,
+     "quote": "async createWithManager("
+    }
+   ],
+   "auto": true,
+   "count": 9,
+   "id": "t6",
+   "local": "UserService.createWithManager(manager, input) nhận EntityManager để Auth tạo user cùng transaction với AuthIdentity, tránh user mồ côi."
+  },
+  {
+   "slug": "pessimistic-lock",
+   "name": "Khoá bi quan (SELECT … FOR UPDATE)",
+   "model": "Khoá bi quan",
+   "how": "SELECT … FOR UPDATE khoá hàng đang xử lý để giao dịch khác phải chờ.",
+   "why": "Chặn hai request song song cùng đọc rồi cùng ghi (race) trên số dư, ticket, session.",
+   "alternative": "Khoá lạc quan (version) ít chờ hơn nhưng phải retry khi xung đột.",
+   "endpoints": [],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/user/user.service.ts",
+     "line": 163,
+     "quote": ".setLock('pessimistic_write')"
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "id": "t7",
+   "local": "Khoá pessimistic_write dùng ở lockRoleAssignmentContext (admin + target) khi đổi role; ban/unban (setStatus) chỉ findOneBy rồi save trong transaction của admin, không khoá hàng. Không phải endpoint e1-e6."
+  },
+  {
+   "slug": "rate-limit-throttler",
+   "name": "Rate limit (@nestjs/throttler)",
+   "model": "Rate limit",
+   "how": "@Throttle giới hạn số request theo khoảng thời gian cho từng route.",
+   "why": "Chặn spam và dò quét bằng cách giới hạn số request theo thời gian, trước khi request tới logic nghiệp vụ.",
+   "endpoints": [
+    "e1",
+    "e2",
+    "e3",
+    "e4",
+    "e5",
+    "e6"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/app/app.module.ts",
+     "line": 116,
+     "quote": "{ provide: APP_GUARD, useClass: ThrottlerGuard },"
+    }
+   ],
+   "auto": true,
+   "count": 6,
+   "id": "t8",
+   "local": "ThrottlerGuard được đăng ký APP_GUARD toàn cục trong app.module nên áp rate limit mặc định cho mọi route user."
+  },
+  {
+   "id": "t9",
+   "slug": "fail-closed",
+   "name": "Lỗi thì chặn (fail closed)",
+   "model": "Fail closed",
+   "how": "Khi thành phần kiểm tra lỗi thì từ chối thay vì cho qua.",
+   "why": "An toàn hơn khi mất Redis hoặc quota.",
+   "endpoints": [
+    "e5"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/user/redis/redis-presence-reader.adapter.ts",
+     "line": 11,
+     "quote": "Fail closed: Redis outage must never turn into a false online signal."
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "local": "RedisPresenceReader.isOnline bắt mọi lỗi Redis và trả false; e5 không bao giờ báo online giả khi Redis sập.",
+   "addedByLogicReview": true
+  },
+  {
+   "slug": "fail-closed",
+   "name": "Lỗi thì chặn (fail closed)",
+   "model": "Fail closed",
+   "how": "Khi thành phần kiểm tra lỗi thì từ chối thay vì cho qua.",
+   "why": "An toàn hơn khi mất Redis hoặc quota.",
+   "endpoints": [],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/user/redis/redis-presence-reader.adapter.ts",
+     "line": 11,
+     "quote": "/** Fail closed: Redis outage must never turn into a false online signal. */"
+    },
+    {
+     "file": "apps/core-api/src/modules/user/services/user-presence.service.ts",
+     "line": 12,
+     "quote": "/** Presence fail-closed: Redis lỗi không được biến thành thông tin online bị lộ. */"
+    }
+   ],
+   "auto": true,
+   "count": 2,
+   "id": "t10",
+   "local": "RedisPresenceReader.isOnline fail closed: Redis lỗi thì trả không online thay vì lộ trạng thái online giả."
+  },
+  {
+   "slug": "openapi-contract",
+   "name": "Hợp đồng OpenAPI + client sinh tự động",
+   "model": "OpenAPI",
+   "how": "OpenAPI sinh từ code và client TypeScript sinh tự động.",
+   "why": "Client và server không lệch hợp đồng.",
+   "endpoints": [
+    "e1",
+    "e2",
+    "e3",
+    "e4",
+    "e5",
+    "e6"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/user/user.controller.ts",
+     "line": 42,
+     "quote": "@ApiOperation({ summary: 'Profile của chính mình' })"
+    }
+   ],
+   "auto": true,
+   "count": 6,
+   "id": "t11",
+   "local": "UserController dùng @ApiOperation và @ApiOkResponse({ type: MyProfileDto }) cho hợp đồng OpenAPI của các route user."
+  },
+  {
+   "slug": "jsonb-columns",
+   "name": "Cột JSONB",
+   "model": "JSONB",
+   "how": "Cột JSONB lưu dữ liệu linh hoạt.",
+   "why": "Cấu trúc thay đổi thường xuyên.",
+   "endpoints": [],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/user/entities/user.entity.ts",
+     "line": 45,
+     "quote": "@Column({ type: 'jsonb', nullable: true })"
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "id": "t12",
+   "local": "Cột interests của User khai báo @Column({ type: 'jsonb', nullable: true }) lưu mảng sở thích."
+  },
+  {
+   "id": "t13",
+   "slug": "data-minimization",
+   "name": "Tối thiểu hoá dữ liệu trả về (ẩn danh, DTO công khai)",
+   "model": "Tối thiểu dữ liệu",
+   "how": "Chỉ trả trường cần thiết (DTO công khai, ẩn danh theo từng người nhận).",
+   "why": "Giảm rò rỉ dữ liệu: chỉ trả đúng các trường cần thiết cho người nhận thay vì cả bản ghi nội bộ.",
+   "endpoints": [
+    "e6"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/user/dto/user-profile.dto.ts",
+     "line": 38,
+     "quote": "tối thiểu, giữ ẩn danh (docs/01)"
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "local": "GET /users/:id trả PublicProfileDto chỉ gồm id, nickname, gender, avatarId, interests; không có birthDate, region, seeking* hay isGuest (các trường đó chỉ nằm trong MyProfileDto).",
+   "addedByLogicReview": true
+  }
+ ]
+}

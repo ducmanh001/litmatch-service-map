@@ -1,0 +1,1001 @@
+{
+ "id": "short-video",
+ "title": "Short Video",
+ "tagline": "Video ngắn: upload, duyệt, xem, tim, bình luận",
+ "deployable": "core-api",
+ "role": "Sở hữu vòng đời Video (uploading -> processing -> pending_review|published -> removed|rejected|failed), view/reaction/comment và ranking v1. Upload đi qua VideoStoragePort/VideoTranscodePort RIÊNG của module (KHÔNG dùng module Media); không sở hữu graph bạn bè, report/trust (Safety), hồ sơ tác giả (User) hay tiền quà tặng (Gift/Economy).",
+ "owns": [
+  "bảng videos (status, storageKey, rankScore, viewCount/likeCount/commentCount)",
+  "bảng video_views (unique videoId+viewerId, qualified), video_reactions, video_comments",
+  "cờ VIDEO_UPLOAD_ENABLED / VIDEO_MODERATION_MODE (pre|post)"
+ ],
+ "confidence": "medium",
+ "endpoints": [
+  {
+   "id": "e1",
+   "kind": "rest",
+   "method": "POST",
+   "path": "/api/v1/videos/upload-intent",
+   "purpose": "Tạo Video{uploading} + presigned uploadUrl qua VideoStoragePort; bắt buộc Idempotency-Key (replay phát lại ĐÚNG storageKey, khác caption 409); bị chặn 403 khi VIDEO_UPLOAD_ENABLED=false.",
+   "auth": "jwt",
+   "file": "apps/core-api/src/modules/short-video/short-video.controller.ts",
+   "line": 55,
+   "quote": "@Post('upload-intent')"
+  },
+  {
+   "id": "e2",
+   "kind": "rest",
+   "method": "POST",
+   "path": "/api/v1/videos/:id/finalize",
+   "purpose": "Client báo upload xong: conditional UPDATE uploading -> processing, gọi VideoTranscodePort.transcode rồi sang pending_review|published theo VIDEO_MODERATION_MODE; lỗi transcode -> failed. Chỉ tác giả.",
+   "auth": "jwt",
+   "file": "apps/core-api/src/modules/short-video/short-video.controller.ts",
+   "line": 75,
+   "quote": "@Post(':id/finalize')"
+  },
+  {
+   "id": "e3",
+   "kind": "rest",
+   "method": "GET",
+   "path": "/api/v1/videos",
+   "purpose": "Danh sách video published (for_you hoặc following = video của bạn bè qua listFriendIds; sort recent|ranked) kèm author PublicProfileDto batch; bạn chưa có ai -> trang rỗng.",
+   "auth": "jwt",
+   "file": "apps/core-api/src/modules/short-video/short-video.controller.ts",
+   "line": 89,
+   "quote": "@Get()"
+  },
+  {
+   "id": "e4",
+   "kind": "rest",
+   "method": "GET",
+   "path": "/api/v1/videos/:id",
+   "purpose": "Chi tiết 1 video qua getVideoOrThrow: chỉ tác giả hoặc video published, còn lại 404 VIDEO_NOT_FOUND.",
+   "auth": "jwt",
+   "file": "apps/core-api/src/modules/short-video/short-video.controller.ts",
+   "line": 104,
+   "quote": "@Get(':id')"
+  },
+  {
+   "id": "e5",
+   "kind": "rest",
+   "method": "POST",
+   "path": "/api/v1/videos/:id/report",
+   "purpose": "Report video: kiểm video visible rồi SafetyService.reportVideo (unique 1 report/người/video); vượt VIDEO_REPORT_AUTOHIDE_THRESHOLD distinct reporter thì tự published -> removed.",
+   "auth": "jwt",
+   "file": "apps/core-api/src/modules/short-video/short-video.controller.ts",
+   "line": 118,
+   "quote": "@Post(':id/report')"
+  },
+  {
+   "id": "e6",
+   "kind": "rest",
+   "method": "POST",
+   "path": "/api/v1/videos/:id/views",
+   "purpose": "Ghi watch-time: self-view bỏ qua, video_views unique, viewCount chỉ +1 đúng lúc qualified chuyển false->true (cùng transaction).",
+   "auth": "jwt",
+   "file": "apps/core-api/src/modules/short-video/short-video.controller.ts",
+   "line": 132,
+   "quote": "@Post(':id/views')"
+  },
+  {
+   "id": "e7",
+   "kind": "rest",
+   "method": "POST",
+   "path": "/api/v1/videos/:id/reactions",
+   "purpose": "Thả tim idempotent: insert VideoReaction + tăng likeCount cùng transaction, thua race unique thì replay không đếm đôi.",
+   "auth": "jwt",
+   "file": "apps/core-api/src/modules/short-video/short-video.controller.ts",
+   "line": 143,
+   "quote": "@Post(':id/reactions')"
+  },
+  {
+   "id": "e8",
+   "kind": "rest",
+   "method": "DELETE",
+   "path": "/api/v1/videos/:id/reactions",
+   "purpose": "Bỏ tim idempotent: xoá VideoReaction và chỉ giảm likeCount khi xoá được dòng.",
+   "auth": "jwt",
+   "file": "apps/core-api/src/modules/short-video/short-video.controller.ts",
+   "line": 153,
+   "quote": "@Delete(':id/reactions')"
+  },
+  {
+   "id": "e9",
+   "kind": "rest",
+   "method": "POST",
+   "path": "/api/v1/videos/:id/comments",
+   "purpose": "Bình luận video: insert VideoComment + tăng commentCount cùng transaction, kèm author PublicProfileDto.",
+   "auth": "jwt",
+   "file": "apps/core-api/src/modules/short-video/short-video.controller.ts",
+   "line": 163,
+   "quote": "@Post(':id/comments')"
+  },
+  {
+   "id": "e10",
+   "kind": "rest",
+   "method": "GET",
+   "path": "/api/v1/videos/:id/comments",
+   "purpose": "Liệt kê comment theo cursor sau khi qua getVideoOrThrow, batch author PublicProfileDto.",
+   "auth": "jwt",
+   "file": "apps/core-api/src/modules/short-video/short-video.controller.ts",
+   "line": 182,
+   "quote": "@Get(':id/comments')"
+  },
+  {
+   "id": "e11",
+   "kind": "rest",
+   "method": "DELETE",
+   "path": "/api/v1/videos/:id/comments/:commentId",
+   "purpose": "Xoá mềm bình luận (set deletedAt): chỉ tác giả comment hoặc tác giả video được xoá, người khác 403, comment đã xoá 404; commentCount giảm 1 vô điều kiện trong cùng transaction.",
+   "auth": "jwt",
+   "file": "apps/core-api/src/modules/short-video/short-video.controller.ts",
+   "line": 195,
+   "quote": "@Delete(':id/comments/:commentId')"
+  },
+  {
+   "id": "e12",
+   "kind": "job",
+   "method": "WORKER",
+   "path": "VideoRankingService.onApplicationBootstrap",
+   "purpose": "Job VideoRankingService tính lại rankScore (view/like/comment có trọng số, giảm theo tuổi) cho video published theo lô; derive, chạy 1 instance toàn cluster, lỗi job chỉ làm ranking cũ đi.",
+   "auth": "internal",
+   "file": "apps/core-api/src/modules/short-video/jobs/video-ranking.service.ts",
+   "line": 40,
+   "quote": "onApplicationBootstrap(): void {"
+  },
+  {
+   "id": "e13",
+   "kind": "job",
+   "method": "WORKER",
+   "path": "VideoSweeperService.onApplicationBootstrap",
+   "purpose": "Job VideoSweeperService đánh failed các video kẹt uploading quá VIDEO_UPLOAD_TIMEOUT_SECONDS rồi gọi VideoStoragePort.delete dọn object mồ côi của video failed (retry ở tick sau nếu lỗi).",
+   "auth": "internal",
+   "file": "apps/core-api/src/modules/short-video/jobs/video-sweeper.service.ts",
+   "line": 44,
+   "quote": "onApplicationBootstrap(): void {"
+  }
+ ],
+ "collaborators": [
+  {
+   "id": "c1",
+   "label": "graph bạn cho tab following",
+   "what": "FriendService.listFriendIds(userId) cho GET /videos?feed=following để giới hạn authorUserId IN (bạn bè); rỗng thì trả trang rỗng, không query videos.",
+   "why": "Hệ thống không có bảng follow riêng: graph bạn bè do Friend sở hữu là nguồn 'theo dõi' duy nhất (docs/services/short-video-service.md § 3b). Short-video không thể tự suy ra ai là bạn mà không sao chép dữ liệu Friend.",
+   "ifMissing": "Tab 'Đang theo dõi' không có nguồn dữ liệu: phải trả toàn bộ video hoặc tự giữ bản sao bạn bè dễ lệch với Friendship thật.",
+   "with": "friend",
+   "withKind": "service",
+   "direction": "out",
+   "mechanism": "di-call",
+   "endpoints": [
+    "e3"
+   ],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/short-video/short-video.service.ts",
+     "line": 206,
+     "quote": "friendIds = await this.friendService.listFriendIds(user.userId);"
+    }
+   ],
+   "basis": "ast",
+   "logic": {
+    "verdict": "sound",
+    "note": "listFriendIds trả rỗng thì trả trang rỗng, không query videos. Giới hạn 500 bạn nên bạn quá số đó bị bỏ."
+   }
+  },
+  {
+   "id": "c2",
+   "label": "ghi report video + ngưỡng",
+   "what": "SafetyService.reportVideo(reporterId, videoId, reason, description) trả distinctReporterCount; short-video so với VIDEO_REPORT_AUTOHIDE_THRESHOLD rồi autoHideIfPublished (published -> removed).",
+   "why": "Report/Trust là dữ liệu của Safety (mở rộng Report targetType='video', unique reporter+video, KHÔNG trừ trust score). Safety trung lập, không biết bảng videos nên short-video phải tự validate video tồn tại trước và tự thi hành việc ẩn video khi đếm vượt ngưỡng.",
+   "ifMissing": "Không có nơi lưu report chống lặp và đếm distinct reporter: video vi phạm không bao giờ tự bị ẩn, hoặc một người report lặp có thể ép gỡ video.",
+   "with": "safety",
+   "withKind": "service",
+   "direction": "out",
+   "mechanism": "di-call",
+   "endpoints": [
+    "e5"
+   ],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/short-video/short-video.service.ts",
+     "line": 490,
+     "quote": "const { distinctReporterCount } = await this.safetyService.reportVideo("
+    }
+   ],
+   "basis": "ast",
+   "logic": {
+    "verdict": "sound",
+    "note": "Validate qua getVideoOrThrow trước, reportVideo trả distinctReporterCount, tự ẩn khi >= ngưỡng; report không trừ trust (trustPenaltyApplied 0)."
+   }
+  },
+  {
+   "id": "c3",
+   "label": "author PublicProfileDto",
+   "what": "UserService.getByIdOrThrow/findByIds dựng author PublicProfileDto cho video và comment, batch một lần cho cả trang.",
+   "why": "Hồ sơ do User sở hữu; PublicProfileDto là DTO công khai duy nhất để không lộ birth date/region/trust score, và batch-load để web không gọi GET /users/:id cho từng video/comment.",
+   "ifMissing": "Web phải gọi N request lấy tác giả, hoặc short-video tự dựng DTO hồ sơ có nguy cơ lộ field riêng tư.",
+   "with": "user",
+   "withKind": "service",
+   "direction": "out",
+   "mechanism": "di-call",
+   "endpoints": [
+    "e2",
+    "e3",
+    "e4",
+    "e9",
+    "e10"
+   ],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/short-video/short-video.controller.ts",
+     "line": 209,
+     "quote": "return PublicProfileDto.from(await this.userService.getByIdOrThrow(userId));"
+    },
+    {
+     "file": "apps/core-api/src/modules/short-video/short-video.controller.ts",
+     "line": 216,
+     "quote": "const users = await this.userService.findByIds("
+    }
+   ],
+   "basis": "ast",
+   "logic": {
+    "verdict": "sound",
+    "note": "getAuthor và getAuthors batch bằng findByIds, PublicProfileDto không chứa birth date/trust."
+   }
+  },
+  {
+   "id": "c4",
+   "label": "videos/views/reactions",
+   "what": "Ghi/đọc videos, video_views, video_reactions, video_comments; chuyển trạng thái bằng conditional UPDATE ... WHERE status = 'từ'; counter denormalized tăng giảm trong transaction (riêng xoá comment không kiểm affected, view qualified không có guard); hai job quét/ghi hàng loạt videos bằng SQL.",
+   "why": "Không dùng SELECT FOR UPDATE: conditional UPDATE (thua race = 0 rows) chặn double-transition. Unique (videoId,viewerId)/(videoId,userId)/idempotencyKey chặn trùng HÀNG view/like và upload trùng; nhưng viewCount (đọc view.qualified rồi increment) và giảm commentCount khi xoá comment không có guard nên request song song có thể đếm lệch.",
+   "ifMissing": "Hai request đồng thời có thể finalize/duyệt cùng video hai lần, đếm view/like đôi và tạo video trùng khi retry upload.",
+   "with": "postgres",
+   "withKind": "infra",
+   "direction": "out",
+   "mechanism": "shared-db",
+   "endpoints": [
+    "e1",
+    "e2",
+    "e3",
+    "e4",
+    "e5",
+    "e6",
+    "e7",
+    "e8",
+    "e9",
+    "e10",
+    "e11",
+    "e12",
+    "e13"
+   ],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/short-video/entities/video-comment.entity.ts",
+     "line": 10,
+     "quote": "@Entity({ name: 'video_comments' })"
+    },
+    {
+     "file": "apps/core-api/src/modules/short-video/entities/video-reaction.entity.ts",
+     "line": 10,
+     "quote": "@Entity({ name: 'video_reactions' })"
+    },
+    {
+     "file": "apps/core-api/src/modules/short-video/entities/video-view.entity.ts",
+     "line": 15,
+     "quote": "@Entity({ name: 'video_views' })"
+    }
+   ],
+   "review": {
+    "verdict": "supported"
+   },
+   "logic": {
+    "verdict": "corrected",
+    "note": "Unique chỉ chặn trùng hàng view/like; viewCount không có guard so sánh-đặt và xoá comment giảm commentCount không kiểm affected."
+   }
+  },
+  {
+   "id": "c5",
+   "label": "duyệt/gỡ video + audit",
+   "what": "AdminService gọi ShortVideoService.listPendingReview/listPublished/adminApprove/adminReject/adminRemove, truyền manager để chuyển trạng thái video và ghi audit log trong CÙNG transaction.",
+   "why": "Với VIDEO_MODERATION_MODE=pre video chỉ lên published khi admin duyệt; quyết định kiểm duyệt phải atomic với audit log (cùng pattern banUser) và chỉ short-video được ghi videos.status.",
+   "ifMissing": "Video kẹt pending_review mãi không lên được; hoặc hành động admin không có audit hay audit lệch với trạng thái thật.",
+   "with": "admin",
+   "withKind": "service",
+   "direction": "in",
+   "mechanism": "di-call",
+   "endpoints": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/admin/admin.service.ts",
+     "line": 151,
+     "quote": "return this.shortVideoService.listPendingReview(query);"
+    },
+    {
+     "file": "apps/core-api/src/modules/admin/admin.service.ts",
+     "line": 157,
+     "quote": "return this.shortVideoService.listPublished({ ...query, sort: 'recent' });"
+    },
+    {
+     "file": "apps/core-api/src/modules/admin/admin.service.ts",
+     "line": 162,
+     "quote": "const video = await this.shortVideoService.adminApprove(videoId, manager);"
+    }
+   ],
+   "basis": "ast",
+   "logic": {
+    "verdict": "sound",
+    "note": "approveVideo/reject/remove chạy trong dataSource.transaction cùng auditLogService.record; default VIDEO_MODERATION_MODE là pre. Đúng."
+   }
+  },
+  {
+   "id": "c6",
+   "label": "guard video cho tặng quà",
+   "what": "GiftService.sendVideoGift gọi ShortVideoService.getVideoOrThrow(user, videoId) rồi lấy video.authorUserId làm người nhận quà.",
+   "why": "Người nhận suy từ video chứ client không gửi receiverUserId (chống gửi lệch người); và chỉ video mà người tặng nhìn thấy được (published hoặc của chính họ) mới được tặng, guard đó thuộc short-video.",
+   "ifMissing": "Client có thể tặng quà cho video đã removed/chưa duyệt hoặc chỉ định người nhận tuỳ ý.",
+   "with": "gift",
+   "withKind": "service",
+   "direction": "in",
+   "mechanism": "di-call",
+   "endpoints": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/gift/gift.service.ts",
+     "line": 280,
+     "quote": "const video = await this.shortVideoService.getVideoOrThrow(user, videoId);"
+    }
+   ],
+   "basis": "ast",
+   "logic": {
+    "verdict": "sound",
+    "note": "sendVideoGift gọi getVideoOrThrow (tác giả hoặc published) rồi lấy authorUserId làm người nhận, chặn tự tặng."
+   }
+  },
+  {
+   "id": "c50",
+   "with": "external:object-storage",
+   "withKind": "external",
+   "direction": "out",
+   "mechanism": "sdk",
+   "endpoints": [
+    "e1",
+    "e13"
+   ],
+   "label": "presigned PUT + dọn object",
+   "what": "VideoStoragePort: generateStorageKey(authorId), issueUploadUrl(storageKey) trả presigned URL cho client PUT thẳng body video, delete(storageKey) dọn object mồ côi. Hiện chỉ có DevVideoStorageAdapter (URL giả) và UnavailableVideoStorageAdapter cho production.",
+   "why": "Body video lớn không được đi qua NestJS nên storage ngoài phải giữ file; tách generateStorageKey (thuần) khỏi issueUploadUrl (I/O) để replay Idempotency-Key cấp lại ĐÚNG URL của storageKey đã tạo. Upload bỏ dở/failed để lại object mồ côi nên sweeper phải gọi delete.",
+   "ifMissing": "Phải nhận binary video qua core-api (nghẽn băng thông, DoS) hoặc upload bỏ dở để lại object mồ côi tốn dung lượng không ai dọn.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/short-video/ports/video-storage.port.ts",
+     "line": 12,
+     "quote": "abstract issueUploadUrl(storageKey: string): Promise<string>;"
+    },
+    {
+     "file": "apps/core-api/src/modules/short-video/ports/video-storage.port.ts",
+     "line": 16,
+     "quote": "abstract delete(storageKey: string): Promise<void>;"
+    }
+   ],
+   "review": {
+    "verdict": "supported"
+   },
+   "logic": {
+    "verdict": "sound",
+    "note": "Port tách generateStorageKey và issueUploadUrl; factory chọn Dev hoặc Unavailable. Sweeper xoá object của MỌI video failed mỗi tick (xoá idempotent, không có cờ đã dọn)."
+   }
+  },
+  {
+   "id": "c51",
+   "with": "external:video-transcode",
+   "withKind": "external",
+   "direction": "out",
+   "mechanism": "sdk",
+   "endpoints": [
+    "e2"
+   ],
+   "label": "transcode sau upload",
+   "what": "VideoTranscodePort.transcode(storageKey) trả {playbackUrl, thumbnailUrl, durationSeconds}; finalizeUpload lưu 3 giá trị này vào Video rồi chuyển pending_review|published. Hiện chỉ có Dev adapter đồng bộ; vendor thật (Cloudflare Stream/Mux) chưa được nối.",
+   "why": "Video client upload là file thô; phải transcode ra playback/thumbnail/duration thì mới phát được. Vendor thật sẽ bất đồng bộ (webhook) nên 'processing' là trạng thái trung gian riêng, và lỗi transcode phải đẩy video sang failed thay vì để kẹt.",
+   "ifMissing": "Video không có playbackUrl/thumbnail/duration nên không phát được, và không có điểm nào để phát hiện file hỏng trước khi lên published.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/short-video/ports/video-transcode.port.ts",
+     "line": 14,
+     "quote": "abstract transcode(storageKey: string): Promise<TranscodeResult>;"
+    }
+   ],
+   "review": {
+    "verdict": "supported"
+   },
+   "logic": {
+    "verdict": "sound",
+    "note": "finalizeUpload transition uploading sang processing, transcode, update có điều kiện sang pending_review/published; lỗi chuyển failed. Đúng."
+   }
+  },
+  {
+   "id": "c52",
+   "with": "web",
+   "withKind": "client",
+   "direction": "in",
+   "mechanism": "http",
+   "endpoints": [
+    "e3",
+    "e6",
+    "e7",
+    "e10"
+   ],
+   "label": "reel feed + gửi watch-time",
+   "what": "Web gọi GET /videos (scope for_you|following), POST /videos/{id}/views với watchTimeMs khi người xem xem video, tim/bỏ tim và comment; chưa có UI upload nào gọi upload-intent/finalize.",
+   "why": "Server không biết người xem đã xem bao lâu: chỉ client đo watchTimeMs và báo lên để viewCount chỉ tăng khi qualified. Không có realtime event cho video nên web phải refetch REST để thấy số liệu mới.",
+   "ifMissing": "viewCount (đầu vào của rankScore) không bao giờ tăng, ranking đứng yên và danh sách không tự cập nhật.",
+   "evidence": [
+    {
+     "file": "apps/web/src/features/short-video/api.ts",
+     "line": 137,
+     "quote": "await apiClient.POST('/api/v1/videos/{id}/views', {"
+    }
+   ],
+   "review": {
+    "verdict": "supported"
+   },
+   "logic": {
+    "verdict": "sound",
+    "note": "Web chỉ gọi views/reactions/comments và list; không có UI gọi upload-intent/finalize trong apps/web."
+   }
+  },
+  {
+   "id": "c53",
+   "with": "admin-console",
+   "withKind": "client",
+   "direction": "in",
+   "mechanism": "http",
+   "endpoints": [],
+   "label": "hàng chờ duyệt video",
+   "what": "Admin console gọi GET /api/v1/admin/videos/pending|published và POST approve|reject|remove (route ở AdminController, rồi AdminService gọi vào ShortVideoService qua c5).",
+   "why": "Mặc định VIDEO_MODERATION_MODE=pre: video chỉ public sau khi người kiểm duyệt bấm duyệt trong console; không có UI này thì không ai chuyển được pending_review sang published.",
+   "ifMissing": "Video upload xong nằm vĩnh viễn ở pending_review, và video bị report dưới ngưỡng auto-hide không có cách gỡ thủ công.",
+   "evidence": [
+    {
+     "file": "apps/admin/src/features/moderation/videos-api.ts",
+     "line": 25,
+     "quote": "const res = await apiClient.GET('/api/v1/admin/videos/pending', {"
+    }
+   ],
+   "review": {
+    "verdict": "supported"
+   },
+   "logic": {
+    "verdict": "sound",
+    "note": "videos-api.ts có pending, published, approve, reject, remove; comment ở đầu file nói không có list published là cũ."
+   }
+  }
+ ],
+ "waivedEdges": [],
+ "excludedRoutes": [],
+ "notes": [
+  "Code chỉ có PORT + adapter dev/unavailable: DevVideoStorageAdapter trả URL giả https://dev-storage.invalid/..., production dùng UnavailableVideo*Adapter, và nếu VIDEO_UPLOAD_ENABLED=true dưới NODE_ENV=production thì factory ném lỗi lúc boot. Nghĩa là KHÔNG có object storage/transcode vendor thật nào được nối; hai cạnh external bên dưới mô tả hợp đồng của port, không phải tích hợp đang chạy.",
+  "VideoStoragePort.getPlaybackUrl/getThumbnailUrl khai báo trong port nhưng ShortVideoService không gọi: URL playback/thumbnail lấy từ TranscodeResult do VideoTranscodePort.transcode trả về.",
+  "Khác Feed, short-video KHÔNG lọc block: getVideoOrThrow/listPublished không gọi SafetyService.isBlocked/getBlockedUserIds, nên người đã block nhau vẫn thấy/tim/bình luận video của nhau. Doc short-video-service.md không hứa lọc block nhưng đây là điểm khác với Feed cần chú ý. Guest cũng không bị chặn tạo like/comment ở module này (không có assertNotGuest).",
+  "Doc § 2 nói finalize gọi transcode đồng bộ trong một request (Dev port); code đúng vậy: lỗi transcode chỉ chuyển processing -> failed rồi trả video, và VideoSweeperService mới gọi storage.delete dọn object mồ côi.",
+  "Tất cả route /videos là jwt qua APP_GUARD JwtAuthGuard toàn cục; không @Public, không roles. Các route /admin/videos/* nằm ở AdminController (RequireAdminPermission ResolveReports), không phải ở module này.",
+  "Gift (POST /videos/:videoId/gifts) và Admin gọi vào ShortVideoService qua DI nên không map vào endpoint REST nào của module này; Gift/Admin sở hữu route đó."
+ ],
+ "techniques": [
+  {
+   "slug": "jwt-bearer",
+   "name": "JWT bearer (access token không trạng thái)",
+   "model": "JWT bearer",
+   "how": "Client gửi access token (JWT) trong header Authorization; guard xác minh chữ ký và hạn rồi gắn user vào request, server không giữ phiên.",
+   "why": "Không trạng thái nên scale ngang dễ và không phải tra DB mỗi request; đánh đổi là không thu hồi tức thì trước khi token hết hạn.",
+   "alternative": "Session phía server (cookie + kho phiên) thu hồi được tức thì nhưng cần kho phiên dùng chung.",
+   "endpoints": [
+    "e1",
+    "e2",
+    "e3",
+    "e4",
+    "e5",
+    "e6",
+    "e7",
+    "e8",
+    "e9",
+    "e10",
+    "e11"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/app/app.module.ts",
+     "line": 117,
+     "quote": "{ provide: APP_GUARD, useClass: JwtAuthGuard },"
+    }
+   ],
+   "auto": true,
+   "count": 11,
+   "id": "t1",
+   "local": "Mọi route /videos/* được bảo vệ bởi APP_GUARD JwtAuthGuard khai báo toàn cục trong app.module.ts; user lấy từ @CurrentUser() AuthenticatedUser."
+  },
+  {
+   "slug": "ownership-check",
+   "name": "Kiểm tra quyền sở hữu tài nguyên",
+   "model": "Kiểm tra chủ sở hữu",
+   "how": "So userId của tài nguyên với userId người gọi trước khi đọc hoặc sửa.",
+   "why": "Ngăn IDOR: không thao tác được trên tài nguyên của người khác bằng cách đoán id.",
+   "endpoints": [
+    "e11",
+    "e2"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/short-video/short-video.service.ts",
+     "line": 395,
+     "quote": "comment.authorUserId !== user.userId &&"
+    }
+   ],
+   "auto": true,
+   "count": 3,
+   "id": "t2",
+   "local": "Xoá comment chỉ cho phép tác giả comment hoặc tác giả video: so sánh comment.authorUserId và video.authorUserId với user.userId trong short-video.service.ts."
+  },
+  {
+   "slug": "idempotency-key",
+   "name": "Idempotency-Key (client sinh, server khử trùng)",
+   "model": "Idempotency-Key",
+   "how": "Client gửi khoá duy nhất cho mỗi thao tác; server lưu khoá (unique) và trả lại kết quả cũ khi gặp lại.",
+   "why": "Retry mạng không tạo bản ghi hoặc trừ tiền hai lần.",
+   "endpoints": [
+    "e1"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/short-video/entities/video.entity.ts",
+     "line": 62,
+     "quote": "idempotencyKey!: string;"
+    },
+    {
+     "file": "apps/core-api/src/modules/short-video/short-video.constants.ts",
+     "line": 10,
+     "quote": "export function videoUploadIdempotencyKey("
+    },
+    {
+     "file": "apps/core-api/src/modules/short-video/short-video.controller.ts",
+     "line": 39,
+     "quote": "ApiIdempotencyKeyHeader,"
+    }
+   ],
+   "auto": true,
+   "count": 13,
+   "id": "t3",
+   "local": "Chỉ e1 dùng Idempotency-Key: videoUploadIdempotencyKey(user,key) lưu ở Video.idempotencyKey unique; replay cấp lại presigned URL của storageKey gốc, khác caption thì 409. Các route khác không nhận header."
+  },
+  {
+   "slug": "db-transaction",
+   "name": "Transaction DB (một đơn vị công việc)",
+   "model": "Transaction",
+   "how": "Gói nhiều thao tác ghi vào một transaction: cùng commit hoặc cùng rollback.",
+   "why": "Tránh trạng thái nửa vời khi lỗi giữa chừng.",
+   "endpoints": [
+    "e6",
+    "e7",
+    "e8",
+    "e9",
+    "e11"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/short-video/short-video.service.ts",
+     "line": 258,
+     "quote": "await this.dataSource.transaction(async (manager) => {"
+    }
+   ],
+   "auto": true,
+   "count": 5,
+   "id": "t4",
+   "local": "recordView/like/unlike/createComment/deleteComment bọc dataSource.transaction; deleteComment giảm commentCount mà không kiểm affected (khác Feed) nên hai request xoá song song có thể giảm hai lần."
+  },
+  {
+   "slug": "unique-constraint-guard",
+   "name": "Ràng buộc unique ở DB làm chốt chặn cuối",
+   "model": "Ràng buộc DB",
+   "how": "Ràng buộc unique hoặc index duy nhất ở DB là chốt chặn cuối cho trùng lặp.",
+   "why": "Check-rồi-insert ở tầng code vẫn dính race; DB mới bảo đảm tuyệt đối.",
+   "endpoints": [
+    "e1",
+    "e6",
+    "e7"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/short-video/entities/video-reaction.entity.ts",
+     "line": 11,
+     "quote": "@Index('uq_video_reactions_video_user', ['videoId', 'userId'], { unique: true })"
+    },
+    {
+     "file": "apps/core-api/src/modules/short-video/entities/video-view.entity.ts",
+     "line": 16,
+     "quote": "@Index('uq_video_views_video_viewer', ['videoId', 'viewerId'], { unique: true })"
+    },
+    {
+     "file": "apps/core-api/src/modules/short-video/entities/video.entity.ts",
+     "line": 61,
+     "quote": "@Column({ type: 'varchar', length: 255, unique: true })"
+    }
+   ],
+   "auto": true,
+   "count": 6,
+   "id": "t5",
+   "local": "uq_video_reactions_video_user và uq_video_views_video_viewer chặn trùng HÀNG like/view; riêng viewCount đọc view.qualified rồi increment không có guard nên hai request song song cùng viewer có thể cộng hai lần."
+  },
+  {
+   "id": "t6",
+   "slug": "state-machine",
+   "name": "Máy trạng thái tường minh",
+   "model": "State machine",
+   "how": "Trạng thái và các bước chuyển hợp lệ được định nghĩa tường minh.",
+   "why": "Chặn chuyển trạng thái sai thứ tự và dễ kiểm thử.",
+   "endpoints": [
+    "e2",
+    "e5",
+    "e13"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/short-video/short-video.service.ts",
+     "line": 534,
+     "quote": "Conditional UPDATE — thua race"
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "local": "Video chuyển uploading, processing, pending_review|published, removed|rejected|failed bằng transition() là UPDATE ... WHERE status = from; thua race trả 0 rows (finalize, autoHide, sweeper).",
+   "addedByLogicReview": true
+  },
+  {
+   "id": "t7",
+   "slug": "derived-state",
+   "name": "Trạng thái suy ra từ dữ liệu gốc/thời gian (không lưu cờ)",
+   "model": "Trạng thái suy ra",
+   "how": "Trạng thái được tính lại từ dữ liệu gốc và giờ server mỗi lần đọc, không lưu cờ.",
+   "why": "Không cần timer hay job để chuyển trạng thái và không có cờ bị lệch.",
+   "endpoints": [
+    "e12",
+    "e3"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/short-video/jobs/video-ranking.service.ts",
+     "line": 22,
+     "quote": "Job derive, KHÔNG phải nguồn"
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "local": "rankScore là cột derive do VideoRankingService tính lại theo lô 1000 từ view/like/comment và time-decay; sort=ranked loại rankScore IS NULL nên video mới chưa có điểm chưa hiện ở tab ranked.",
+   "addedByLogicReview": true
+  },
+  {
+   "slug": "interval-worker",
+   "name": "Worker lặp (interval / ManagedInterval)",
+   "model": "Worker lặp",
+   "how": "Vòng lặp theo chu kỳ trong process (ManagedInterval).",
+   "why": "Worker nền đơn giản, không cần hạ tầng queue riêng.",
+   "endpoints": [
+    "e12",
+    "e13"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/short-video/jobs/video-ranking.service.ts",
+     "line": 32,
+     "quote": "private readonly job = new ManagedInterval();"
+    },
+    {
+     "file": "apps/core-api/src/modules/short-video/jobs/video-sweeper.service.ts",
+     "line": 31,
+     "quote": "private readonly job = new ManagedInterval();"
+    }
+   ],
+   "auto": true,
+   "count": 2,
+   "id": "t8",
+   "local": "VideoRankingService và VideoSweeperService mỗi cái giữ một ManagedInterval (this.job) chạy theo intervalMs lấy từ config."
+  },
+  {
+   "id": "t9",
+   "slug": "singleton-worker-lock",
+   "name": "Worker singleton nhờ advisory lock",
+   "model": "Singleton",
+   "how": "Advisory lock bảo đảm chỉ một replica chạy worker tại một thời điểm.",
+   "why": "Tránh chạy trùng khi scale nhiều pod.",
+   "endpoints": [
+    "e12",
+    "e13"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/short-video/jobs/video-ranking.service.ts",
+     "line": 50,
+     "quote": "clusterSingleton: { dataSource: this.dataSource },"
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "local": "Cả job ranking và sweeper chạy với clusterSingleton: { dataSource } nên chỉ một instance trong cluster chạy mỗi tick, dùng khoá qua DataSource Postgres."
+  },
+  {
+   "slug": "sweeper",
+   "name": "Sweeper dọn dữ liệu hết hạn",
+   "model": "Sweeper",
+   "how": "Job quét dọn bản ghi hết hạn.",
+   "why": "Giải phóng tài nguyên và tránh ghi rác.",
+   "endpoints": [
+    "e13"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/short-video/jobs/video-sweeper.service.ts",
+     "line": 27,
+     "quote": "export class VideoSweeperService"
+    },
+    {
+     "file": "apps/core-api/src/modules/short-video/short-video.module.ts",
+     "line": 34,
+     "quote": "VideoSweeperService,"
+    }
+   ],
+   "auto": true,
+   "count": 3,
+   "id": "t10",
+   "local": "VideoSweeperService (đăng ký trong ShortVideoModule) quét video kẹt uploading quá timeout để đánh failed và dọn object mồ côi."
+  },
+  {
+   "slug": "rate-limit-throttler",
+   "name": "Rate limit (@nestjs/throttler)",
+   "model": "Rate limit",
+   "how": "@Throttle giới hạn số request theo khoảng thời gian cho từng route.",
+   "why": "Chặn spam và dò quét bằng cách giới hạn số request theo thời gian, trước khi request tới logic nghiệp vụ.",
+   "endpoints": [
+    "e1",
+    "e2",
+    "e3",
+    "e4",
+    "e5",
+    "e6",
+    "e7",
+    "e8",
+    "e9",
+    "e10",
+    "e11"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/app/app.module.ts",
+     "line": 116,
+     "quote": "{ provide: APP_GUARD, useClass: ThrottlerGuard },"
+    }
+   ],
+   "auto": true,
+   "count": 11,
+   "id": "t11",
+   "local": "ThrottlerGuard đăng ký APP_GUARD toàn cục áp dụng cho các endpoint /videos/*; giới hạn mặc định theo cấu hình throttler của app."
+  },
+  {
+   "id": "t12",
+   "slug": "best-effort-degrade",
+   "name": "Best-effort: lỗi phụ không phá nghiệp vụ chính",
+   "model": "Best-effort",
+   "how": "Việc phụ (push, realtime) lỗi chỉ ghi log, không phá nghiệp vụ chính.",
+   "why": "Nghiệp vụ đã commit không nên hỏng vì kênh phụ.",
+   "endpoints": [
+    "e13"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/short-video/jobs/video-sweeper.service.ts",
+     "line": 109,
+     "quote": "sẽ retry ở tick sau"
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "local": "VideoSweeperService gọi storagePort.delete trong try/catch: lỗi chỉ log warn và thử lại ở tick sau, không làm hỏng việc đánh failed video kẹt uploading.",
+   "addedByLogicReview": true
+  },
+  {
+   "slug": "fail-closed",
+   "name": "Lỗi thì chặn (fail closed)",
+   "model": "Fail closed",
+   "how": "Khi thành phần kiểm tra lỗi thì từ chối thay vì cho qua.",
+   "why": "An toàn hơn khi mất Redis hoặc quota.",
+   "endpoints": [],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/short-video/ports/unavailable-video-storage.adapter.ts",
+     "line": 5,
+     "quote": "/** Fail-closed adapter cho production view-only khi chưa có storage provider thật. */"
+    },
+    {
+     "file": "apps/core-api/src/modules/short-video/ports/unavailable-video-transcode.adapter.ts",
+     "line": 5,
+     "quote": "/** Fail-closed adapter cho production view-only khi chưa có transcode provider thật. */"
+    },
+    {
+     "file": "apps/core-api/src/modules/short-video/ports/video-provider.factory.ts",
+     "line": 15,
+     "quote": "/** Production hiện chưa có vendor adapter thật nên upload phải fail-closed. */"
+    }
+   ],
+   "auto": true,
+   "count": 3,
+   "id": "t13",
+   "local": "Production dùng UnavailableVideoStorageAdapter/UnavailableVideoTranscodeAdapter; assertVideoProviderConfiguration còn ném lỗi lúc khởi động nếu NODE_ENV=production mà VIDEO_UPLOAD_ENABLED=true."
+  },
+  {
+   "slug": "openapi-contract",
+   "name": "Hợp đồng OpenAPI + client sinh tự động",
+   "model": "OpenAPI",
+   "how": "OpenAPI sinh từ code và client TypeScript sinh tự động.",
+   "why": "Client và server không lệch hợp đồng.",
+   "endpoints": [
+    "e1",
+    "e2",
+    "e3",
+    "e4",
+    "e5",
+    "e6",
+    "e7",
+    "e8",
+    "e9",
+    "e10",
+    "e11"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/short-video/short-video.controller.ts",
+     "line": 57,
+     "quote": "@ApiOperation({"
+    }
+   ],
+   "auto": true,
+   "count": 11,
+   "id": "t14",
+   "local": "ShortVideoController gắn @ApiOperation, @ApiIdempotencyKeyHeader và DTO có @ApiPropertyOptional để sinh hợp đồng OpenAPI cho client."
+  },
+  {
+   "slug": "presigned-upload",
+   "name": "Upload presigned thẳng lên object storage",
+   "model": "Presigned URL",
+   "how": "Server cấp URL ký sẵn; client upload thẳng lên object storage.",
+   "why": "Body lớn không đi qua core-api.",
+   "endpoints": [
+    "e1"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/short-video/dto/short-video.dtos.ts",
+     "line": 19,
+     "quote": "export class CreateUploadIntentDto {"
+    },
+    {
+     "file": "apps/core-api/src/modules/short-video/short-video.controller.ts",
+     "line": 24,
+     "quote": "CreateUploadIntentDto,"
+    },
+    {
+     "file": "apps/core-api/src/modules/short-video/short-video.service.ts",
+     "line": 25,
+     "quote": "CreateUploadIntentDto,"
+    }
+   ],
+   "auto": true,
+   "count": 10,
+   "id": "t15",
+   "local": "Chỉ e1 phát presigned URL (VideoStoragePort.issueUploadUrl) và e13 gọi delete dọn object; adapter hiện là Dev (URL giả), chưa có vendor thật; body video không đi qua core-api."
+  },
+  {
+   "slug": "cursor-pagination",
+   "name": "Phân trang cursor (keyset)",
+   "model": "Keyset",
+   "how": "Phân trang theo cursor thay vì offset.",
+   "why": "Ổn định khi dữ liệu thay đổi và nhanh ở trang sâu.",
+   "endpoints": [
+    "e10",
+    "e3"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/short-video/dto/short-video.dtos.ts",
+     "line": 71,
+     "quote": "export class ListVideosQueryDto extends CursorPageQueryDto {"
+    },
+    {
+     "file": "apps/core-api/src/modules/short-video/short-video.controller.ts",
+     "line": 189,
+     "quote": "@Query() query: CursorPageQueryDto,"
+    },
+    {
+     "file": "apps/core-api/src/modules/short-video/short-video.service.ts",
+     "line": 198,
+     "quote": "return { items: [], meta: { nextCursor: null } };"
+    }
+   ],
+   "auto": true,
+   "count": 11,
+   "id": "t16",
+   "local": "GET /videos dùng ListVideosQueryDto extends CursorPageQueryDto (sort recent/ranked) và listComments nhận CursorPageQueryDto, phân trang theo cursor seq."
+  },
+  {
+   "slug": "soft-delete",
+   "name": "Xoá mềm",
+   "model": "Xoá mềm",
+   "how": "Đánh dấu xoá thay vì xoá hàng.",
+   "why": "Giữ lịch sử và khôi phục được.",
+   "endpoints": [
+    "e10",
+    "e11"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/short-video/entities/video-comment.entity.ts",
+     "line": 29,
+     "quote": "deletedAt!: Date | null;"
+    },
+    {
+     "file": "apps/core-api/src/modules/short-video/short-video.service.ts",
+     "line": 365,
+     "quote": ".andWhere('c.deletedAt IS NULL');"
+    }
+   ],
+   "auto": true,
+   "count": 4,
+   "id": "t17",
+   "local": "VideoComment có cột deletedAt timestamptz; truy vấn danh sách lọc c.deletedAt IS NULL nên comment bị xoá chỉ ẩn, không xoá hàng."
+  },
+  {
+   "id": "t18",
+   "slug": "anti-enumeration",
+   "name": "Chống dò tài khoản",
+   "model": "Chống dò",
+   "how": "Phản hồi đồng nhất để không dò được tài khoản có tồn tại hay không.",
+   "why": "Chống thu thập người dùng.",
+   "endpoints": [
+    "e4",
+    "e5",
+    "e6",
+    "e7",
+    "e8",
+    "e9",
+    "e10",
+    "e11"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/short-video/short-video.service.ts",
+     "line": 169,
+     "quote": "trả CÙNG mã lỗi"
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "local": "getVideoOrThrow trả cùng VIDEO_NOT_FOUND 404 cho video không tồn tại, removed, rejected hoặc chưa published (với người không phải tác giả).",
+   "addedByLogicReview": true
+  }
+ ]
+}

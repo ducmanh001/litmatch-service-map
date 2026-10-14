@@ -1,0 +1,1088 @@
+{
+ "id": "feed",
+ "title": "Feed (+ Stories)",
+ "tagline": "Bài đăng, bình luận, thả tim và Stories 24h",
+ "deployable": "core-api",
+ "role": "Sở hữu Post/Comment/Reaction (feed công khai toàn cục, không fanout) và Story/StoryView (ephemeral, hết hạn lọc lúc đọc). KHÔNG sở hữu quan hệ bạn bè/block/privacy/ảnh/notification: mọi quyết định xem được hay không đều hỏi module chủ qua DI; Feed không có inbound caller nào.",
+ "owns": [
+  "bảng posts (likeCount/commentCount denormalized, audience, deletedAt)",
+  "bảng comments, reactions (unique postId+userId)",
+  "bảng stories, story_views (unique storyId+viewerId)"
+ ],
+ "confidence": "high",
+ "endpoints": [
+  {
+   "id": "e1",
+   "kind": "rest",
+   "method": "POST",
+   "path": "/api/v1/stories",
+   "purpose": "Đăng story từ mediaAssetId: bắt buộc Idempotency-Key (unique DB), guest bị chặn, URL ảnh chỉ nhận qua Media.resolveImageUrl, hết hạn sau STORY_TTL_HOURS.",
+   "auth": "jwt",
+   "file": "apps/core-api/src/modules/feed/controllers/story.controller.ts",
+   "line": 45,
+   "quote": "@Post()"
+  },
+  {
+   "id": "e2",
+   "kind": "rest",
+   "method": "GET",
+   "path": "/api/v1/stories/ring",
+   "purpose": "Ring story còn hạn của mình + bạn bè (listFriendIds), loại tác giả block 2 chiều và tác giả ẩn hồ sơ.",
+   "auth": "jwt",
+   "file": "apps/core-api/src/modules/feed/controllers/story.controller.ts",
+   "line": 76,
+   "quote": "@Get('ring')"
+  },
+  {
+   "id": "e3",
+   "kind": "rest",
+   "method": "GET",
+   "path": "/api/v1/stories/:storyId",
+   "purpose": "Xem 1 story và ghi StoryView (self-view không đếm, xem lại idempotent); block/hidden/sai audience đều trả 404 STORY_NOT_FOUND.",
+   "auth": "jwt",
+   "file": "apps/core-api/src/modules/feed/controllers/story.controller.ts",
+   "line": 87,
+   "quote": "@Get(':storyId')"
+  },
+  {
+   "id": "e4",
+   "kind": "rest",
+   "method": "GET",
+   "path": "/api/v1/stories/:storyId/viewers",
+   "purpose": "Danh sách người xem story, CHỈ tác giả truy vấn được; lọc block hiện tại lúc đọc.",
+   "auth": "jwt",
+   "file": "apps/core-api/src/modules/feed/controllers/story.controller.ts",
+   "line": 100,
+   "quote": "@Get(':storyId/viewers')"
+  },
+  {
+   "id": "e5",
+   "kind": "rest",
+   "method": "POST",
+   "path": "/api/v1/stories/:storyId/reply",
+   "purpose": "Trả lời story thành DM qua FriendService.sendMessage (attachment story_reply); cần đã có Conversation với tác giả (thường là bạn, hoặc mở trước qua profile chat/gift), nếu không 403 STORY_REPLY_REQUIRES_FRIENDSHIP.",
+   "auth": "jwt",
+   "file": "apps/core-api/src/modules/feed/controllers/story.controller.ts",
+   "line": 113,
+   "quote": "@Post(':storyId/reply')"
+  },
+  {
+   "id": "e6",
+   "kind": "rest",
+   "method": "POST",
+   "path": "/api/v1/feed/posts",
+   "purpose": "Đăng bài: Idempotency-Key (unique DB, khác nội dung 409), guest bị chặn, ảnh chỉ qua imageAssetId được Media resolve, audience mặc định public.",
+   "auth": "jwt",
+   "file": "apps/core-api/src/modules/feed/feed.controller.ts",
+   "line": 53,
+   "quote": "@HttpPost('posts')"
+  },
+  {
+   "id": "e7",
+   "kind": "rest",
+   "method": "GET",
+   "path": "/api/v1/feed/posts",
+   "purpose": "Feed công khai toàn cục (chỉ audience=public), cursor seq giảm dần, loại tác giả đang block/bị block.",
+   "auth": "jwt",
+   "file": "apps/core-api/src/modules/feed/feed.controller.ts",
+   "line": 84,
+   "quote": "@Get('posts')"
+  },
+  {
+   "id": "e8",
+   "kind": "rest",
+   "method": "GET",
+   "path": "/api/v1/feed/users/:userId/posts",
+   "purpose": "Timeline một tác giả: audience khớp quan hệ (chính mình thấy hết, bạn thấy public+friends, người lạ chỉ public); block/hidden trả như không tồn tại.",
+   "auth": "jwt",
+   "file": "apps/core-api/src/modules/feed/feed.controller.ts",
+   "line": 99,
+   "quote": "@Get('users/:userId/posts')"
+  },
+  {
+   "id": "e9",
+   "kind": "rest",
+   "method": "GET",
+   "path": "/api/v1/feed/posts/:postId",
+   "purpose": "Chi tiết 1 bài qua getPostOrThrow: đã xoá, bị block, tác giả ẩn hồ sơ hay sai audience đều 404 POST_NOT_FOUND (chống oracle).",
+   "auth": "jwt",
+   "file": "apps/core-api/src/modules/feed/feed.controller.ts",
+   "line": 115,
+   "quote": "@Get('posts/:postId')"
+  },
+  {
+   "id": "e10",
+   "kind": "rest",
+   "method": "DELETE",
+   "path": "/api/v1/feed/posts/:postId",
+   "purpose": "Xoá mềm bài (deletedAt), chỉ tác giả; đi qua getPostOrThrow nên cũng áp block/audience.",
+   "auth": "jwt",
+   "file": "apps/core-api/src/modules/feed/feed.controller.ts",
+   "line": 128,
+   "quote": "@Delete('posts/:postId')"
+  },
+  {
+   "id": "e11",
+   "kind": "rest",
+   "method": "POST",
+   "path": "/api/v1/feed/posts/:postId/comments",
+   "purpose": "Bình luận: guest bị chặn, guard block/audience, insert Comment + tăng commentCount + tạo Notification trong cùng transaction, sendPush sau commit.",
+   "auth": "jwt",
+   "file": "apps/core-api/src/modules/feed/feed.controller.ts",
+   "line": 138,
+   "quote": "@HttpPost('posts/:postId/comments')"
+  },
+  {
+   "id": "e12",
+   "kind": "rest",
+   "method": "GET",
+   "path": "/api/v1/feed/posts/:postId/comments",
+   "purpose": "Liệt kê comment cũ -> mới theo cursor seq sau khi qua getPostOrThrow, kèm batch author PublicProfileDto.",
+   "auth": "jwt",
+   "file": "apps/core-api/src/modules/feed/feed.controller.ts",
+   "line": 152,
+   "quote": "@Get('posts/:postId/comments')"
+  },
+  {
+   "id": "e13",
+   "kind": "rest",
+   "method": "DELETE",
+   "path": "/api/v1/feed/comments/:commentId",
+   "purpose": "Xoá mềm comment, chỉ tác giả comment; chỉ request chuyển deletedAt NULL -> timestamp mới giảm commentCount (chống trừ đôi khi race).",
+   "auth": "jwt",
+   "file": "apps/core-api/src/modules/feed/feed.controller.ts",
+   "line": 165,
+   "quote": "@Delete('comments/:commentId')"
+  },
+  {
+   "id": "e14",
+   "kind": "rest",
+   "method": "POST",
+   "path": "/api/v1/feed/posts/:postId/reactions",
+   "purpose": "Thả tim idempotent: insert Reaction + tăng likeCount + tạo Notification post_liked cùng transaction; thua race unique thì trả replay, không đếm đôi; guest bị chặn.",
+   "auth": "jwt",
+   "file": "apps/core-api/src/modules/feed/feed.controller.ts",
+   "line": 175,
+   "quote": "@HttpPost('posts/:postId/reactions')"
+  },
+  {
+   "id": "e15",
+   "kind": "rest",
+   "method": "DELETE",
+   "path": "/api/v1/feed/posts/:postId/reactions",
+   "purpose": "Bỏ thả tim idempotent: xoá Reaction và chỉ giảm likeCount khi thực sự xoá được dòng.",
+   "auth": "jwt",
+   "file": "apps/core-api/src/modules/feed/feed.controller.ts",
+   "line": 186,
+   "quote": "@Delete('posts/:postId/reactions')"
+  },
+  {
+   "id": "e16",
+   "kind": "rest",
+   "method": "GET",
+   "path": "/api/v1/feed/posts/:postId/reactions",
+   "purpose": "Trạng thái thả tim của chính mình + tổng likeCount, qua getPostOrThrow.",
+   "auth": "jwt",
+   "file": "apps/core-api/src/modules/feed/feed.controller.ts",
+   "line": 197,
+   "quote": "@Get('posts/:postId/reactions')"
+  },
+  {
+   "id": "e17",
+   "kind": "job",
+   "method": "WORKER",
+   "path": "StorySweeperService.onApplicationBootstrap",
+   "purpose": "Job StorySweeperService (theo STORY_SWEEPER_INTERVAL_MS) hard-delete story hết hạn theo lô 500, chạy 1 instance toàn cluster bằng clusterSingleton; chỉ dọn rác, correctness do filter expiresAt lúc đọc.",
+   "auth": "internal",
+   "file": "apps/core-api/src/modules/feed/jobs/story-sweeper.service.ts",
+   "line": 39,
+   "quote": "onApplicationBootstrap(): void {"
+  }
+ ],
+ "collaborators": [
+  {
+   "id": "c1",
+   "label": "quan hệ bạn bè / DM",
+   "what": "FriendService.areFriends (audience friends), listFriendIds (ring story), getConversationWithFriend + sendMessage (reply story thành DM kèm attachment story_reply).",
+   "why": "Quan hệ bạn bè là dữ liệu do Friend sở hữu nên Feed không tự suy ra được ai xem được bài/story audience=friends. Reply story phải là DM thật: Conversation/Message/idempotency/block/realtime do Friend sở hữu, và mediaUrl phải snapshot vào message vì story chết sau TTL còn message sống mãi.",
+   "ifMissing": "Feed phải tự giữ bản sao danh sách bạn: bài friends rò cho người lạ hoặc ẩn với bạn; reply story phải tự tạo kênh chat riêng, bỏ qua block và realtime của Friend Chat.",
+   "with": "friend",
+   "withKind": "service",
+   "direction": "out",
+   "mechanism": "di-call",
+   "endpoints": [
+    "e2",
+    "e3",
+    "e5",
+    "e8",
+    "e9",
+    "e10",
+    "e11",
+    "e12",
+    "e14",
+    "e15",
+    "e16"
+   ],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/feed/feed.service.ts",
+     "line": 159,
+     "quote": ": (await this.friendService.areFriends(viewer.userId, authorUserId))"
+    },
+    {
+     "file": "apps/core-api/src/modules/feed/feed.service.ts",
+     "line": 211,
+     "quote": "(await this.friendService.areFriends("
+    },
+    {
+     "file": "apps/core-api/src/modules/feed/services/story.service.ts",
+     "line": 89,
+     "quote": "this.friendService.listFriendIds(user.userId),"
+    }
+   ],
+   "basis": "ast",
+   "logic": {
+    "verdict": "sound",
+    "note": "areFriends, listFriendIds và getConversationWithFriend + sendMessage(attachment story_reply, snapshot mediaUrl) đúng code. Conversation có thể có ngoài Friendship."
+   }
+  },
+  {
+   "id": "c2",
+   "label": "resolve ảnh post/story",
+   "what": "MediaService.resolveImageUrl(userId, assetId, ImageAssetPurpose.Post|Story) đổi imageAssetId/mediaAssetId thành URL final đã kiểm chứng trước khi lưu Post.imageUrl / Story.mediaUrl.",
+   "why": "DTO chỉ nhận assetId, không nhận URL tuỳ ý (feed-service.md § 6). Chỉ Media biết asset có thuộc đúng caller, đã upload xong và đúng MIME/size nên Feed bắt buộc hỏi Media rồi mới ghi URL vào bản ghi.",
+   "ifMissing": "Feed phải tin URL do client gửi: user gắn được ảnh của người khác, ảnh chưa kiểm hoặc URL ngoài hệ thống vào bài/story.",
+   "with": "media",
+   "withKind": "service",
+   "direction": "out",
+   "mechanism": "di-call",
+   "endpoints": [
+    "e1",
+    "e6"
+   ],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/feed/controllers/story.controller.ts",
+     "line": 57,
+     "quote": "? await this.mediaService.resolveImageUrl("
+    },
+    {
+     "file": "apps/core-api/src/modules/feed/feed.controller.ts",
+     "line": 66,
+     "quote": "? await this.mediaService.resolveImageUrl("
+    }
+   ],
+   "basis": "ast",
+   "logic": {
+    "verdict": "sound",
+    "note": "Controller resolveImageUrl với purpose Post/Story; guest không resolve mà service từ chối bằng GUEST_FORBIDDEN."
+   }
+  },
+  {
+   "id": "c3",
+   "label": "thông báo like/comment",
+   "what": "NotificationService.createWithManager(manager, {type post_liked | post_commented, payload}) trong transaction của Feed, rồi sendPush(notification) sau commit (bỏ qua tự like/tự comment bài mình).",
+   "why": "Notification ghi cùng EntityManager nên like/comment và thông báo commit hoặc rollback cùng nhau (không có thông báo ma, không mất thông báo). Push là best-effort nên gọi SAU commit và sendPush không ném lỗi, để lỗi provider không làm hỏng like/comment đã lưu.",
+   "ifMissing": "Tác giả không biết có người tương tác với bài; hoặc nếu tạo ngoài transaction thì like rollback vẫn để lại thông báo, còn commit thành công có thể mất thông báo.",
+   "with": "notification",
+   "withKind": "service",
+   "direction": "out",
+   "mechanism": "di-call",
+   "endpoints": [
+    "e11",
+    "e14"
+   ],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/feed/feed.service.ts",
+     "line": 260,
+     "quote": "notification = await this.notificationService.createWithManager("
+    },
+    {
+     "file": "apps/core-api/src/modules/feed/feed.service.ts",
+     "line": 275,
+     "quote": "if (notification) await this.notificationService.sendPush(notification);"
+    },
+    {
+     "file": "apps/core-api/src/modules/feed/feed.service.ts",
+     "line": 360,
+     "quote": "notification = await this.notificationService.createWithManager("
+    }
+   ],
+   "basis": "ast",
+   "logic": {
+    "verdict": "sound",
+    "note": "createWithManager trong transaction comment và like, bỏ qua tự tương tác, sendPush sau commit, sendPush không throw. Đúng."
+   }
+  },
+  {
+   "id": "c4",
+   "label": "kiểm tra block 2 chiều",
+   "what": "SafetyService.isBlocked(a,b) cho từng cặp (người xem, tác giả) và getBlockedUserIds(userId) để lọc hàng loạt feed/ring/viewers.",
+   "why": "Block là dữ liệu append-only do Safety sở hữu (docs/10 Trust & Safety). Feed phải cắt mọi điểm chạm giữa hai người block nhau và trả cùng 404 như không tồn tại để không lộ ai block ai; list dùng getBlockedUserIds một query thay vì gọi lặp cho từng tác giả.",
+   "ifMissing": "Người đã block vẫn thấy, comment, thả tim bài của nhau và xuất hiện trong ring/danh sách người xem story: vi phạm quy tắc Trust & Safety.",
+   "with": "safety",
+   "withKind": "service",
+   "direction": "out",
+   "mechanism": "di-call",
+   "endpoints": [
+    "e2",
+    "e3",
+    "e4",
+    "e5",
+    "e7",
+    "e8",
+    "e9",
+    "e10",
+    "e11",
+    "e12",
+    "e14",
+    "e15",
+    "e16"
+   ],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/feed/feed.service.ts",
+     "line": 103,
+     "quote": "const blockedIds = await this.safetyService.getBlockedUserIds(user.userId);"
+    },
+    {
+     "file": "apps/core-api/src/modules/feed/feed.service.ts",
+     "line": 150,
+     "quote": "(await this.safetyService.isBlocked(viewer.userId, authorUserId)) ||"
+    },
+    {
+     "file": "apps/core-api/src/modules/feed/feed.service.ts",
+     "line": 151,
+     "quote": "(await this.safetyService.isBlocked(authorUserId, viewer.userId));"
+    }
+   ],
+   "basis": "ast",
+   "logic": {
+    "verdict": "sound",
+    "note": "getPostOrThrow/getStoryOrThrow gộp 404; danh sách dùng getBlockedUserIds, timeline trả trang rỗng. Block là log append-only trong Safety."
+   }
+  },
+  {
+   "id": "c5",
+   "label": "tác giả + privacy hồ sơ",
+   "what": "UserService.getByIdOrThrow/findByIds dựng author PublicProfileDto cho post/comment; PrivacySettingsService.isHidden/findForUsers (hideProfile) để ẩn bài/story của tác giả ẩn hồ sơ.",
+   "why": "Hồ sơ và cài đặt riêng tư do User sở hữu: Feed phải lấy PublicProfileDto (không tự chế DTO lộ birth date, trust score...) và batch-load một trang để web khỏi gọi GET /users/:id N lần. Tác giả bật hideProfile thì bài/story của họ phải biến mất với người khác.",
+   "ifMissing": "Client phải gọi N lần để lấy tác giả, hoặc Feed lộ field riêng tư; bài/story của người ẩn hồ sơ vẫn hiện ra.",
+   "with": "user",
+   "withKind": "service",
+   "direction": "out",
+   "mechanism": "di-call",
+   "endpoints": [
+    "e2",
+    "e3",
+    "e5",
+    "e6",
+    "e7",
+    "e8",
+    "e9",
+    "e10",
+    "e11",
+    "e12",
+    "e14",
+    "e15",
+    "e16"
+   ],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/feed/feed.controller.ts",
+     "line": 208,
+     "quote": "return PublicProfileDto.from(await this.userService.getByIdOrThrow(userId));"
+    },
+    {
+     "file": "apps/core-api/src/modules/feed/feed.controller.ts",
+     "line": 215,
+     "quote": "const users = await this.userService.findByIds("
+    },
+    {
+     "file": "apps/core-api/src/modules/feed/feed.service.ts",
+     "line": 153,
+     "quote": "if (await this.privacySettings.isHidden(authorUserId)) {"
+    }
+   ],
+   "basis": "ast",
+   "logic": {
+    "verdict": "sound",
+    "note": "PublicProfileDto chỉ gồm id, nickname, gender, avatarId, interests nên không lộ birth date/trust; batch findByIds; privacy isHidden/findForUsers đúng."
+   }
+  },
+  {
+   "id": "c6",
+   "label": "posts/comments/stories",
+   "what": "Ghi/đọc posts, comments, reactions, stories, story_views; likeCount/commentCount tăng giảm trong cùng transaction với insert/delete Reaction/Comment; job sweeper hard-delete stories và story_views cascade theo FK.",
+   "why": "Unique (postId,userId) và unique idempotencyKey trong DB là thứ duy nhất chặn double-like và đăng trùng khi retry/race. Counter denormalized chỉ đúng nếu cập nhật nguyên tử cùng dòng Reaction/Comment (docs/10 § Feed), nên bắt buộc dùng chung một transaction.",
+   "ifMissing": "Like đôi, bài đăng trùng khi mất mạng retry, likeCount/commentCount lệch số dòng thật.",
+   "with": "postgres",
+   "withKind": "infra",
+   "direction": "out",
+   "mechanism": "shared-db",
+   "endpoints": [
+    "e1",
+    "e2",
+    "e3",
+    "e4",
+    "e5",
+    "e6",
+    "e7",
+    "e8",
+    "e9",
+    "e10",
+    "e11",
+    "e12",
+    "e13",
+    "e14",
+    "e15",
+    "e16",
+    "e17"
+   ],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/feed/entities/comment.entity.ts",
+     "line": 10,
+     "quote": "@Entity({ name: 'comments' })"
+    },
+    {
+     "file": "apps/core-api/src/modules/feed/entities/post.entity.ts",
+     "line": 26,
+     "quote": "@Entity({ name: 'posts' })"
+    },
+    {
+     "file": "apps/core-api/src/modules/feed/entities/reaction.entity.ts",
+     "line": 14,
+     "quote": "@Entity({ name: 'reactions' })"
+    }
+   ],
+   "review": {
+    "verdict": "supported"
+   },
+   "logic": {
+    "verdict": "sound",
+    "note": "uq_reactions_post_user, uq_posts_idempotency_key (partial WHERE NOT NULL), uq_stories_idempotency_key và story_views ON DELETE CASCADE đều có; counter cùng transaction."
+   }
+  },
+  {
+   "id": "c50",
+   "with": "web",
+   "withKind": "client",
+   "direction": "in",
+   "mechanism": "http",
+   "endpoints": [
+    "e1",
+    "e6",
+    "e7"
+   ],
+   "label": "upload ảnh + Idempotency-Key",
+   "what": "Web upload ảnh qua Media (uploadImage(file,'post') lấy assetId) rồi POST /feed/posts kèm header Idempotency-Key sinh theo intent; sau khi tạo post thì invalidate query feed để tải lại danh sách.",
+   "why": "Feed không nhận binary hay URL: client phải upload trước để có assetId hợp lệ. Server không đẩy realtime cho Feed nên web chỉ thấy bài/comment mới bằng cách refetch REST; Idempotency-Key giúp retry khi mạng lỗi không đăng đôi bài.",
+   "ifMissing": "Client không có assetId để gắn ảnh, retry mạng đăng trùng bài, và feed không tự cập nhật sau khi đăng.",
+   "evidence": [
+    {
+     "file": "apps/web/src/features/feed/api.ts",
+     "line": 71,
+     "quote": "params: { header: { 'Idempotency-Key': input.idempotencyKey } },"
+    },
+    {
+     "file": "apps/web/src/features/feed/components/post-composer.tsx",
+     "line": 110,
+     "quote": "imageAssetId = (await uploadImage(imageFile, 'post')).assetId;"
+    }
+   ],
+   "review": {
+    "verdict": "supported"
+   },
+   "logic": {
+    "verdict": "sound",
+    "note": "Feed không publish realtime; web gửi Idempotency-Key, upload qua Media lấy assetId rồi invalidate feedKeys.list."
+   }
+  }
+ ],
+ "waivedEdges": [],
+ "excludedRoutes": [],
+ "notes": [
+  "Doc feed-service.md § 3/§ 8 chỉ nhắc block và audience; code còn chặn thêm theo PrivacySettings.hideProfile (privacySettings.isHidden) ở getPostOrThrow, listUserTimeline, getStoryOrThrow và getRing: tác giả ẩn hồ sơ thì người khác nhận 404 như không tồn tại. Doc chưa mô tả cạnh Feed -> User này.",
+  "Doc § 4 nói guest bị chặn bằng AuthenticatedUser.isGuest; code đúng vậy cho post/comment/like/story, nhưng ở controller guest còn bị bỏ qua bước resolveImageUrl (imageUrl=undefined) rồi service mới ném GUEST_FORBIDDEN.",
+  "Tất cả route Feed/Story là jwt qua APP_GUARD JwtAuthGuard toàn cục (không @Public, không roles); không có endpoint admin nào gọi vào Feed (module exports: [] ).",
+  "Story: StoryAudience chỉ có public|friends (không có only_me như Post). Ring chỉ gồm mình + bạn bè dù schema có audience=public (doc § 8 đã nói rõ).",
+  "Feed không phát realtime event nào; thông báo like/comment đi qua Notification (in-app + push best-effort), client phải poll REST để thấy bài/comment mới."
+ ],
+ "techniques": [
+  {
+   "id": "t1",
+   "slug": "other:conditional-update-guard",
+   "name": "UPDATE có điều kiện chống trừ đôi",
+   "how": "deleteComment update { id, deletedAt: IsNull() } và chỉ giảm commentCount khi affected = 1, nên hai request xoá song song không trừ counter hai lần.",
+   "why": "deleteComment update { id, deletedAt: IsNull() } và chỉ giảm commentCount khi affected = 1, nên hai request xoá song song không trừ counter hai lần.",
+   "endpoints": [
+    "e13"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/feed/feed.service.ts",
+     "line": 338,
+     "quote": "if (result.affected !== 1) return;"
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "local": "deleteComment update { id, deletedAt: IsNull() } và chỉ giảm commentCount khi affected = 1, nên hai request xoá song song không trừ counter hai lần.",
+   "addedByLogicReview": true
+  },
+  {
+   "slug": "jwt-bearer",
+   "name": "JWT bearer (access token không trạng thái)",
+   "model": "JWT bearer",
+   "how": "Client gửi access token (JWT) trong header Authorization; guard xác minh chữ ký và hạn rồi gắn user vào request, server không giữ phiên.",
+   "why": "Không trạng thái nên scale ngang dễ và không phải tra DB mỗi request; đánh đổi là không thu hồi tức thì trước khi token hết hạn.",
+   "alternative": "Session phía server (cookie + kho phiên) thu hồi được tức thì nhưng cần kho phiên dùng chung.",
+   "endpoints": [
+    "e1",
+    "e2",
+    "e3",
+    "e4",
+    "e5",
+    "e6",
+    "e7",
+    "e8",
+    "e9",
+    "e10",
+    "e11",
+    "e12",
+    "e13",
+    "e14",
+    "e15",
+    "e16"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/app/app.module.ts",
+     "line": 117,
+     "quote": "{ provide: APP_GUARD, useClass: JwtAuthGuard },"
+    }
+   ],
+   "auto": true,
+   "count": 16,
+   "id": "t2",
+   "local": "Mọi endpoint của service được bảo vệ bởi `JwtAuthGuard` đăng ký qua `APP_GUARD` toàn cục trong app.module.ts, nên cần bearer JWT hợp lệ mới vào được controller."
+  },
+  {
+   "slug": "ownership-check",
+   "name": "Kiểm tra quyền sở hữu tài nguyên",
+   "model": "Kiểm tra chủ sở hữu",
+   "how": "So userId của tài nguyên với userId người gọi trước khi đọc hoặc sửa.",
+   "why": "Ngăn IDOR: không thao tác được trên tài nguyên của người khác bằng cách đoán id.",
+   "endpoints": [
+    "e9",
+    "e10",
+    "e11",
+    "e12",
+    "e14",
+    "e15",
+    "e16",
+    "e13",
+    "e3",
+    "e5",
+    "e4"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/feed/feed.service.ts",
+     "line": 204,
+     "quote": "if (post.authorUserId !== user.userId) {"
+    },
+    {
+     "file": "apps/core-api/src/modules/feed/services/story.service.ts",
+     "line": 127,
+     "quote": "if (story.authorUserId !== user.userId) {"
+    }
+   ],
+   "auto": true,
+   "count": 7,
+   "id": "t3",
+   "local": "Xem/xoá post, story kiểm `post.authorUserId !== user.userId` (và `story.authorUserId`); khác chủ thì phải qua kiểm block mới được truy cập."
+  },
+  {
+   "slug": "rebac-relationship",
+   "name": "Kiểm tra theo quan hệ (bạn bè, block, thành viên phòng)",
+   "model": "ReBAC",
+   "how": "Cho phép hoặc chặn dựa trên quan hệ giữa hai người: bạn bè, block, cùng phòng.",
+   "why": "Quyền trong mạng xã hội phụ thuộc quan hệ động chứ không phải vai trò cố định.",
+   "endpoints": [
+    "e8",
+    "e9",
+    "e10",
+    "e11",
+    "e12",
+    "e14",
+    "e15",
+    "e16",
+    "e3",
+    "e5"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/feed/feed.module.ts",
+     "line": 24,
+     "quote": "FriendModule, // areFriends()/listFriendIds() cho audience=friends + Stories reply→DM"
+    },
+    {
+     "file": "apps/core-api/src/modules/feed/feed.service.ts",
+     "line": 150,
+     "quote": "(await this.safetyService.isBlocked(viewer.userId, authorUserId)) ||"
+    },
+    {
+     "file": "apps/core-api/src/modules/feed/services/story.service.ts",
+     "line": 129,
+     "quote": "(await this.safetyService.isBlocked(user.userId, story.authorUserId)) ||"
+    }
+   ],
+   "auto": true,
+   "count": 10,
+   "id": "t4",
+   "local": "Feed kiểm `safetyService.isBlocked` hai chiều, `privacySettings.isHidden` và `FriendModule` (`areFriends`/`listFriendIds`) cho audience=friends."
+  },
+  {
+   "slug": "abac-attribute-policy",
+   "name": "ABAC theo thuộc tính (guest, ban, VIP, giới tính, tuổi…)",
+   "model": "ABAC",
+   "how": "Quyết định dựa trên thuộc tính của người dùng hoặc tài nguyên như guest, bị ban, hạng VIP, giới tính, tuổi.",
+   "why": "Nghiệp vụ có quy tắc theo ngữ cảnh mà vai trò đơn thuần không diễn đạt được.",
+   "alternative": "Policy engine (OPA/Casbin/CASL) tách chính sách khỏi mã nhưng thêm thành phần vận hành.",
+   "endpoints": [
+    "e1",
+    "e6",
+    "e11",
+    "e14"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/feed/controllers/story.controller.ts",
+     "line": 56,
+     "quote": "const mediaUrl = !user.isGuest"
+    },
+    {
+     "file": "apps/core-api/src/modules/feed/feed.controller.ts",
+     "line": 65,
+     "quote": "!user.isGuest && dto.imageAssetId"
+    },
+    {
+     "file": "apps/core-api/src/modules/feed/feed.service.ts",
+     "line": 412,
+     "quote": "if (user.isGuest) {"
+    }
+   ],
+   "auto": true,
+   "count": 4,
+   "id": "t5",
+   "local": "assertNotGuest ném GUEST_FORBIDDEN 403 trong FeedService/StoryService khi tạo post/story/comment/like; controller chỉ bỏ qua resolveImageUrl cho guest chứ không tự chặn."
+  },
+  {
+   "slug": "idempotency-key",
+   "name": "Idempotency-Key (client sinh, server khử trùng)",
+   "model": "Idempotency-Key",
+   "how": "Client gửi khoá duy nhất cho mỗi thao tác; server lưu khoá (unique) và trả lại kết quả cũ khi gặp lại.",
+   "why": "Retry mạng không tạo bản ghi hoặc trừ tiền hai lần.",
+   "endpoints": [
+    "e1",
+    "e5",
+    "e6"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/feed/controllers/story.controller.ts",
+     "line": 28,
+     "quote": "ApiIdempotencyKeyHeader,"
+    },
+    {
+     "file": "apps/core-api/src/modules/feed/entities/post.entity.ts",
+     "line": 60,
+     "quote": "idempotencyKey!: string | null;"
+    },
+    {
+     "file": "apps/core-api/src/modules/feed/entities/story.entity.ts",
+     "line": 45,
+     "quote": "idempotencyKey!: string;"
+    }
+   ],
+   "auto": true,
+   "count": 27,
+   "id": "t6",
+   "local": "Chỉ e6 (Post.idempotencyKey, unique index một phần WHERE NOT NULL) và e1 (Story.idempotencyKey unique) dùng header; e5 chuyển key sang Friend. Like/comment khử trùng bằng unique hoặc UPDATE có điều kiện, không dùng header."
+  },
+  {
+   "slug": "unique-constraint-guard",
+   "name": "Ràng buộc unique ở DB làm chốt chặn cuối",
+   "model": "Ràng buộc DB",
+   "how": "Ràng buộc unique hoặc index duy nhất ở DB là chốt chặn cuối cho trùng lặp.",
+   "why": "Check-rồi-insert ở tầng code vẫn dính race; DB mới bảo đảm tuyệt đối.",
+   "endpoints": [
+    "e6",
+    "e14",
+    "e1",
+    "e3"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/feed/entities/reaction.entity.ts",
+     "line": 15,
+     "quote": "@Index('uq_reactions_post_user', ['postId', 'userId'], { unique: true })"
+    },
+    {
+     "file": "apps/core-api/src/modules/feed/entities/story.entity.ts",
+     "line": 44,
+     "quote": "@Column({ length: 255, unique: true })"
+    },
+    {
+     "file": "apps/core-api/src/modules/feed/feed.service.ts",
+     "line": 76,
+     "quote": "if (!isUniqueViolation(err)) throw err;"
+    }
+   ],
+   "auto": true,
+   "count": 6,
+   "id": "t7",
+   "local": "Index `uq_reactions_post_user` (postId, userId) giới hạn mỗi user một reaction trên post; `Story.idempotencyKey` có `unique: true`."
+  },
+  {
+   "slug": "db-transaction",
+   "name": "Transaction DB (một đơn vị công việc)",
+   "model": "Transaction",
+   "how": "Gói nhiều thao tác ghi vào một transaction: cùng commit hoặc cùng rollback.",
+   "why": "Tránh trạng thái nửa vời khi lỗi giữa chừng.",
+   "endpoints": [
+    "e11",
+    "e13",
+    "e14",
+    "e15"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/feed/feed.service.ts",
+     "line": 249,
+     "quote": "const comment = await this.dataSource.transaction(async (manager) => {"
+    }
+   ],
+   "auto": true,
+   "count": 4,
+   "id": "t8",
+   "local": "Comment và reaction ghi trong `dataSource.transaction`: lưu `Comment`, tăng `commentCount` và tạo notification cùng transaction."
+  },
+  {
+   "slug": "entity-manager-propagation",
+   "name": "Truyền EntityManager giữa module (chung một transaction)",
+   "model": "Chung transaction",
+   "how": "Module sở hữu dữ liệu nhận EntityManager của giao dịch đang chạy để việc của nó nằm trong cùng transaction.",
+   "why": "Nhiều module dùng chung DB nên atomicity xuyên module không cần saga hay 2PC.",
+   "alternative": "Saga/outbox xuyên service: cần khi tách deployable, thừa khi cùng process.",
+   "endpoints": [
+    "e11",
+    "e14"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/feed/feed.service.ts",
+     "line": 260,
+     "quote": "notification = await this.notificationService.createWithManager("
+    }
+   ],
+   "auto": true,
+   "count": 2,
+   "id": "t9",
+   "local": "Trong transaction comment, `notificationService.createWithManager(manager, {...})` tạo notification chung manager với bài viết."
+  },
+  {
+   "id": "t10",
+   "slug": "lazy-expiry",
+   "name": "Hết hạn lười (xử lý khi có request)",
+   "model": "Hết hạn lười",
+   "how": "Hết hạn được xử lý khi có request đụng tới, không cần job.",
+   "why": "Đúng đắn không phụ thuộc job; job chỉ để dọn.",
+   "endpoints": [
+    "e2",
+    "e3",
+    "e5"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/feed/services/story.service.ts",
+     "line": 104,
+     "quote": "s.expiresAt > :now"
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "local": "Story hết hạn bị lọc lúc đọc bằng s.expiresAt > :now (ring) và expiresAt <= now (getStoryOrThrow); StorySweeperService chỉ dọn rác, không quyết định correctness.",
+   "addedByLogicReview": true
+  },
+  {
+   "slug": "sweeper",
+   "name": "Sweeper dọn dữ liệu hết hạn",
+   "model": "Sweeper",
+   "how": "Job quét dọn bản ghi hết hạn.",
+   "why": "Giải phóng tài nguyên và tránh ghi rác.",
+   "endpoints": [
+    "e17"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/feed/feed.module.ts",
+     "line": 30,
+     "quote": "providers: [FeedService, StoryService, StorySweeperService],"
+    },
+    {
+     "file": "apps/core-api/src/modules/feed/jobs/story-sweeper.service.ts",
+     "line": 27,
+     "quote": "export class StorySweeperService"
+    }
+   ],
+   "auto": true,
+   "count": 3,
+   "id": "t11",
+   "local": "`StorySweeperService` (provider trong `FeedModule`) hard-delete story hết hạn theo lô qua `ManagedInterval`."
+  },
+  {
+   "slug": "interval-worker",
+   "name": "Worker lặp (interval / ManagedInterval)",
+   "model": "Worker lặp",
+   "how": "Vòng lặp theo chu kỳ trong process (ManagedInterval).",
+   "why": "Worker nền đơn giản, không cần hạ tầng queue riêng.",
+   "endpoints": [
+    "e17"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/feed/jobs/story-sweeper.service.ts",
+     "line": 31,
+     "quote": "private readonly job = new ManagedInterval();"
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "id": "t12",
+   "local": "`StorySweeperService` giữ `new ManagedInterval()` lặp theo `STORY_SWEEPER_INTERVAL_MS`."
+  },
+  {
+   "id": "t13",
+   "slug": "singleton-worker-lock",
+   "name": "Worker singleton nhờ advisory lock",
+   "model": "Singleton",
+   "how": "Advisory lock bảo đảm chỉ một replica chạy worker tại một thời điểm.",
+   "why": "Tránh chạy trùng khi scale nhiều pod.",
+   "endpoints": [
+    "e17"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/feed/jobs/story-sweeper.service.ts",
+     "line": 49,
+     "quote": "clusterSingleton: { dataSource: this.dataSource },"
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "local": "`StorySweeperService` start `ManagedInterval` với `clusterSingleton: { dataSource: this.dataSource }` nên chỉ một instance toàn cluster dọn story."
+  },
+  {
+   "slug": "rate-limit-throttler",
+   "name": "Rate limit (@nestjs/throttler)",
+   "model": "Rate limit",
+   "how": "@Throttle giới hạn số request theo khoảng thời gian cho từng route.",
+   "why": "Chặn spam và dò quét bằng cách giới hạn số request theo thời gian, trước khi request tới logic nghiệp vụ.",
+   "endpoints": [
+    "e1",
+    "e2",
+    "e3",
+    "e4",
+    "e5",
+    "e6",
+    "e7",
+    "e8",
+    "e9",
+    "e10",
+    "e11",
+    "e12",
+    "e13",
+    "e14",
+    "e15",
+    "e16"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/app/app.module.ts",
+     "line": 116,
+     "quote": "{ provide: APP_GUARD, useClass: ThrottlerGuard },"
+    }
+   ],
+   "auto": true,
+   "count": 16,
+   "id": "t14",
+   "local": "Giới hạn tốc độ qua `ThrottlerGuard` đăng ký `APP_GUARD` toàn cục, chạy trước JwtAuthGuard; áp cho mọi route của service."
+  },
+  {
+   "slug": "openapi-contract",
+   "name": "Hợp đồng OpenAPI + client sinh tự động",
+   "model": "OpenAPI",
+   "how": "OpenAPI sinh từ code và client TypeScript sinh tự động.",
+   "why": "Client và server không lệch hợp đồng.",
+   "endpoints": [
+    "e1",
+    "e2",
+    "e3",
+    "e4",
+    "e5",
+    "e6",
+    "e7",
+    "e8",
+    "e9",
+    "e10",
+    "e11",
+    "e12",
+    "e13",
+    "e14",
+    "e15",
+    "e16"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/feed/controllers/story.controller.ts",
+     "line": 47,
+     "quote": "@ApiOperation({"
+    },
+    {
+     "file": "apps/core-api/src/modules/feed/feed.controller.ts",
+     "line": 55,
+     "quote": "@ApiOperation({"
+    }
+   ],
+   "auto": true,
+   "count": 16,
+   "id": "t15",
+   "local": "`@ApiOperation` và `@ApiIdempotencyKeyHeader()` trên route đăng bài/story mô tả hợp đồng OpenAPI (guest bị chặn, TTL story)."
+  },
+  {
+   "slug": "soft-delete",
+   "name": "Xoá mềm",
+   "model": "Xoá mềm",
+   "how": "Đánh dấu xoá thay vì xoá hàng.",
+   "why": "Giữ lịch sử và khôi phục được.",
+   "endpoints": [
+    "e7",
+    "e8",
+    "e9",
+    "e10",
+    "e11",
+    "e12",
+    "e14",
+    "e15",
+    "e16",
+    "e13"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/feed/entities/comment.entity.ts",
+     "line": 29,
+     "quote": "deletedAt!: Date | null;"
+    },
+    {
+     "file": "apps/core-api/src/modules/feed/entities/post.entity.ts",
+     "line": 63,
+     "quote": "deletedAt!: Date | null;"
+    },
+    {
+     "file": "apps/core-api/src/modules/feed/feed.service.ts",
+     "line": 107,
+     "quote": ".where('p.deletedAt IS NULL')"
+    }
+   ],
+   "auto": true,
+   "count": 10,
+   "id": "t16",
+   "local": "`Post` và `Comment` có cột `deletedAt` timestamptz nullable; xoá chỉ đánh dấu, danh sách lọc bỏ bản ghi đã xoá."
+  },
+  {
+   "slug": "cursor-pagination",
+   "name": "Phân trang cursor (keyset)",
+   "model": "Keyset",
+   "how": "Phân trang theo cursor thay vì offset.",
+   "why": "Ổn định khi dữ liệu thay đổi và nhanh ở trang sâu.",
+   "endpoints": [
+    "e7",
+    "e8",
+    "e12"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/feed/dto/feed.dtos.ts",
+     "line": 68,
+     "quote": "@ApiProperty({ nullable: true, type: String }) nextCursor!: string | null;"
+    },
+    {
+     "file": "apps/core-api/src/modules/feed/feed.controller.ts",
+     "line": 93,
+     "quote": "@Query() query: CursorPageQueryDto,"
+    },
+    {
+     "file": "apps/core-api/src/modules/feed/feed.service.ts",
+     "line": 101,
+     "quote": "query: CursorPageQueryDto,"
+    }
+   ],
+   "auto": true,
+   "count": 12,
+   "id": "t17",
+   "local": "Feed, bài theo user và comment trả `PostsPageDto` có `nextCursor`, nhận `@Query() query: CursorPageQueryDto`."
+  },
+  {
+   "id": "t18",
+   "slug": "anti-enumeration",
+   "name": "Chống dò tài khoản",
+   "model": "Chống dò",
+   "how": "Phản hồi đồng nhất để không dò được tài khoản có tồn tại hay không.",
+   "why": "Chống thu thập người dùng.",
+   "endpoints": [
+    "e3",
+    "e5",
+    "e9",
+    "e10",
+    "e11",
+    "e12",
+    "e14",
+    "e15",
+    "e16"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/feed/feed.service.ts",
+     "line": 188,
+     "quote": "CÙNG mã lỗi cho MỌI"
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "local": "getPostOrThrow và getStoryOrThrow trả cùng POST_NOT_FOUND/STORY_NOT_FOUND 404 cho không tồn tại, đã xoá/hết hạn, bị block, tác giả ẩn hồ sơ hoặc sai audience.",
+   "addedByLogicReview": true
+  }
+ ]
+}

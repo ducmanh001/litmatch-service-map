@@ -1,0 +1,308 @@
+{
+ "id": "feed-read-posts",
+ "title": "Đọc feed và bài đăng",
+ "summary": "Người dùng đọc feed công khai, timeline của một tác giả và chi tiết một bài. Feed chỉ sở hữu Post, nên mọi quyết định xem được hay không phải hỏi Safety (block), User (ẩn hồ sơ, hồ sơ tác giả) và Friend (quan hệ bạn bè).",
+ "caption": "Ba endpoint đọc của Feed: mỗi endpoint hỏi Safety/User/Friend trước hoặc sau khi truy vấn bảng Post, rồi gắn hồ sơ tác giả từ User.",
+ "participants": [
+  {
+   "id": "web",
+   "label": "Web client",
+   "kind": "client"
+  },
+  {
+   "id": "feed",
+   "label": "Feed",
+   "kind": "service"
+  },
+  {
+   "id": "safety",
+   "label": "Safety",
+   "kind": "service"
+  },
+  {
+   "id": "user",
+   "label": "User",
+   "kind": "service"
+  },
+  {
+   "id": "friend",
+   "label": "Friend",
+   "kind": "service"
+  },
+  {
+   "id": "postgres",
+   "label": "PostgreSQL",
+   "kind": "infra"
+  }
+ ],
+ "steps": [
+  {
+   "from": "web",
+   "to": "feed",
+   "label": "GET /feed/posts: đọc feed công khai (JWT)",
+   "kind": "call",
+   "mechanism": "http",
+   "note": "Mọi route REST đều qua JwtAuthGuard toàn cục.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/app/app.module.ts",
+     "line": 154,
+     "quote": "{ provide: APP_GUARD, useClass: JwtAuthGuard },"
+    }
+   ]
+  },
+  {
+   "from": "feed",
+   "to": "safety",
+   "label": "Lấy danh sách user đang block/bị block với người xem",
+   "kind": "call",
+   "mechanism": "di-call",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/feed/feed.service.ts",
+     "line": 103,
+     "quote": "const blockedIds = await this.safetyService.getBlockedUserIds(user.userId);"
+    }
+   ]
+  },
+  {
+   "from": "feed",
+   "to": "postgres",
+   "label": "Query Post public, chưa xoá, loại tác giả bị block, phân trang theo seq",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "note": "Điều kiện ẩn hồ sơ (hide_profile) được kiểm bằng subquery trên user_privacy_settings ngay trong câu query.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/feed/feed.service.ts",
+     "line": 105,
+     "quote": "const qb = this.postRepo"
+    }
+   ]
+  },
+  {
+   "from": "feed",
+   "to": "user",
+   "label": "Batch tải hồ sơ tác giả của cả trang",
+   "kind": "call",
+   "mechanism": "di-call",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/feed/feed.controller.ts",
+     "line": 215,
+     "quote": "const users = await this.userService.findByIds("
+    }
+   ]
+  },
+  {
+   "from": "feed",
+   "to": "web",
+   "label": "Trả trang bài đăng kèm hồ sơ tác giả",
+   "kind": "return",
+   "mechanism": "http"
+  },
+  {
+   "from": "web",
+   "to": "feed",
+   "label": "GET /feed/users/:userId/posts: timeline một tác giả",
+   "kind": "call",
+   "mechanism": "http"
+  },
+  {
+   "from": "feed",
+   "to": "safety",
+   "label": "Kiểm tra block hai chiều giữa người xem và tác giả",
+   "kind": "call",
+   "mechanism": "di-call",
+   "note": "Nếu bị block, trả trang rỗng thay vì lỗi (chống lộ trạng thái block). Các bước block/ẩn hồ sơ chỉ chạy khi người xem không phải chính tác giả.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/feed/feed.service.ts",
+     "line": 150,
+     "quote": "(await this.safetyService.isBlocked(viewer.userId, authorUserId)) ||"
+    },
+    {
+     "file": "apps/core-api/src/modules/feed/feed.service.ts",
+     "line": 151,
+     "quote": "(await this.safetyService.isBlocked(authorUserId, viewer.userId));"
+    }
+   ]
+  },
+  {
+   "from": "feed",
+   "to": "user",
+   "label": "Hỏi tác giả có ẩn hồ sơ không (ẩn thì trả rỗng)",
+   "kind": "call",
+   "mechanism": "di-call",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/feed/feed.service.ts",
+     "line": 153,
+     "quote": "if (await this.privacySettings.isHidden(authorUserId)) {"
+    }
+   ]
+  },
+  {
+   "from": "feed",
+   "to": "friend",
+   "label": "Nếu không phải tác giả: hỏi có là bạn để chọn audience được xem",
+   "kind": "call",
+   "mechanism": "di-call",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/feed/feed.service.ts",
+     "line": 159,
+     "quote": ": (await this.friendService.areFriends(viewer.userId, authorUserId))"
+    }
+   ],
+   "note": "Tác giả tự xem timeline của mình thì bỏ qua bước này và thấy cả public, friends, only_me; bạn bè thấy public+friends; người lạ chỉ thấy public."
+  },
+  {
+   "from": "feed",
+   "to": "postgres",
+   "label": "Query Post của tác giả theo audience đã chọn, phân trang seq",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/feed/feed.service.ts",
+     "line": 163,
+     "quote": "const qb = this.postRepo"
+    }
+   ]
+  },
+  {
+   "from": "feed",
+   "to": "user",
+   "label": "Batch tải hồ sơ tác giả cho trang kết quả",
+   "kind": "call",
+   "mechanism": "di-call",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/feed/feed.controller.ts",
+     "line": 215,
+     "quote": "const users = await this.userService.findByIds("
+    }
+   ]
+  },
+  {
+   "from": "feed",
+   "to": "web",
+   "label": "Trả timeline kèm hồ sơ tác giả",
+   "kind": "return",
+   "mechanism": "http"
+  },
+  {
+   "from": "web",
+   "to": "feed",
+   "label": "GET /feed/posts/:postId: chi tiết một bài",
+   "kind": "call",
+   "mechanism": "http"
+  },
+  {
+   "from": "feed",
+   "to": "postgres",
+   "label": "Đọc Post theo id (404 nếu không có hoặc đã xoá)",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/feed/feed.service.ts",
+     "line": 196,
+     "quote": "const post = await this.postRepo.findOneBy({ id: postId });"
+    }
+   ]
+  },
+  {
+   "from": "feed",
+   "to": "safety",
+   "label": "Kiểm tra block hai chiều với tác giả bài",
+   "kind": "call",
+   "mechanism": "di-call",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/feed/feed.service.ts",
+     "line": 206,
+     "quote": "(await this.safetyService.isBlocked(user.userId, post.authorUserId)) ||"
+    },
+    {
+     "file": "apps/core-api/src/modules/feed/feed.service.ts",
+     "line": 207,
+     "quote": "(await this.safetyService.isBlocked(post.authorUserId, user.userId));"
+    }
+   ]
+  },
+  {
+   "from": "feed",
+   "to": "friend",
+   "label": "Với bài audience friends: hỏi hai người có là bạn",
+   "kind": "call",
+   "mechanism": "di-call",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/feed/feed.service.ts",
+     "line": 211,
+     "quote": "(await this.friendService.areFriends("
+    }
+   ]
+  },
+  {
+   "from": "feed",
+   "to": "user",
+   "label": "Hỏi tác giả có ẩn hồ sơ không",
+   "kind": "call",
+   "mechanism": "di-call",
+   "note": "Nếu block, ẩn hồ sơ hoặc audience không cho phép thì cùng ném POST_NOT_FOUND 404.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/feed/feed.service.ts",
+     "line": 215,
+     "quote": "const hidden = await this.privacySettings.isHidden(post.authorUserId);"
+    }
+   ]
+  },
+  {
+   "from": "feed",
+   "to": "user",
+   "label": "Tải hồ sơ công khai của tác giả bài",
+   "kind": "call",
+   "mechanism": "di-call",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/feed/feed.controller.ts",
+     "line": 208,
+     "quote": "return PublicProfileDto.from(await this.userService.getByIdOrThrow(userId));"
+    }
+   ]
+  },
+  {
+   "from": "feed",
+   "to": "web",
+   "label": "Trả chi tiết bài kèm hồ sơ tác giả",
+   "kind": "return",
+   "mechanism": "http"
+  }
+ ],
+ "groups": [],
+ "invariants": [
+  "Feed không sở hữu quan hệ block, bạn bè hay quyền riêng tư nên phải hỏi Safety, Friend và User bằng lời gọi đồng bộ trước khi trả bài, nếu không sẽ lộ bài của người đã block hoặc bài audience friends.",
+  "Chi tiết bài dùng chung một mã lỗi POST_NOT_FOUND cho bài không tồn tại, đã xoá, bị block, ẩn hồ sơ hoặc audience không cho phép, để người gọi không đoán được lý do thật.",
+  "Hồ sơ tác giả luôn lấy từ User (PublicProfileDto) ở controller, không lưu bản sao trong bảng Post."
+ ],
+ "failureModes": [
+  {
+   "when": "Hai người block nhau khi xem timeline của tác giả",
+   "effect": "Trả trang rỗng với nextCursor null, giống tác giả chưa đăng bài."
+  },
+  {
+   "when": "Cursor phân trang không hợp lệ ở feed hoặc timeline",
+   "effect": "Ném FeedErrors.CURSOR_INVALID với HTTP 400."
+  },
+  {
+   "when": "Bài không tồn tại, đã xoá, bị block, ẩn hồ sơ hoặc sai audience",
+   "effect": "Ném POST_NOT_FOUND với HTTP 404."
+  }
+ ],
+ "dataIssues": [],
+ "uncertain": []
+}

@@ -1,0 +1,310 @@
+{
+ "id": "palm-match-queue-and-rating",
+ "title": "Palm Match: vào hàng, lật và đánh giá",
+ "summary": "Người dùng vào hàng đợi ghép cặp ẩn danh, lật bài rồi like/skip. Palm Match sở hữu hàng đợi và phiên nhưng không sở hữu block/report (Safety) hay quan hệ bạn bè (Friend), nên phải hỏi Safety.canPair lúc ghép và nhờ Friend tạo Friendship khi cả hai like.",
+ "caption": "Luồng Palm Match: xem bói, vào hàng (kiểm canPair), poll, lật, đánh giá (like hai chiều mở friendship) và huỷ.",
+ "participants": [
+  {
+   "id": "web",
+   "label": "Web client",
+   "kind": "client"
+  },
+  {
+   "id": "palm-match",
+   "label": "Palm Match",
+   "kind": "service"
+  },
+  {
+   "id": "safety",
+   "label": "Safety",
+   "kind": "service"
+  },
+  {
+   "id": "friend",
+   "label": "Friend",
+   "kind": "service"
+  },
+  {
+   "id": "postgres",
+   "label": "PostgreSQL",
+   "kind": "infra"
+  }
+ ],
+ "steps": [
+  {
+   "from": "web",
+   "to": "palm-match",
+   "label": "GET /palm-match/reading: xem bói theo category",
+   "kind": "call",
+   "mechanism": "http"
+  },
+  {
+   "from": "palm-match",
+   "to": "postgres",
+   "label": "Đọc palm_reading_templates, chọn nội dung theo seed user+ngày",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/palm-match/palm-match.service.ts",
+     "line": 86,
+     "quote": "const templates = await this.templateRepo.find({"
+    }
+   ]
+  },
+  {
+   "from": "web",
+   "to": "palm-match",
+   "label": "POST /palm-match/queue: vào hàng đợi ghép cặp",
+   "kind": "call",
+   "mechanism": "http"
+  },
+  {
+   "from": "palm-match",
+   "to": "postgres",
+   "label": "Khoá advisory, hết hạn phiên cũ, dọn queue quá hạn, enqueue, chọn ứng viên",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/palm-match/palm-match.service.ts",
+     "line": 329,
+     "quote": "await manager.query('SELECT pg_advisory_xact_lock(hashtext($1))', ["
+    }
+   ]
+  },
+  {
+   "from": "palm-match",
+   "to": "safety",
+   "label": "canPair(userId, candidate): kiểm lại block và báo cáo gần đây lúc ghép",
+   "kind": "call",
+   "mechanism": "di-call",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/palm-match/palm-match.service.ts",
+     "line": 158,
+     "quote": "if (await this.safetyService.canPair(userId, candidate.user_id)) {"
+    }
+   ],
+   "note": "Duyệt tối đa 20 ứng viên cũ nhất; ứng viên đang có phiên active thì bị xoá khỏi queue và bỏ qua. canPair chạy bằng repository của Safety, không dùng manager của transaction."
+  },
+  {
+   "from": "palm-match",
+   "to": "postgres",
+   "label": "Tạo session snapshot, xoá queue hai người, insert active participant",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/palm-match/palm-match.service.ts",
+     "line": 179,
+     "quote": "await manager.delete(PalmMatchQueueEntry, [userId, partnerId]);"
+    }
+   ]
+  },
+  {
+   "from": "palm-match",
+   "to": "web",
+   "label": "Trả state Queued (chờ) hoặc session đã ghép",
+   "kind": "return",
+   "mechanism": "http"
+  },
+  {
+   "from": "web",
+   "to": "palm-match",
+   "label": "GET /palm-match/current: poll/khôi phục state",
+   "kind": "call",
+   "mechanism": "http"
+  },
+  {
+   "from": "palm-match",
+   "to": "postgres",
+   "label": "Lazy-expire phiên, đọc active state hoặc queue, xoá entry quá hạn",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/palm-match/palm-match.service.ts",
+     "line": 190,
+     "quote": "return this.dataSource.transaction(async (manager) => {"
+    }
+   ]
+  },
+  {
+   "from": "web",
+   "to": "palm-match",
+   "label": "POST /palm-match/sessions/:id/flip: lật lá của mình",
+   "kind": "call",
+   "mechanism": "http"
+  },
+  {
+   "from": "palm-match",
+   "to": "postgres",
+   "label": "Khoá phiên, kiểm còn active, ghi lowFlippedAt/highFlippedAt",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/palm-match/palm-match.service.ts",
+     "line": 229,
+     "quote": "await manager.save(session);"
+    }
+   ]
+  },
+  {
+   "from": "web",
+   "to": "palm-match",
+   "label": "POST /palm-match/sessions/:id/rating: like hoặc skip",
+   "kind": "call",
+   "mechanism": "http"
+  },
+  {
+   "from": "palm-match",
+   "to": "postgres",
+   "label": "Khoá phiên, kiểm cả hai đã lật, ghi rating của caller",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/palm-match/palm-match.service.ts",
+     "line": 240,
+     "quote": "return this.dataSource.transaction(async (manager) => {"
+    }
+   ]
+  },
+  {
+   "from": "palm-match",
+   "to": "friend",
+   "label": "Cả hai Like: ensureFriendship(manager, low, high, PalmMatch)",
+   "kind": "call",
+   "mechanism": "di-call",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/palm-match/palm-match.service.ts",
+     "line": 286,
+     "quote": "await this.friendService.ensureFriendship("
+    }
+   ]
+  },
+  {
+   "from": "friend",
+   "to": "postgres",
+   "label": "Insert Friendship và Conversation (orIgnore) bằng manager của Palm Match",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/friend/friend.service.ts",
+     "line": 117,
+     "quote": "const result = await manager"
+    }
+   ]
+  },
+  {
+   "from": "palm-match",
+   "to": "postgres",
+   "label": "Chốt outcome Matched/NotMatched và lưu session",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/palm-match/palm-match.service.ts",
+     "line": 295,
+     "quote": "await manager.save(session);"
+    }
+   ]
+  },
+  {
+   "from": "palm-match",
+   "to": "web",
+   "label": "Trả state phiên sau đánh giá",
+   "kind": "return",
+   "mechanism": "http"
+  },
+  {
+   "from": "web",
+   "to": "palm-match",
+   "label": "DELETE /palm-match/current: huỷ queue hoặc phiên",
+   "kind": "call",
+   "mechanism": "http"
+  },
+  {
+   "from": "palm-match",
+   "to": "postgres",
+   "label": "Khoá matcher, xoá queue, huỷ phiên active, xoá active participant",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/palm-match/palm-match.service.ts",
+     "line": 305,
+     "quote": "return this.dataSource.transaction(async (manager) => {"
+    }
+   ]
+  },
+  {
+   "from": "palm-match",
+   "to": "web",
+   "label": "Trả state Idle",
+   "kind": "return",
+   "mechanism": "http"
+  }
+ ],
+ "groups": [
+  {
+   "from": 4,
+   "to": 6,
+   "label": "Transaction vào hàng + ghép",
+   "kind": "transaction"
+  },
+  {
+   "from": 9,
+   "to": 9,
+   "label": "Transaction poll state",
+   "kind": "transaction"
+  },
+  {
+   "from": 11,
+   "to": 11,
+   "label": "Transaction lật bài",
+   "kind": "transaction"
+  },
+  {
+   "from": 13,
+   "to": 16,
+   "label": "Transaction đánh giá + friendship",
+   "kind": "transaction"
+  },
+  {
+   "from": 19,
+   "to": 19,
+   "label": "Transaction huỷ",
+   "kind": "transaction"
+  }
+ ],
+ "invariants": [
+  "Advisory lock được lấy đầu transaction vào hàng nên việc chọn cặp bị serialize; canPair được gọi lại ngay lúc ghép thay vì tin state lúc enqueue, vì block/report có thể đổi giữa hai thời điểm.",
+  "Friendship và Conversation được tạo bằng cùng EntityManager với việc lưu session, nên mutual-like và kết quả Matched cùng commit hoặc cùng rollback; Friend sở hữu cách tạo, Palm Match chỉ gọi.",
+  "Mọi route REST đều cần JWT (JwtAuthGuard toàn cục); userId lấy từ JWT, body không nhận participant."
+ ],
+ "failureModes": [
+  {
+   "when": "Safety.canPair trả false cho mọi ứng viên",
+   "effect": "Không có đối tác, user vẫn ở hàng đợi và nhận state Queued."
+  },
+  {
+   "when": "ensureFriendship ném lỗi trong transaction đánh giá",
+   "effect": "Transaction rollback, rating và outcome không được lưu."
+  },
+  {
+   "when": "Một người rate trước khi cả hai đã lật bài",
+   "effect": "Service ném RATING_NOT_OPEN (409), không ghi rating."
+  },
+  {
+   "when": "Đổi rating sau khi đã chốt",
+   "effect": "Service ném RATING_CONFLICT (409)."
+  }
+ ],
+ "dataIssues": [],
+ "uncertain": []
+}

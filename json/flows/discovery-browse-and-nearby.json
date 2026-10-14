@@ -1,0 +1,283 @@
+{
+ "id": "discovery-browse-and-nearby",
+ "title": "Khám phá người dùng và gần đây",
+ "summary": "Người dùng duyệt danh sách theo giới tính/tuổi và tìm người gần bằng vị trí đã quantize. Discovery sở hữu vị trí và opt-in nearby nhưng phải hỏi Safety để loại người bị block/report và hỏi User để lấy hồ sơ active và quyền riêng tư.",
+ "caption": "Discovery ghép dữ liệu từ Safety (danh sách ẩn), User (hồ sơ, privacy), Redis (rate limit) và PostgreSQL (vị trí, opt-in) cho browse và nearby.",
+ "participants": [
+  {
+   "id": "web",
+   "label": "Web client",
+   "kind": "client"
+  },
+  {
+   "id": "discovery",
+   "label": "Discovery",
+   "kind": "service"
+  },
+  {
+   "id": "safety",
+   "label": "Safety",
+   "kind": "service"
+  },
+  {
+   "id": "user",
+   "label": "User",
+   "kind": "service"
+  },
+  {
+   "id": "postgres",
+   "label": "PostgreSQL",
+   "kind": "infra"
+  },
+  {
+   "id": "redis",
+   "label": "Redis",
+   "kind": "infra"
+  }
+ ],
+ "steps": [
+  {
+   "from": "web",
+   "to": "discovery",
+   "label": "GET /discovery/browse với bộ lọc gender/tuổi và cursor",
+   "kind": "call",
+   "mechanism": "http",
+   "note": "Mọi route REST đều qua JwtAuthGuard toàn cục.",
+   "evidence": []
+  },
+  {
+   "from": "discovery",
+   "to": "safety",
+   "label": "Lấy danh sách user bị ẩn (block/report) của người xem",
+   "kind": "call",
+   "mechanism": "di-call",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/discovery/discovery.service.ts",
+     "line": 49,
+     "quote": "const hiddenUserIds = await this.safetyService.getHiddenUserIds("
+    }
+   ]
+  },
+  {
+   "from": "discovery",
+   "to": "user",
+   "label": "Truy vấn trang hồ sơ, loại bản thân và user bị ẩn",
+   "kind": "call",
+   "mechanism": "di-call",
+   "note": "Filter gồm excludeUserIds và excludeGuests theo DISCOVERY_GUEST_VISIBLE; Discovery sau đó gắn ageBucket.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/discovery/discovery.service.ts",
+     "line": 63,
+     "quote": "const page = await this.userService.browsePage(filter, query.limit, after);"
+    }
+   ]
+  },
+  {
+   "from": "discovery",
+   "to": "web",
+   "label": "Trả trang thẻ người dùng kèm ageBucket và nextCursor",
+   "kind": "return",
+   "mechanism": "http"
+  },
+  {
+   "from": "web",
+   "to": "discovery",
+   "label": "PUT /discovery/nearby/visible bật hoặc tắt hiển thị",
+   "kind": "call",
+   "mechanism": "http",
+   "evidence": []
+  },
+  {
+   "from": "discovery",
+   "to": "postgres",
+   "label": "Upsert discovery_settings; nếu tắt thì xoá user_locations",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "note": "Cả hai lệnh nằm trong cùng callback dataSource.transaction.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/discovery/nearby.service.ts",
+     "line": 109,
+     "quote": "await this.dataSource.transaction(async (manager) => {"
+    }
+   ]
+  },
+  {
+   "from": "web",
+   "to": "discovery",
+   "label": "PUT /discovery/nearby/location gửi toạ độ hiện tại",
+   "kind": "call",
+   "mechanism": "http",
+   "evidence": []
+  },
+  {
+   "from": "discovery",
+   "to": "redis",
+   "label": "Kiểm tra giới hạn số lần cập nhật vị trí mỗi giờ",
+   "kind": "call",
+   "mechanism": "redis-state",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/discovery/nearby.service.ts",
+     "line": 76,
+     "quote": "const allowed = await checkRateLimit("
+    }
+   ]
+  },
+  {
+   "from": "discovery",
+   "to": "postgres",
+   "label": "Upsert user_locations bằng toạ độ đã quantize",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/discovery/nearby.service.ts",
+     "line": 98,
+     "quote": "await this.locationRepo.query("
+    }
+   ]
+  },
+  {
+   "from": "web",
+   "to": "discovery",
+   "label": "GET /discovery/nearby lấy người ở gần",
+   "kind": "call",
+   "mechanism": "http",
+   "evidence": []
+  },
+  {
+   "from": "discovery",
+   "to": "redis",
+   "label": "Kiểm tra giới hạn số lần truy vấn nearby mỗi giờ",
+   "kind": "call",
+   "mechanism": "redis-state",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/discovery/nearby.service.ts",
+     "line": 128,
+     "quote": "const allowed = await checkRateLimit("
+    }
+   ]
+  },
+  {
+   "from": "discovery",
+   "to": "postgres",
+   "label": "Đọc opt-in nearbyVisible và vị trí của chính người xem",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "note": "Chưa opt-in thì lỗi 403; vị trí thiếu hoặc quá hạn thì lỗi 409.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/discovery/nearby.service.ts",
+     "line": 144,
+     "quote": "const mySetting = await this.settingRepo.findOne({"
+    }
+   ]
+  },
+  {
+   "from": "discovery",
+   "to": "safety",
+   "label": "Lấy danh sách user bị ẩn để loại khỏi ứng viên",
+   "kind": "call",
+   "mechanism": "di-call",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/discovery/nearby.service.ts",
+     "line": 174,
+     "quote": "const hiddenUserIds = await this.safetyService.getHiddenUserIds("
+    }
+   ]
+  },
+  {
+   "from": "discovery",
+   "to": "postgres",
+   "label": "Truy vấn ứng viên: opt-in, không hide_profile, vị trí còn mới, trong khung bán kính",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/discovery/nearby.service.ts",
+     "line": 314,
+     "quote": "}> = await this.locationRepo.query("
+    }
+   ],
+   "note": "SQL join discovery_settings (nearby_visible=true) và user_privacy_settings (hide_profile=false), lọc updated_at theo DISCOVERY_LOCATION_FRESHNESS_HOURS, bounding box lat/lon, loại bản thân và user bị ẩn, LIMIT theo DISCOVERY_NEARBY_CANDIDATE_CAP; sau đó lọc haversine <= bán kính trong bộ nhớ."
+  },
+  {
+   "from": "discovery",
+   "to": "user",
+   "label": "Lọc ứng viên còn active theo gender/tuổi/guest",
+   "kind": "call",
+   "mechanism": "di-call",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/discovery/nearby.service.ts",
+     "line": 188,
+     "quote": "const users = await this.userService.findActiveByIds("
+    }
+   ]
+  },
+  {
+   "from": "discovery",
+   "to": "user",
+   "label": "Lấy quyền riêng tư (showDistance) của các user còn lại",
+   "kind": "call",
+   "mechanism": "di-call",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/discovery/nearby.service.ts",
+     "line": 200,
+     "quote": "const privacyByUserId = await this.privacySettings.findForUsers("
+    }
+   ],
+   "note": "Nếu showDistance=false thì distanceBucket trả null; khoảng cách được cộng jitter tất định theo cặp và ngày rồi mới chia bucket."
+  },
+  {
+   "from": "discovery",
+   "to": "web",
+   "label": "Trả trang nearby chỉ có distance bucket, không có toạ độ",
+   "kind": "return",
+   "mechanism": "http"
+  }
+ ],
+ "groups": [
+  {
+   "from": 6,
+   "to": 6,
+   "label": "Transaction opt-in và xoá vị trí",
+   "kind": "transaction"
+  }
+ ],
+ "invariants": [
+  "Discovery phải hỏi Safety getHiddenUserIds trước khi truy vấn ứng viên để người bị block/report hai chiều không bao giờ xuất hiện trong browse hay nearby.",
+  "Tắt nearby phải cập nhật discovery_settings và xoá user_locations trong cùng một transaction, nếu không có thể còn vị trí lưu khi người dùng đã rút opt-in.",
+  "Hồ sơ, trạng thái active và quyền riêng tư thuộc module User nên Discovery chỉ lấy qua UserService/PrivacySettingsService thay vì đọc bảng users."
+ ],
+ "failureModes": [
+  {
+   "when": "Vượt giới hạn cập nhật vị trí hoặc truy vấn nearby mỗi giờ",
+   "effect": "Discovery ném NEARBY_RATE_LIMITED với HTTP 429 và không ghi hay truy vấn thêm."
+  },
+  {
+   "when": "Người xem chưa bật nearbyVisible",
+   "effect": "listNearby ném NEARBY_NOT_OPTED_IN với HTTP 403 trước khi gọi Safety hay User."
+  },
+  {
+   "when": "Người xem chưa có vị trí hoặc vị trí quá hạn",
+   "effect": "listNearby ném NEARBY_LOCATION_MISSING với HTTP 409."
+  },
+  {
+   "when": "ageMin lớn hơn ageMax hoặc cursor browse sai định dạng",
+   "effect": "browse ném FILTER_INVALID (422) hoặc CURSOR_INVALID (400) trước khi gọi Safety."
+  },
+  {
+   "when": "Toạ độ ngoài khoảng hợp lệ khi PUT /discovery/nearby/location",
+   "effect": "setLocation ném LOCATION_INVALID (422) trước khi kiểm tra rate limit Redis, không ghi gì."
+  }
+ ],
+ "dataIssues": [],
+ "uncertain": []
+}

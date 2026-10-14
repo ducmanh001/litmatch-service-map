@@ -1,0 +1,932 @@
+{
+  "questions": [
+    {
+      "topic": "authn-model",
+      "category": "authn",
+      "question": "Xác thực người dùng bằng mô hình nào?",
+      "verdict": "JWT bearer không trạng thái, kiểm bằng JwtAuthGuard đăng ký toàn cục: route nào muốn mở phải gắn @Public(). Có ba đường vào (khách kèm token thiết bị, OTP điện thoại, ID token Apple/Google/Facebook) và gateway WebSocket xác minh đúng token đó bằng chung khoá.",
+      "services": [
+        "auth",
+        "user",
+        "signaling-gateway"
+      ],
+      "details": [
+        {
+          "label": "Guard toàn cục",
+          "text": "ThrottlerGuard, JwtAuthGuard rồi RolesGuard được đăng ký làm APP_GUARD theo đúng thứ tự: chặn spam trước, xác thực sau, kiểm vai trò cuối. Quên cấu hình thì route bị chặn chứ không bị mở.",
+          "services": [
+            "auth",
+            "user"
+          ],
+          "evidence": [
+            {
+              "file": "apps/core-api/src/app/app.module.ts",
+              "line": 154,
+              "quote": "{ provide: APP_GUARD, useClass: JwtAuthGuard },"
+            }
+          ]
+        },
+        {
+          "label": "Ký và xác minh token",
+          "text": "core-api ký access token (payload gồm sub, isGuest, role, jti) bằng JWT_SECRET và tự xác minh ở mọi request; không có kho phiên phía server.",
+          "services": [
+            "auth"
+          ],
+          "evidence": [
+            {
+              "file": "apps/core-api/src/modules/auth/services/token.service.ts",
+              "line": 27,
+              "quote": "private readonly jwtService: JwtService,"
+            }
+          ]
+        },
+        {
+          "label": "Ba đường đăng nhập",
+          "text": "Khách nhận token thiết bị ký HMAC để tính hạn mức; OTP điện thoại chỉ lưu dạng băm HMAC kèm giới hạn thử; Apple, Google, Facebook thì server tự xác minh ID token với nhà cung cấp.",
+          "services": [
+            "auth"
+          ],
+          "evidence": [
+            {
+              "file": "apps/core-api/src/modules/auth/services/otp.service.ts",
+              "line": 15,
+              "quote": "export class OtpService {"
+            },
+            {
+              "file": "apps/core-api/src/modules/auth/auth.module.ts",
+              "line": 41,
+              "quote": "SocialVerifierService,"
+            },
+            {
+              "file": "apps/core-api/src/modules/auth/services/guest-device-token.service.ts",
+              "line": 11,
+              "quote": "interface GuestDeviceTokenPayload {"
+            }
+          ]
+        },
+        {
+          "label": "WebSocket",
+          "text": "signaling-gateway xác minh cùng access token lúc handshake bằng chung JWT_SECRET; gateway không bao giờ ký token và không gọi core-api để hỏi. [10/10] Có thể xoay khoá không đăng xuất mọi người nhờ JWT_SECRET_PREVIOUS (chỉ thử khi chữ ký không khớp).",
+          "services": [
+            "signaling-gateway",
+            "auth"
+          ],
+          "evidence": [
+            {
+              "file": "apps/signaling-gateway/src/app/signaling.gateway.ts",
+              "line": 157,
+              "quote": "handleConnection(client: Socket): void {"
+            }
+          ]
+        }
+      ],
+      "alternatives": [
+        {
+          "option": "Session phía server (cookie + kho phiên)",
+          "whyNot": "Suy luận: cần kho phiên dùng chung và gateway tách riêng phải hỏi lại core-api; JWT cho hai deployable chỉ cần chung khoá để xác minh."
+        },
+        {
+          "option": "IdP/OAuth server riêng (Keycloak, Auth0)",
+          "whyNot": "Suy luận: thêm một thành phần vận hành; hệ thống chỉ cần danh tính nội bộ và đã tự xác minh ID token của bên thứ ba."
+        }
+      ],
+      "caveats": [
+        "Access token không thu hồi tức thì: trạng thái bị ban chỉ được kiểm lại ở refresh/đăng nhập, nên thao tác nhạy cảm tự kiểm lại (ví dụ soul-match kiểm UserStatus.Banned lúc gửi tin)."
+      ]
+    },
+    {
+      "topic": "authz-model",
+      "category": "authz",
+      "question": "Phân quyền dùng RBAC, ABAC hay kết hợp?",
+      "verdict": "Kết hợp nhiều lớp và không có policy engine (không CASL, Casbin hay OPA trong package.json): RBAC cho vai trò (RolesGuard toàn cục + ma trận quyền admin lưu DB), ABAC theo thuộc tính (guest, bị ban, hạng VIP, chính sách ghép đôi), ReBAC theo quan hệ (bạn bè, block), kiểm tra chủ sở hữu từng tài nguyên và capability token cho media.",
+      "services": [
+        "admin",
+        "matching",
+        "safety",
+        "friend",
+        "party-room"
+      ],
+      "details": [
+        {
+          "label": "RBAC",
+          "text": "RolesGuard đăng ký toàn cục đọc @Roles; khu admin còn có AdminPermissionGuard và bảng admin_role_permissions nên đổi quyền của một vai trò không cần deploy lại.",
+          "services": [
+            "admin"
+          ],
+          "evidence": [
+            {
+              "file": "apps/core-api/src/app/app.module.ts",
+              "line": 154,
+              "quote": "{ provide: APP_GUARD, useClass: RolesGuard },"
+            },
+            {
+              "file": "apps/core-api/src/modules/admin/admin.controller.ts",
+              "line": 64,
+              "quote": "AdminRolePermissionDto,"
+            }
+          ]
+        },
+        {
+          "label": "ABAC",
+          "text": "Quyết định dựa trên thuộc tính: tài khoản bị ban bị chặn ngay lúc thao tác, hạng VIP được tra khi dựng thông tin ghép đôi, và MATCH_INTERACTION_POLICY quyết định hai người có được ghép với nhau không.",
+          "services": [
+            "matching",
+            "soul-match"
+          ],
+          "evidence": [
+            {
+              "file": "apps/core-api/src/modules/matching/matching.service.ts",
+              "line": 109,
+              "quote": "if (profile.status === UserStatus.Banned) {"
+            },
+            {
+              "file": "apps/core-api/src/modules/soul-match/soul-match.service.ts",
+              "line": 138,
+              "quote": "if (profile.status === UserStatus.Banned) {"
+            }
+          ]
+        },
+        {
+          "label": "ReBAC",
+          "text": "Cho phép hoặc chặn theo quan hệ giữa hai người: canPair khi ghép đôi, kiểm block khi nhắn hay xem hồ sơ, areFriends khi mở phòng hoặc chat.",
+          "services": [
+            "matching",
+            "friend",
+            "safety"
+          ],
+          "evidence": [
+            {
+              "file": "apps/core-api/src/modules/matching/jobs/matcher-worker.service.ts",
+              "line": 277,
+              "quote": "(await this.interactionPolicy.canPair(ta.userId, tb.userId))"
+            },
+            {
+              "file": "apps/core-api/src/modules/friend/friend.service.ts",
+              "line": 181,
+              "quote": "async areFriends(userAId: string, userBId: string): Promise<boolean> {"
+            }
+          ]
+        },
+        {
+          "label": "Chủ sở hữu và capability",
+          "text": "Mỗi tài nguyên kiểm chủ sở hữu (ví dụ ticket.userId so với người gọi) để chặn IDOR; quyền trong phòng media là capability token LiveKit do core-api cấp theo vai trò.",
+          "services": [
+            "matching",
+            "party-room"
+          ],
+          "evidence": [
+            {
+              "file": "apps/core-api/src/modules/matching/matching.service.ts",
+              "line": 650,
+              "quote": "if (ticket.userId !== user.userId) {"
+            },
+            {
+              "file": "apps/core-api/src/modules/party-room/clients/livekit-party-room.adapter.ts",
+              "line": 24,
+              "quote": "mintJoinToken("
+            }
+          ]
+        }
+      ],
+      "alternatives": [
+        {
+          "option": "Policy engine (OPA, Casbin, CASL)",
+          "whyNot": "Suy luận: số vai trò ít và quy tắc gắn chặt dữ liệu nghiệp vụ nằm sẵn trong từng service, nên thêm engine là thêm vận hành mà chưa có lợi rõ rệt."
+        },
+        {
+          "option": "ABAC thuần cho cả khu admin",
+          "whyNot": "RBAC dễ kiểm toán hơn cho vài vai trò và ma trận quyền sửa được lúc chạy."
+        }
+      ],
+      "caveats": [
+        "Suy luận: chính sách nằm rải trong mã từng module nên không có một nơi để xem toàn bộ quy tắc; muốn kiểm toán phải đọc từng service."
+      ]
+    },
+    {
+      "topic": "token-lifecycle",
+      "category": "authn",
+      "question": "Vòng đời token và phiên: access, refresh, CSRF, cookie?",
+      "verdict": "Access token ngắn hạn kèm refresh token xoay vòng: mỗi lần refresh phát token mới, dùng lại token cũ bị coi là bị lộ và thu hồi cả họ token. Refresh token nằm trong cookie httpOnly nên cần thêm CSRF double-submit.",
+      "services": [
+        "auth"
+      ],
+      "details": [
+        {
+          "label": "Xoay vòng và phát hiện tái sử dụng",
+          "text": "Mỗi refresh token chỉ dùng một lần; client gửi hai refresh song song thì request thua bị coi là tái sử dụng và cả family bị thu hồi, nên client phải single-flight.",
+          "services": [
+            "auth"
+          ],
+          "evidence": [
+            {
+              "file": "apps/core-api/src/modules/auth/auth.controller.ts",
+              "line": 113,
+              "quote": "'Đổi refresh token (cookie httpOnly) lấy cặp token mới (rotation, phát hiện reuse) — cần header X-CSRF-Token (ADR 0007)',"
+            }
+          ]
+        },
+        {
+          "label": "Cookie httpOnly",
+          "text": "Refresh token nằm trong cookie httpOnly/SameSite nên JavaScript không đọc được, chặn XSS đánh cắp token (docs/adr/0007).",
+          "services": [
+            "auth"
+          ],
+          "evidence": [
+            {
+              "file": "apps/core-api/src/modules/auth/auth.controller.ts",
+              "line": 113,
+              "quote": "'Đổi refresh token (cookie httpOnly) lấy cặp token mới (rotation, phát hiện reuse) — cần header X-CSRF-Token (ADR 0007)',"
+            }
+          ]
+        },
+        {
+          "label": "CSRF",
+          "text": "Vì cookie tự đính kèm nên CsrfGuard bắt header CSRF khớp token double-submit trên các route dùng cookie.",
+          "services": [
+            "auth"
+          ],
+          "evidence": [
+            {
+              "file": "apps/core-api/src/common/csrf/csrf-token.ts",
+              "line": 6,
+              "quote": "export function generateCsrfToken(): string {"
+            }
+          ]
+        }
+      ],
+      "alternatives": [
+        {
+          "option": "Lưu refresh token ở localStorage",
+          "whyNot": "Dễ dùng nhưng JavaScript đọc được nên XSS lấy được; repo đã chọn cookie httpOnly (docs/adr/0007)."
+        }
+      ],
+      "caveats": []
+    },
+    {
+      "topic": "webhook-security",
+      "category": "security",
+      "question": "Bảo mật webhook từ bên ngoài (thanh toán, LiveKit)?",
+      "verdict": "Mọi webhook công khai đều tự xác minh nguồn gửi trước khi làm gì: PayOS bằng HMAC-SHA256, Apple bằng JWS (kiểm chuỗi chứng chỉ x5c lên Apple Root CA), Google RTDN bằng OIDC token (kiểm issuer, audience, service account), LiveKit bằng chữ ký khoá chung (receiveWebhook).",
+      "services": [
+        "economy",
+        "calling",
+        "party-room",
+        "media-server"
+      ],
+      "details": [
+        {
+          "label": "PayOS",
+          "text": "Tính lại HMAC-SHA256 bằng checksum key rồi mới ghi ledger; idempotency key payos-credit:{orderCode} chặn cộng diamond lần hai khi payOS gửi lại.",
+          "services": [
+            "economy"
+          ],
+          "evidence": [
+            {
+              "file": "apps/core-api/src/modules/economy/dto/payos-webhook.dto.ts",
+              "line": 11,
+              "quote": "@ApiProperty() @IsString() signature!: string;"
+            }
+          ]
+        },
+        {
+          "label": "Apple và Google",
+          "text": "Apple gửi signedPayload JWS, server kiểm chuỗi x5c và bundleId; Google gửi Pub/Sub push kèm Bearer OIDC, server kiểm issuer, audience và email service account. Endpoint là @Public nên chữ ký là lớp xác thực duy nhất.",
+          "services": [
+            "economy"
+          ],
+          "evidence": [
+            {
+              "file": "apps/core-api/src/modules/economy/webhooks/economy-webhooks.controller.ts",
+              "line": 129,
+              "quote": "signature: dto.signature,"
+            }
+          ]
+        },
+        {
+          "label": "LiveKit",
+          "text": "Webhook phòng và cuộc gọi được xác minh bằng receiveWebhook với cùng cặp khoá API; không hợp lệ thì trả 401 nên call không bao giờ chuyển sang active.",
+          "services": [
+            "calling",
+            "party-room",
+            "media-server"
+          ],
+          "evidence": [
+            {
+              "file": "apps/core-api/src/modules/calling/webhooks/livekit-webhook.controller.ts",
+              "line": 51,
+              "quote": "event = await this.livekit.receiveWebhook(rawBody, authHeader);"
+            },
+            {
+              "file": "apps/core-api/src/modules/party-room/webhooks/party-livekit-webhook.controller.ts",
+              "line": 51,
+              "quote": "event = await this.livekit.receiveWebhook(rawBody, authHeader);"
+            }
+          ]
+        }
+      ],
+      "alternatives": [
+        {
+          "option": "Tin returnUrl hoặc redirect từ trình duyệt",
+          "whyNot": "Trình duyệt có thể bị giả mạo; chỉ chữ ký server-to-server mới là bằng chứng đã trả tiền."
+        }
+      ],
+      "caveats": [
+        "Google RTDN chỉ được log (CANCELED không đồng nghĩa voided), hoàn tiền Google dựa vào job quét Voided Purchases API."
+      ]
+    },
+    {
+      "topic": "media-access",
+      "category": "authz",
+      "question": "Kiểm soát truy cập media: LiveKit và upload file?",
+      "verdict": "Quyền vào phòng media là capability token ngắn hạn do core-api ký (LiveKit grants theo vai trò); đổi vai trò giữa chừng thì core-api đẩy quyền xuống SFU chứ không tin client. File ảnh hoặc video upload bằng presigned URL thẳng lên object storage, ảnh còn qua quarantine rồi mới promote.",
+      "services": [
+        "party-room",
+        "calling",
+        "media",
+        "short-video",
+        "media-server"
+      ],
+      "details": [
+        {
+          "label": "Capability token",
+          "text": "Người nghe nhận token canPublish=false nên tự bật mic bị LiveKit chặn; cấp hoặc thu quyền nói phải đẩy xuống SFU bằng updateParticipant.",
+          "services": [
+            "party-room",
+            "calling",
+            "media-server"
+          ],
+          "evidence": [
+            {
+              "file": "apps/core-api/src/modules/party-room/clients/livekit-party-room.adapter.ts",
+              "line": 24,
+              "quote": "mintJoinToken("
+            },
+            {
+              "file": "apps/core-api/src/modules/calling/calling.service.ts",
+              "line": 191,
+              "quote": "const token = await this.livekit.mintJoinToken("
+            }
+          ]
+        },
+        {
+          "label": "Presigned upload",
+          "text": "core-api chỉ cấp URL ký sẵn nên body ảnh hoặc video không đi qua; ảnh còn nằm ở key quarantine tới khi kiểm MIME và kích thước rồi mới promote sang key công khai.",
+          "services": [
+            "media",
+            "short-video"
+          ],
+          "evidence": [
+            {
+              "file": "apps/core-api/src/modules/media/media.controller.ts",
+              "line": 24,
+              "quote": "@Post('images/upload-intent')"
+            },
+            {
+              "file": "apps/core-api/src/modules/media/media.service.ts",
+              "line": 114,
+              "quote": "await this.storage.promote(asset.storageKey, finalStorageKey);"
+            },
+            {
+              "file": "apps/core-api/src/modules/short-video/dto/short-video.dtos.ts",
+              "line": 19,
+              "quote": "export class CreateUploadIntentDto {"
+            }
+          ]
+        }
+      ],
+      "alternatives": [
+        {
+          "option": "Cho client giữ quyền và tự khai trong phòng",
+          "whyNot": "Client có thể bị sửa; quyền phải được enforce ở SFU bằng grant do server ký."
+        }
+      ],
+      "caveats": []
+    },
+    {
+      "topic": "realtime-delivery",
+      "category": "messaging",
+      "question": "Realtime dùng Redis Streams, queue hay pub/sub?",
+      "verdict": "Redis pub/sub fanout, at-most-once, không lưu và không replay, chỉ publish sau khi commit. Không dùng Redis Streams hay hàng đợi cho realtime vì sự kiện chỉ là gợi ý, REST polling mới là nguồn sự thật.",
+      "services": [
+        "signaling-gateway",
+        "matching",
+        "gift",
+        "friend",
+        "party-room",
+        "soul-match"
+      ],
+      "details": [
+        {
+          "label": "Đường đi",
+          "text": "core-api PUBLISH lên kênh realtime:user:{userId} với payload đã tính sẵn cho từng người nhận; signaling-gateway PSUBSCRIBE realtime:user:* rồi đẩy xuống room của user.",
+          "services": [
+            "signaling-gateway",
+            "gift",
+            "friend"
+          ],
+          "evidence": [
+            {
+              "file": "apps/core-api/src/common/realtime/redis-realtime-publisher.adapter.ts",
+              "line": 11,
+              "quote": "return this.redis.publish(channel, payload);"
+            },
+            {
+              "file": "apps/signaling-gateway/src/app/signaling.gateway.ts",
+              "line": 14,
+              "quote": "REALTIME_USER_CHANNEL_PATTERN,"
+            }
+          ]
+        },
+        {
+          "label": "Ngữ nghĩa best-effort",
+          "text": "Publish bọc try/catch và chỉ log khi lỗi để không phá nghiệp vụ đã commit; client luôn còn REST polling làm đường dự phòng.",
+          "services": [
+            "matching",
+            "soul-match"
+          ],
+          "evidence": [
+            {
+              "file": "apps/core-api/src/modules/matching/jobs/matcher-worker.service.ts",
+              "line": 370,
+              "quote": "// Realtime SAU commit — best-effort, client vẫn còn GET /matching/tickets/:id poll fallback."
+            },
+            {
+              "file": "docs/services/realtime-gateway.md",
+              "line": 38,
+              "quote": "không dùng outbox"
+            }
+          ]
+        },
+        {
+          "label": "Nhiều instance",
+          "text": "Socket.IO Redis adapter đồng bộ việc phát tin giữa nhiều instance gateway; client cố định transport websocket nên không cần sticky session.",
+          "services": [
+            "signaling-gateway"
+          ],
+          "evidence": [
+            {
+              "file": "apps/signaling-gateway/src/app/redis-adapter.service.ts",
+              "line": 46,
+              "quote": "return createAdapter(this.pubClient, this.subClient);"
+            }
+          ]
+        }
+      ],
+      "alternatives": [
+        {
+          "option": "Redis Streams",
+          "whyNot": "Bền, có consumer group và replay nhưng cần ack và quản lý offset; thừa với tin chỉ là gợi ý refetch."
+        },
+        {
+          "option": "Outbox + Kafka cho realtime",
+          "whyNot": "docs/services/realtime-gateway.md chọn không dùng outbox cho luồng này vì sự kiện ephemeral và đã có fallback."
+        },
+        {
+          "option": "Hàng đợi (list) theo từng user",
+          "whyNot": "Suy luận: không replay đúng nghĩa và phải dọn khi user offline."
+        }
+      ],
+      "caveats": [
+        "Đã quét toàn bộ apps/core-api/src và apps/signaling-gateway/src: không có lệnh XADD, XREAD, XREADGROUP, XACK hay LPUSH, BRPOP nào."
+      ]
+    },
+    {
+      "topic": "queues-and-workers",
+      "category": "messaging",
+      "question": "Hàng đợi và worker nền: dùng gì, ở đâu?",
+      "verdict": "Không có thư viện job queue chung (không BullMQ, Agenda hay pg-boss trong package.json). Ghép đôi dùng Redis sorted set chia shard (ZADD/ZPOPMIN) rồi xác minh lại trong PostgreSQL bằng SELECT FOR UPDATE; worker nền là vòng lặp ManagedInterval chạy singleton nhờ advisory lock; sự kiện nghiệp vụ bền đi qua outbox rồi Kafka (có DLQ).",
+      "services": [
+        "matching",
+        "economy",
+        "friend",
+        "party-room"
+      ],
+      "details": [
+        {
+          "label": "Hàng đợi ghép đôi",
+          "text": "Mỗi shard là một sorted set: ZADD thêm vé, ZPOPMIN lấy vé theo điểm một cách nguyên tử nên hai pod không lấy trùng; Redis không phải nguồn sự thật nên matcher khoá hai ticket trong PostgreSQL (pessimistic_write) và verify lại trước khi tạo session.",
+          "services": [
+            "matching"
+          ],
+          "evidence": [
+            {
+              "file": "apps/core-api/src/modules/matching/redis/redis-matching-queue.adapter.ts",
+              "line": 18,
+              "quote": "await this.redis.zadd(shard, mode, score, ticketId);"
+            },
+            {
+              "file": "apps/core-api/src/modules/matching/jobs/matcher-worker.service.ts",
+              "line": 237,
+              "quote": "lock: { mode: 'pessimistic_write' },"
+            }
+          ]
+        },
+        {
+          "label": "Worker nền singleton",
+          "text": "ManagedInterval chạy worker và sweeper theo chu kỳ trong process và dùng pg advisory lock để chỉ một replica chạy tại một thời điểm.",
+          "services": [
+            "matching",
+            "friend",
+            "party-room"
+          ],
+          "evidence": [
+            {
+              "file": "apps/core-api/src/common/scheduling/managed-interval.ts",
+              "line": 128,
+              "quote": "`SELECT pg_try_advisory_xact_lock("
+            }
+          ]
+        },
+        {
+          "label": "Outbox rồi Kafka",
+          "text": "Economy ghi OutboxEvent cùng transaction nghiệp vụ; OutboxRelayService lấy hàng bằng FOR UPDATE SKIP LOCKED rồi publish lên Kafka; adapter có DLQ cho tin lỗi.",
+          "services": [
+            "economy"
+          ],
+          "evidence": [
+            {
+              "file": "apps/core-api/src/modules/economy/jobs/outbox-relay.service.ts",
+              "line": 72,
+              "quote": ".setOnLocked('skip_locked')"
+            },
+            {
+              "file": "apps/core-api/src/common/events/event-bus.port.ts",
+              "line": 23,
+              "quote": "export abstract class EventBusPort {"
+            }
+          ]
+        }
+      ],
+      "alternatives": [
+        {
+          "option": "BullMQ hoặc job queue trên Redis",
+          "whyNot": "Suy luận: thêm một lớp hạ tầng và trạng thái thứ hai khi trạng thái thật đã nằm ở PostgreSQL và worker chỉ là vòng lặp đơn giản."
+        },
+        {
+          "option": "Redis list làm hàng đợi ghép đôi",
+          "whyNot": "Không có điểm để lấy theo thứ tự ưu tiên; sorted set cho ZPOPMIN theo điểm."
+        }
+      ],
+      "caveats": [
+        "Trong profile hosted-free relay Kafka bị tắt nhưng outbox vẫn được ghi atomic (docs/03 § 3.9)."
+      ]
+    },
+    {
+      "topic": "consistency-concurrency",
+      "category": "consistency",
+      "question": "Nhất quán và đồng thời: transaction, khoá, sổ cái?",
+      "verdict": "Một PostgreSQL chung nên atomicity xuyên module dùng chung một transaction (truyền EntityManager), không saga hay 2PC. Race được chặn bằng khoá bi quan (SELECT FOR UPDATE), advisory lock và ràng buộc unique làm chốt cuối; tiền đi qua sổ cái kép append-only và sửa sai bằng bút toán đảo.",
+      "services": [
+        "economy",
+        "gift",
+        "soul-match",
+        "movie-match",
+        "matching"
+      ],
+      "details": [
+        {
+          "label": "Chung transaction",
+          "text": "Gift gọi Economy kèm EntityManager của giao dịch đang chạy nên trừ tiền người tặng, cộng người nhận và ghi GiftEvent cùng commit hoặc cùng rollback.",
+          "services": [
+            "gift",
+            "economy"
+          ],
+          "evidence": [
+            {
+              "file": "apps/core-api/src/modules/gift/gift.service.ts",
+              "line": 104,
+              "quote": "manager: EntityManager,"
+            }
+          ]
+        },
+        {
+          "label": "Khoá chống race",
+          "text": "Ledger khoá ví rồi mới ghi; soul-match khoá hàng match_sessions để hai rating like song song không cùng kết luận chưa đủ hai like; movie-match dùng advisory xact lock cho matcher ẩn danh.",
+          "services": [
+            "economy",
+            "soul-match",
+            "movie-match"
+          ],
+          "evidence": [
+            {
+              "file": "apps/core-api/src/modules/economy/services/ledger.service.ts",
+              "line": 420,
+              "quote": ".setLock('pessimistic_write')"
+            },
+            {
+              "file": "apps/core-api/src/modules/soul-match/soul-match.service.ts",
+              "line": 165,
+              "quote": "lock: { mode: 'pessimistic_write' },"
+            },
+            {
+              "file": "apps/core-api/src/modules/movie-match/movie-match.service.ts",
+              "line": 680,
+              "quote": "await manager.query('SELECT pg_advisory_xact_lock(hashtext($1))', ["
+            }
+          ]
+        },
+        {
+          "label": "Sổ cái kép",
+          "text": "Mỗi giao dịch tiền tạo ít nhất hai LedgerEntry nợ và có, append-only; Wallet.balance chỉ là snapshot cập nhật trong cùng transaction; correction là reversal.",
+          "services": [
+            "economy"
+          ],
+          "evidence": [
+            {
+              "file": "apps/core-api/src/modules/economy/economy.module.ts",
+              "line": 58,
+              "quote": "LedgerEntry,"
+            }
+          ]
+        }
+      ],
+      "alternatives": [
+        {
+          "option": "Saga hoặc outbox giữa các module",
+          "whyNot": "Chỉ cần khi tách thành deployable riêng (docs/03 § 3.6); trong cùng process thì thừa."
+        },
+        {
+          "option": "2PC xuyên deployable",
+          "whyNot": "docs/03 § 3.6 chủ động không dùng 2PC xuyên deployable."
+        }
+      ],
+      "caveats": []
+    },
+    {
+      "topic": "idempotency",
+      "category": "consistency",
+      "question": "Chống xử lý trùng (idempotency) làm thế nào?",
+      "verdict": "Hai lớp: client gửi Idempotency-Key (decorator @IdempotencyKey) và DB giữ chốt cuối bằng unique trên cột idempotency_key, nên retry mạng nhận lại kết quả cũ thay vì tạo bản ghi hoặc trừ tiền hai lần.",
+      "services": [
+        "matching",
+        "support",
+        "economy",
+        "gift"
+      ],
+      "details": [
+        {
+          "label": "Header và decorator",
+          "text": "Controller nhận Idempotency-Key qua một decorator dùng chung rồi truyền xuống service.",
+          "services": [
+            "matching",
+            "gift",
+            "support"
+          ],
+          "evidence": [
+            {
+              "file": "apps/core-api/src/common/decorators/idempotency-key.decorator.ts",
+              "line": 18,
+              "quote": "export function extractIdempotencyKey("
+            }
+          ]
+        },
+        {
+          "label": "Unique ở DB",
+          "text": "Ticket ghép đôi có idempotencyKey unique, ticket support có unique (userId, idempotencyKey), Transaction của Economy có idempotencyKey unique nên kiểm-rồi-ghi không bị race.",
+          "services": [
+            "matching",
+            "support",
+            "economy"
+          ],
+          "evidence": [
+            {
+              "file": "apps/core-api/src/modules/matching/entities/match-ticket.entity.ts",
+              "line": 127,
+              "quote": "@Column({ length: 255, unique: true })"
+            },
+            {
+              "file": "apps/core-api/src/modules/support/entities/support-ticket.entity.ts",
+              "line": 21,
+              "quote": "@Index('uq_support_ticket_user_idempotency', ['userId', 'idempotencyKey'], {"
+            }
+          ]
+        }
+      ],
+      "alternatives": [
+        {
+          "option": "Chỉ check-rồi-insert ở tầng code",
+          "whyNot": "Vẫn dính race khi hai request chạy song song; docs/03 yêu cầu unique ở tầng DB."
+        }
+      ],
+      "caveats": []
+    },
+    {
+      "topic": "rate-limit-abuse",
+      "category": "abuse",
+      "question": "Giới hạn tốc độ và chống lạm dụng?",
+      "verdict": "Nhiều lớp: ThrottlerGuard toàn cục đứng trước JWT và @Throttle riêng cho route nhạy cảm; rate limit nghiệp vụ bằng Redis (Lua) dùng chung nhiều instance; gateway giữ quota kết nối bằng lease Lua và fail-closed khi Redis lỗi; khách có hạn mức theo ngày lưu ở DB. [10/10] ThrottlerGuard đếm ở bộ nhớ từng pod mặc định; THROTTLE_STORAGE=redis (K8s) dùng RedisThrottlerStorage chung nhiều pod, khoá theo req.ip nên cần HTTP_TRUST_PROXY_HOPS đúng.",
+      "services": [
+        "matching",
+        "signaling-gateway",
+        "gift",
+        "auth"
+      ],
+      "details": [
+        {
+          "label": "Throttler",
+          "text": "ThrottlerGuard toàn cục là guard đầu tiên; các route nhạy cảm như tạo invite hay tặng quà thêm @Throttle với hạn mức riêng.",
+          "services": [
+            "matching",
+            "gift"
+          ],
+          "evidence": [
+            {
+              "file": "apps/core-api/src/app/app.module.ts",
+              "line": 154,
+              "quote": "{ provide: APP_GUARD, useClass: ThrottlerGuard },"
+            },
+            {
+              "file": "apps/core-api/src/modules/matching/controllers/invite.controller.ts",
+              "line": 53,
+              "quote": "@Throttle({ default: { limit: 10, ttl: minutes(1) } })"
+            }
+          ]
+        },
+        {
+          "label": "Redis Lua",
+          "text": "Bộ đếm nghiệp vụ chạy bằng script Lua trong Redis nên đúng khi có nhiều instance; gateway dùng Lua tương tự để lấy, gia hạn và trả lease quota kết nối.",
+          "services": [
+            "matching",
+            "signaling-gateway"
+          ],
+          "evidence": [
+            {
+              "file": "apps/core-api/src/common/redis/redis-rate-limit.adapter.ts",
+              "line": 79,
+              "quote": "const result = (await this.redis.eval("
+            },
+            {
+              "file": "apps/signaling-gateway/src/app/connection-quota.service.ts",
+              "line": 126,
+              "quote": "const result = await this.redis.eval("
+            }
+          ]
+        },
+        {
+          "label": "Fail-closed và hạn mức ngày",
+          "text": "Redis hoặc quota lỗi thì handshake bị từ chối thay vì cho qua; khách có hạn mức ghép đôi theo ngày lưu ở DB và gắn với token thiết bị.",
+          "services": [
+            "signaling-gateway",
+            "matching"
+          ],
+          "evidence": [
+            {
+              "file": "apps/signaling-gateway/src/app/signaling.gateway.ts",
+              "line": 36,
+              "quote": "const CONNECTION_QUOTA_UNAVAILABLE_ERROR = 'CONNECTION_QUOTA_UNAVAILABLE';"
+            },
+            {
+              "file": "apps/core-api/src/modules/matching/entities/guest-match-quota.entity.ts",
+              "line": 4,
+              "quote": "export class GuestMatchQuota {"
+            }
+          ]
+        }
+      ],
+      "alternatives": [
+        {
+          "option": "Chỉ rate limit ở ingress/gateway",
+          "whyNot": "Suy luận: ingress thấy IP chứ không thấy user hay nghiệp vụ; hạn mức theo user và theo hành động phải nằm ở ứng dụng."
+        }
+      ],
+      "caveats": []
+    },
+    {
+      "topic": "api-contract",
+      "category": "data",
+      "question": "Hợp đồng API và dữ liệu: OpenAPI, validate, phân trang, schema?",
+      "verdict": "Hợp đồng REST sinh từ chính controller (OpenAPI) rồi sinh client TypeScript; DTO validate bằng class-validator; phân trang bằng cursor; schema DB chỉ đổi bằng migration (synchronize tắt).",
+      "services": [
+        "matching",
+        "feed",
+        "admin"
+      ],
+      "details": [
+        {
+          "label": "OpenAPI và client sinh",
+          "text": "Mỗi route mô tả bằng @ApiOperation; core-api xuất openapi/core-api.json và client TypeScript được sinh từ đó nên frontend không lệch hợp đồng.",
+          "services": [
+            "matching",
+            "feed",
+            "admin"
+          ],
+          "evidence": [
+            {
+              "file": "apps/core-api/src/modules/matching/controllers/invite.controller.ts",
+              "line": 54,
+              "quote": "@ApiOperation({"
+            }
+          ]
+        },
+        {
+          "label": "Validate và phân trang",
+          "text": "Dữ liệu vào được validate bằng class-validator ở biên; danh sách phân trang bằng cursor (keyset) thay vì offset.",
+          "services": [
+            "matching",
+            "feed"
+          ],
+          "evidence": [
+            {
+              "file": "apps/core-api/src/modules/matching/controllers/invite.controller.ts",
+              "line": 74,
+              "quote": "@Query() query: CursorPageQueryDto,"
+            },
+            {
+              "file": "apps/core-api/src/main.ts",
+              "line": 80,
+              "quote": "new ValidationPipe({"
+            }
+          ]
+        },
+        {
+          "label": "Schema chỉ qua migration",
+          "text": "synchronize luôn tắt; mọi thay đổi schema đi qua migration có version.",
+          "services": [
+            "admin"
+          ],
+          "evidence": [
+            {
+              "file": "apps/core-api/src/app/app.module.ts",
+              "line": 81,
+              "quote": "synchronize: false, // schema chỉ đổi qua migration (docs/04)"
+            }
+          ]
+        }
+      ],
+      "alternatives": [
+        {
+          "option": "Phân trang offset",
+          "whyNot": "Lệch khi dữ liệu thêm hoặc xoá giữa hai trang và chậm ở trang sâu."
+        },
+        {
+          "option": "synchronize tự đồng bộ schema",
+          "whyNot": "Có thể xoá hoặc đổi cột ngoài ý muốn trên production; docs/03 § 3.10 yêu cầu schema do migration sở hữu."
+        }
+      ],
+      "caveats": []
+    },
+    {
+      "topic": "observability",
+      "category": "observability",
+      "question": "Quan sát và vận hành: metrics, log, trace, health, audit?",
+      "verdict": "Metrics và tracing qua OpenTelemetry, log JSON bằng pino, probe liveness/readiness cho Kubernetes và audit log cho hành động nhạy cảm của admin.",
+      "services": [
+        "app-shell",
+        "admin",
+        "matching"
+      ],
+      "details": [
+        {
+          "label": "Metrics và tracing",
+          "text": "Module định nghĩa Histogram/Meter qua @opentelemetry/api và có tracing.ts khởi tạo OpenTelemetry cho core-api.",
+          "services": [
+            "matching"
+          ],
+          "evidence": [
+            {
+              "file": "libs/observability/src/lib/tracing.ts",
+              "line": 108,
+              "quote": "'@opentelemetry/instrumentation-fs': { enabled: false },"
+            }
+          ]
+        },
+        {
+          "label": "Log có cấu trúc",
+          "text": "Log JSON bằng nestjs-pino để truy vết và tìm kiếm.",
+          "services": [
+            "app-shell"
+          ],
+          "evidence": [
+            {
+              "file": "apps/core-api/src/app/app.module.ts",
+              "line": 55,
+              "quote": "pinoHttp: buildPinoHttpOptions({"
+            }
+          ]
+        },
+        {
+          "label": "Health và audit",
+          "text": "Có endpoint liveness/readiness cho K8s; hành động của admin ghi audit log.",
+          "services": [
+            "app-shell",
+            "admin"
+          ],
+          "evidence": [
+            {
+              "file": "apps/core-api/src/app/health.controller.ts",
+              "line": 14,
+              "quote": "constructor(private readonly readiness: ReadinessService) {}"
+            },
+            {
+              "file": "apps/core-api/src/modules/admin/admin.service.ts",
+              "line": 49,
+              "quote": "private readonly auditLogService: AuditLogService,"
+            }
+          ]
+        }
+      ],
+      "alternatives": [],
+      "caveats": []
+    }
+  ]
+}

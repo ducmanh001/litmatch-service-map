@@ -1,0 +1,69 @@
+<!doctype html><html lang="vi"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Xem tệp · Litmatch Service Map</title><meta name="description" content="Bản đồ 25 service của Litmatch: ai gọi ai và vì sao, 72 luồng xuyên service đã kiểm toán, kỹ thuật áp dụng, điểm đáng chú ý và trạng thái xử lý."><meta name="robots" content="index,follow"><link rel="canonical" href="https://ducmanh001.github.io/litmatch-service-map/"><link rel="sitemap" type="application/xml" href="sitemap.xml"><link rel="alternate" type="text/plain" href="llms.txt" title="llms.txt"><link rel="alternate" type="application/json" href="search-index.json" title="search index"><script type="application/ld+json">{"@context":"https://schema.org","@type":"Dataset","name":"Litmatch Service Map","description":"Bản đồ 25 service của Litmatch: ai gọi ai và vì sao, 72 luồng xuyên service đã kiểm toán, kỹ thuật áp dụng, điểm đáng chú ý và trạng thái xử lý.","url":"https://ducmanh001.github.io/litmatch-service-map/","inLanguage":"vi","dateModified":"2026-10-14","isBasedOn":"https://github.com/ducmanh001/litmatch","license":"https://github.com/ducmanh001/litmatch","distribution":[{"@type":"DataDownload","encodingFormat":"text/plain","contentUrl":"https://ducmanh001.github.io/litmatch-service-map/llms.txt"},{"@type":"DataDownload","encodingFormat":"application/json","contentUrl":"https://ducmanh001.github.io/litmatch-service-map/search-index.json"},{"@type":"DataDownload","encodingFormat":"application/xml","contentUrl":"https://ducmanh001.github.io/litmatch-service-map/sitemap.xml"}],"potentialAction":{"@type":"SearchAction","target":"https://ducmanh001.github.io/litmatch-service-map/search.html?q={query}","query-input":"required name=query"}}</script><style>body{margin:0;background:#eef2ee;color:#14201b;font:15px/1.6 system-ui,-apple-system,"Segoe UI",sans-serif}main{max-width:980px;margin:0 auto;padding:20px 16px 60px}h1{font-size:28px;line-height:1.2}h2{margin-top:28px;border-top:1px solid #97a89f;padding-top:12px}code{background:#e6ece7;border:1px solid #ced8d1;border-radius:4px;padding:0 .3em;font-size:.88em;overflow-wrap:anywhere}pre{background:#e6ece7;border:1px solid #ced8d1;border-radius:6px;padding:10px;overflow-x:auto}pre code{border:0;padding:0}table{border-collapse:collapse;display:block;overflow-x:auto;font-size:13px}td,th{border:1px solid #ced8d1;padding:4px 8px;text-align:left;vertical-align:top}blockquote{margin:8px 0;padding:2px 12px;border-left:3px solid #97a89f}a{color:#0d6a50}input[type=search]{width:100%;box-sizing:border-box;padding:10px 12px;font:inherit;border:1px solid #97a89f;border-radius:6px;background:#fff;color:#14201b}@media(prefers-color-scheme:dark){body{background:#0e1511;color:#e3ece7}code,pre{background:#1b2822;border-color:#26342d}td,th{border-color:#26342d}a{color:#5fd1a8}input[type=search]{background:#16211b;color:#e3ece7;border-color:#3a4d43}}</style></head><body><nav class="site-strip" aria-label="Điều hướng và dữ liệu máy đọc" style="margin:0;padding:8px 16px;font:13px/1.6 system-ui,sans-serif;background:#d6ebe3;color:#14201b;border-bottom:1px solid #97a89f;display:flex;flex-wrap:wrap;gap:4px 14px;align-items:center"><b>Litmatch Service Map</b> <a href="index.html">Trang chính</a> <a href="sitemap.html">Sitemap</a> <a href="roadmap.html">Roadmap</a> <a href="search.html">Tìm kiếm</a> <a href="llms.txt">llms.txt</a> <a href="search-index.json">search-index.json</a> <a href="index.json">index.json</a> <a href="service-map/index.md">service-map</a> <a href="flows/index.md">flows</a> <a href="lookup/index.md">lookup</a> <span style="opacity:.6">|</span> <a href="https://ducmanh001.github.io/litmatch-atlas-demo/">Litmatch System Atlas</a> <a href="https://ducmanh001.github.io/litmatch-error-history/">Litmatch Error History</a></nav><main><p id="meta" style="font-size:13px;opacity:.8"></p><div id="doc"><p>Đang tải…</p></div></main><script>// Tiny markdown renderer shared by the generator (Node, via new Function) and view.html (browser). ES5 on purpose.
+function mdToHtml(md, linkFn) {
+  linkFn = linkFn || function (u) { return u; };
+  var esc = function (s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); };
+  var NUL = String.fromCharCode(0);
+  var inline = function (t) {
+    var codes = [];
+    t = String(t).replace(/`([^`]+)`/g, function (m, c) { codes.push(c); return NUL + (codes.length - 1) + NUL; });
+    t = esc(t).replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>');
+    t = t.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, function (m, a, u) { return '<a href="' + esc(linkFn(u.replace(/&amp;/g, '&'))) + '">' + a + '</a>'; });
+    t = t.replace(/(^|[\s,(])((?:\.\.\/)+[A-Za-z0-9_\-]+(?:\/[A-Za-z0-9_.\-]+)*\.md)/g, function (m, pre, u) { return pre + '<a href="' + esc(linkFn(u)) + '">' + u + '</a>'; });
+    return t.replace(new RegExp(NUL + '(\\d+)' + NUL, 'g'), function (m, i) { return '<code>' + esc(codes[+i]) + '</code>'; });
+  };
+  var cells = function (l) { return l.replace(/\\\|/g, '\u0001').replace(/^\s*\|/, '').replace(/\|\s*$/, '').split('|').map(function (c) { return c.replace(/\u0001/g, '|').trim(); }); };
+  var lines = String(md).replace(/\r/g, '').split('\n'), out = [], i = 0;
+  var isTableRow = function (l) { return /^\s*\|.*\|\s*$/.test(l || ''); };
+  while (i < lines.length) {
+    var l = lines[i], m;
+    if (/^```/.test(l)) { var buf = []; i++; while (i < lines.length && !/^```/.test(lines[i])) buf.push(lines[i++]); i++; out.push('<pre><code>' + esc(buf.join('\n')) + '</code></pre>'); continue; }
+    if ((m = /^(#{1,4})\s+(.*)$/.exec(l))) { out.push('<h' + m[1].length + '>' + inline(m[2]) + '</h' + m[1].length + '>'); i++; continue; }
+    if (/^\s*(-{3,}|\*{3,})\s*$/.test(l)) { out.push('<hr>'); i++; continue; }
+    if (isTableRow(l) && /^\s*\|[\s:|-]+\|\s*$/.test(lines[i + 1] || '')) {
+      var head = cells(l); i += 2; var rows = [];
+      while (i < lines.length && isTableRow(lines[i])) { rows.push(cells(lines[i])); i++; }
+      out.push('<table><thead><tr>' + head.map(function (c) { return '<th>' + inline(c) + '</th>'; }).join('') + '</tr></thead><tbody>' + rows.map(function (r) { return '<tr>' + r.map(function (c) { return '<td>' + inline(c) + '</td>'; }).join('') + '</tr>'; }).join('') + '</tbody></table>');
+      continue;
+    }
+    if (/^\s*[-*]\s+/.test(l)) { var items = []; while (i < lines.length && /^\s*[-*]\s+/.test(lines[i])) items.push(lines[i++].replace(/^\s*[-*]\s+/, '')); out.push('<ul>' + items.map(function (x) { return '<li>' + inline(x) + '</li>'; }).join('') + '</ul>'); continue; }
+    if (/^\s*\d+\.\s+/.test(l)) { var oi = []; while (i < lines.length && /^\s*\d+\.\s+/.test(lines[i])) oi.push(lines[i++].replace(/^\s*\d+\.\s+/, '')); out.push('<ol>' + oi.map(function (x) { return '<li>' + inline(x) + '</li>'; }).join('') + '</ol>'); continue; }
+    if (/^>\s?/.test(l)) { var q = []; while (i < lines.length && /^>\s?/.test(lines[i])) q.push(lines[i++].replace(/^>\s?/, '')); out.push('<blockquote>' + inline(q.join(' ')) + '</blockquote>'); continue; }
+    if (!l.trim()) { i++; continue; }
+    var p = []; while (i < lines.length && lines[i].trim() && !/^(#{1,4}\s|```|\s*\|.*\|\s*$|\s*[-*]\s|\s*\d+\.\s|>)/.test(lines[i])) p.push(lines[i++]);
+    if (!p.length) { p.push(lines[i++]); }
+    out.push('<p>' + inline(p.join(' ')) + '</p>');
+  }
+  return out.join('\n');
+}
+</script><script>// Renders one markdown/json/text file of this site for humans: view.html?f=pack/db/auth.md
+(function () {
+  var out = document.getElementById('doc'), meta = document.getElementById('meta');
+  var f = '';
+  try { f = new URLSearchParams(location.search).get('f') || ''; } catch (e) {}
+  if (!/^[A-Za-z0-9_\-.\/]+\.(md|json|txt|xml)$/.test(f) || f.indexOf('..') >= 0 || f.charAt(0) === '/') { out.innerHTML = '<p>Thiếu hoặc sai tham số <code>f</code>. Ví dụ: <code>view.html?f=roadmap.md</code>. Xem <a href="sitemap.html">sitemap</a>.</p>'; return; }
+  var dir = f.indexOf('/') >= 0 ? f.slice(0, f.lastIndexOf('/') + 1) : '';
+  var resolve = function (u) {
+    if (/^[a-z]+:/i.test(u) || u.charAt(0) === '#') return u;
+    var parts = (u.charAt(0) === '/' ? u.slice(1) : dir + u).split('/'), st = [];
+    for (var i = 0; i < parts.length; i++) { if (parts[i] === '..') st.pop(); else if (parts[i] !== '.' && parts[i] !== '') st.push(parts[i]); }
+    return st.join('/');
+  };
+  var SITES = {"atlas":"https://ducmanh001.github.io/litmatch-atlas-demo/","map":"https://ducmanh001.github.io/litmatch-service-map/","history":"https://ducmanh001.github.io/litmatch-error-history/"};
+  var linkFn = function (u) {
+    var hash = '', h = u.indexOf('#'); if (h >= 0) { hash = u.slice(h); u = u.slice(0, h); }
+    if (!u) return hash;
+    if (/^https?:/i.test(u)) {
+      for (var k in SITES) { if (u.indexOf(SITES[k]) === 0 && /\.(md|txt)$/.test(u)) return SITES[k] + 'view.html?f=' + encodeURIComponent(u.slice(SITES[k].length)) + hash; }
+      return u + hash;
+    }
+    var r = resolve(u);
+    return (/\.(md|txt)$/.test(r) ? 'view.html?f=' + encodeURIComponent(r) : r) + hash;
+  };
+  document.title = f + ' · ' + document.title;
+  meta.innerHTML = 'Tệp: <code>' + f.replace(/&/g, '&amp;').replace(/</g, '&lt;') + '</code> · <a href="' + f + '">mở bản thô (raw)</a>';
+  fetch(f).then(function (r) { if (!r.ok) throw new Error(r.status); return r.text(); }).then(function (t) {
+    if (/\.md$/.test(f)) out.innerHTML = mdToHtml(t, linkFn);
+    else { var pre = document.createElement('pre'); pre.textContent = t.length > 400000 ? t.slice(0, 400000) + '\n… (cắt, mở bản thô để xem hết)' : t; out.appendChild(pre); }
+  }).catch(function (e) { out.innerHTML = '<p>Không tải được tệp (' + e + '). Xem <a href="sitemap.html">sitemap</a>.</p>'; });
+})();
+</script></body></html>

@@ -1,0 +1,167 @@
+{
+ "id": "short-video-ranking-and-sweeper-jobs",
+ "title": "Job tính điểm xếp hạng và dọn video lỗi",
+ "summary": "Hai worker nền của short-video chạy theo setInterval: một job tính lại rank_score cho video published, một job chuyển video uploading quá hạn sang failed rồi xóa object trên storage. Cả hai cần PostgreSQL (khóa advisory để chỉ một replica chạy, và dữ liệu videos) cùng storage ngoài.",
+ "caption": "Hai job nền singleton của short-video đọc/ghi bảng videos trên PostgreSQL và dọn object lỗi trên storage ngoài.",
+ "participants": [
+  {
+   "id": "short-video",
+   "label": "Short-video",
+   "kind": "service"
+  },
+  {
+   "id": "postgres",
+   "label": "PostgreSQL",
+   "kind": "infra"
+  },
+  {
+   "id": "external:video-storage",
+   "label": "Video storage",
+   "kind": "external"
+  }
+ ],
+ "steps": [
+  {
+   "from": "short-video",
+   "to": "short-video",
+   "label": "Bootstrap: đăng ký setInterval cho job ranking theo VIDEO_RANKING_JOB_INTERVAL_MS",
+   "kind": "call",
+   "mechanism": "config",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/short-video/jobs/video-ranking.service.ts",
+     "line": 41,
+     "quote": "this.job.start(this.scheduler, {"
+    }
+   ]
+  },
+  {
+   "from": "short-video",
+   "to": "postgres",
+   "label": "Mỗi tick: thử lấy advisory lock để chỉ một replica chạy job",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "note": "Khóa là pg_try_advisory_xact_lock trong một transaction riêng của QueryRunner; replica không lấy được khóa thì rollback và chờ followerRetryMs.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/common/scheduling/managed-interval.ts",
+     "line": 128,
+     "quote": "SELECT pg_try_advisory_xact_lock("
+    }
+   ]
+  },
+  {
+   "from": "short-video",
+   "to": "postgres",
+   "label": "UPDATE rank_score cho tối đa 1000 video published theo engagement và time-decay",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/short-video/jobs/video-ranking.service.ts",
+     "line": 75,
+     "quote": "const [, count] = (await this.dataSource.query("
+    }
+   ]
+  },
+  {
+   "from": "postgres",
+   "to": "short-video",
+   "label": "Trả số dòng đã cập nhật của tick ranking",
+   "kind": "return",
+   "mechanism": "shared-db"
+  },
+  {
+   "from": "short-video",
+   "to": "short-video",
+   "label": "Bootstrap: đăng ký setInterval cho job sweeper theo VIDEO_SWEEPER_INTERVAL_MS",
+   "kind": "call",
+   "mechanism": "config",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/short-video/jobs/video-sweeper.service.ts",
+     "line": 45,
+     "quote": "this.job.start(this.scheduler, {"
+    }
+   ]
+  },
+  {
+   "from": "short-video",
+   "to": "postgres",
+   "label": "Sau khi lấy khóa: chuyển video uploading quá hạn sang failed, lấy id, storage_key",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/short-video/jobs/video-sweeper.service.ts",
+     "line": 69,
+     "quote": "const expired = (await this.dataSource.query("
+    }
+   ]
+  },
+  {
+   "from": "short-video",
+   "to": "postgres",
+   "label": "Đọc thêm tối đa 200 video failed cũ để dọn lại object",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/short-video/jobs/video-sweeper.service.ts",
+     "line": 87,
+     "quote": "const failed = (await this.dataSource.query("
+    }
+   ]
+  },
+  {
+   "from": "short-video",
+   "to": "external:video-storage",
+   "label": "VideoStoragePort.delete(storage_key) cho từng video cần dọn",
+   "kind": "call",
+   "mechanism": "sdk",
+   "note": "Lỗi từng video bị bắt và chỉ log cảnh báo, video đó được thử lại ở tick sau.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/short-video/jobs/video-sweeper.service.ts",
+     "line": 101,
+     "quote": "await this.storagePort.delete(video.storage_key);"
+    }
+   ]
+  },
+  {
+   "from": "short-video",
+   "to": "short-video",
+   "label": "Kết thúc tick sweeper, trả số video vừa chuyển sang failed",
+   "kind": "return",
+   "mechanism": "di-call"
+  }
+ ],
+ "groups": [
+  {
+   "from": 7,
+   "to": 8,
+   "label": "Dọn object trên storage",
+   "kind": "external"
+  }
+ ],
+ "invariants": [
+  "Hai job chạy ngầm trong mọi replica core-api nhưng khóa advisory trên PostgreSQL (theo tên job) bảo đảm chỉ một replica thực hiện mỗi tick, tránh tính điểm hoặc dọn trùng.",
+  "Sweeper phải ghi status failed vào PostgreSQL trước khi xóa object trên storage, để video lỗi vẫn được nhặt lại ở tick sau nếu việc xóa thất bại."
+ ],
+ "failureModes": [
+  {
+   "when": "VideoStoragePort.delete ném lỗi cho một video",
+   "effect": "Lỗi bị bắt và ghi log warn; video vẫn ở trạng thái failed nên được chọn lại ở tick sau."
+  },
+  {
+   "when": "Tick trước còn chạy hoặc replica khác giữ khóa advisory",
+   "effect": "Tick còn chạy trong cùng process thì bị bỏ qua; replica không lấy được khóa thì rollback và chờ followerRetryMs. Process idle cũng bỏ qua tick (skipWhenIdle)."
+  },
+  {
+   "when": "Truy vấn PostgreSQL lỗi trong tick",
+   "effect": "Transaction giữ khóa được rollback, lỗi được log và replica này hoãn thử lại một khoảng retry."
+  }
+ ],
+ "dataIssues": [],
+ "uncertain": []
+}

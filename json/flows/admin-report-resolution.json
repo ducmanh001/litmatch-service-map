@@ -1,0 +1,38 @@
+{
+ "id": "admin-report-resolution",
+ "title": "Admin xử lý báo cáo vi phạm",
+ "summary": "Admin xem hàng đợi báo cáo rồi đánh dấu đã xử lý hoặc bác bỏ. AdminModule kiểm quyền và điều phối, SafetyModule sở hữu bảng report, và việc đổi trạng thái phải ghi cùng transaction với audit log.",
+ "caption": "Admin liệt kê báo cáo qua Safety, rồi đổi trạng thái báo cáo và ghi audit log trong cùng một transaction.",
+ "participants": [
+  {"id": "admin-console", "label": "Admin console", "kind": "client"},
+  {"id": "admin", "label": "Admin", "kind": "service"},
+  {"id": "safety", "label": "Safety", "kind": "service"},
+  {"id": "postgres", "label": "PostgreSQL", "kind": "infra"}
+ ],
+ "steps": [
+  {"from": "admin-console", "to": "admin", "label": "GET /admin/reports lọc theo status, phân trang offset", "kind": "call", "mechanism": "http", "note": "Route yêu cầu quyền ResolveReports qua AdminPermissionGuard.", "evidence": [{"file": "apps/core-api/src/modules/admin/admin.controller.ts", "line": 170, "quote": "@RequireAdminPermission(AdminPermission.ResolveReports)"}]},
+  {"from": "admin", "to": "safety", "label": "findReportsPage(filter, limit, offset)", "kind": "call", "mechanism": "di-call", "evidence": [{"file": "apps/core-api/src/modules/admin/admin.service.ts", "line": 112, "quote": "return this.safetyService.findReportsPage(filter, limit, offset);"}]},
+  {"from": "safety", "to": "postgres", "label": "Truy vấn report, lọc status, sắp theo createdAt giảm dần", "kind": "call", "mechanism": "shared-db", "evidence": [{"file": "apps/core-api/src/modules/safety/safety.service.ts", "line": 342, "quote": "this.reportRepo.createQueryBuilder('r')"}]},
+  {"from": "safety", "to": "admin", "label": "Trả trang báo cáo gồm items và total", "kind": "return", "mechanism": "di-call"},
+  {"from": "admin", "to": "admin-console", "label": "Trả AdminReportsPageDto cho hàng đợi kiểm duyệt", "kind": "return", "mechanism": "http"},
+  {"from": "admin-console", "to": "admin", "label": "POST /admin/reports/:id/resolve hoặc /dismiss", "kind": "call", "mechanism": "http", "evidence": [{"file": "apps/core-api/src/modules/admin/admin.controller.ts", "line": 185, "quote": "@RequireAdminPermission(AdminPermission.ResolveReports)"}]},
+  {"from": "admin", "to": "postgres", "label": "Mở transaction cho setReportStatus", "kind": "call", "mechanism": "shared-db", "note": "resolve dùng ReportStatus.Resolved, dismiss dùng ReportStatus.Dismissed.", "evidence": [{"file": "apps/core-api/src/modules/admin/admin.service.ts", "line": 128, "quote": "return this.dataSource.transaction(async (manager) => {"}]},
+  {"from": "admin", "to": "safety", "label": "setReportStatus(manager, reportId, status)", "kind": "call", "mechanism": "di-call", "evidence": [{"file": "apps/core-api/src/modules/admin/admin.service.ts", "line": 129, "quote": "const report = await this.safetyService.setReportStatus("}]},
+  {"from": "safety", "to": "postgres", "label": "Đọc report theo id rồi lưu status mới", "kind": "call", "mechanism": "shared-db", "note": "Không thấy report thì ném 404 REPORT_NOT_FOUND; chỉ status bị đổi.", "evidence": [{"file": "apps/core-api/src/modules/safety/safety.service.ts", "line": 360, "quote": "const report = await repo.findOneBy({ id: reportId });"}, {"file": "apps/core-api/src/modules/safety/safety.service.ts", "line": 369, "quote": "return repo.save(report);"}]},
+  {"from": "admin", "to": "postgres", "label": "Ghi audit log report.<status> bằng cùng manager", "kind": "call", "mechanism": "shared-db", "evidence": [{"file": "apps/core-api/src/modules/admin/admin.service.ts", "line": 134, "quote": "await this.auditLogService.record("}]},
+  {"from": "admin", "to": "admin-console", "label": "Trả AdminReportDto sau khi transaction hoàn tất", "kind": "return", "mechanism": "http"}
+ ],
+ "groups": [
+  {"from": 7, "to": 10, "label": "Đổi trạng thái và audit cùng transaction", "kind": "transaction"}
+ ],
+ "invariants": [
+  "Safety sở hữu bảng report nên Admin không tự ghi; Admin chỉ truyền manager để thay đổi trạng thái và audit log nằm trong cùng transaction.",
+  "Ghi audit sau khi Safety đổi status trong cùng callback, nên nếu một bước ném lỗi thì không có trạng thái đổi mà thiếu audit."
+ ],
+ "failureModes": [
+  {"when": "Report id không tồn tại", "effect": "SafetyService.setReportStatus ném DomainException 404 REPORT_NOT_FOUND, callback transaction dừng và không ghi audit."},
+  {"when": "Admin thiếu quyền ResolveReports", "effect": "AdminPermissionGuard chặn trước khi vào service, không có truy vấn nào chạy."}
+ ],
+ "dataIssues": [],
+ "uncertain": []
+}

@@ -1,0 +1,268 @@
+{
+ "id": "friend-profile-follow-and-actions",
+ "title": "Theo dõi và xem hành động khả dụng trên hồ sơ",
+ "summary": "Khi người dùng mở hồ sơ người khác, module friend phải xác nhận hồ sơ tồn tại (user) và không bị block hai chiều (safety) trước khi trả trạng thái follow, hội thoại và ngưỡng first-chat, hoặc ghi/bỏ follow vào bảng của friend.",
+ "caption": "Ba endpoint GET actions, POST follow, DELETE follow của friend cùng gọi User để kiểm hồ sơ và Safety để kiểm block hai chiều trước khi đụng PostgreSQL.",
+ "participants": [
+  {
+   "id": "web",
+   "label": "Web client",
+   "kind": "client"
+  },
+  {
+   "id": "friend",
+   "label": "Friend",
+   "kind": "service"
+  },
+  {
+   "id": "user",
+   "label": "User",
+   "kind": "service"
+  },
+  {
+   "id": "safety",
+   "label": "Safety",
+   "kind": "service"
+  },
+  {
+   "id": "postgres",
+   "label": "PostgreSQL",
+   "kind": "infra"
+  }
+ ],
+ "steps": [
+  {
+   "from": "web",
+   "to": "friend",
+   "label": "GET /profiles/:profileUserId/actions (JWT) để lấy trạng thái hành động",
+   "kind": "call",
+   "mechanism": "http"
+  },
+  {
+   "from": "friend",
+   "to": "user",
+   "label": "Kiểm hồ sơ đích tồn tại (getByIdOrThrow)",
+   "kind": "call",
+   "mechanism": "di-call",
+   "note": "assertTarget trước đó từ chối khi viewer trùng profile (400 SELF_PROFILE_ACTION).",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/friend/services/profile-social.service.ts",
+     "line": 398,
+     "quote": "await this.userService.getByIdOrThrow(profileUserId);"
+    }
+   ]
+  },
+  {
+   "from": "friend",
+   "to": "safety",
+   "label": "Kiểm block hai chiều: isBlocked(A,B) rồi isBlocked(B,A)",
+   "kind": "call",
+   "mechanism": "di-call",
+   "note": "Nếu một chiều bị block, friend ném PROFILE_NOT_AVAILABLE (404 'Không tìm thấy hồ sơ').",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/friend/services/profile-social.service.ts",
+     "line": 546,
+     "quote": "(await this.safetyService.isBlocked(userAId, userBId)) ||"
+    },
+    {
+     "file": "apps/core-api/src/modules/friend/services/profile-social.service.ts",
+     "line": 547,
+     "quote": "(await this.safetyService.isBlocked(userBId, userAId))"
+    }
+   ]
+  },
+  {
+   "from": "friend",
+   "to": "postgres",
+   "label": "Đọc follow, hội thoại 1-1 và đếm follower/following song song",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/friend/services/profile-social.service.ts",
+     "line": 168,
+     "quote": "this.followRepo.findOneBy({"
+    },
+    {
+     "file": "apps/core-api/src/modules/friend/services/profile-social.service.ts",
+     "line": 585,
+     "quote": "return this.conversationRepo.findOneBy({ userLowId, userHighId });"
+    },
+    {
+     "file": "apps/core-api/src/modules/friend/services/profile-social.service.ts",
+     "line": 406,
+     "quote": "this.followRepo.countBy({"
+    }
+   ]
+  },
+  {
+   "from": "friend",
+   "to": "postgres",
+   "label": "Đếm first-chat trong ngày của profile để tính requiresGift",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "note": "So sánh với PROFILE_DIRECT_MESSAGE_DAILY_FIRST_CHAT_THRESHOLD lấy từ config.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/friend/services/profile-social.service.ts",
+     "line": 608,
+     "quote": "const row = await manager"
+    }
+   ]
+  },
+  {
+   "from": "friend",
+   "to": "web",
+   "label": "Trả isFollowing, số follower/following, conversationId, requiresGift",
+   "kind": "return",
+   "mechanism": "http"
+  },
+  {
+   "from": "web",
+   "to": "friend",
+   "label": "POST /profiles/:profileUserId/follow",
+   "kind": "call",
+   "mechanism": "http"
+  },
+  {
+   "from": "friend",
+   "to": "user",
+   "label": "Kiểm hồ sơ đích tồn tại (getByIdOrThrow)",
+   "kind": "call",
+   "mechanism": "di-call",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/friend/services/profile-social.service.ts",
+     "line": 398,
+     "quote": "await this.userService.getByIdOrThrow(profileUserId);"
+    }
+   ]
+  },
+  {
+   "from": "friend",
+   "to": "safety",
+   "label": "Kiểm block hai chiều trước khi cho follow",
+   "kind": "call",
+   "mechanism": "di-call",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/friend/services/profile-social.service.ts",
+     "line": 546,
+     "quote": "(await this.safetyService.isBlocked(userAId, userBId)) ||"
+    },
+    {
+     "file": "apps/core-api/src/modules/friend/services/profile-social.service.ts",
+     "line": 547,
+     "quote": "(await this.safetyService.isBlocked(userBId, userAId))"
+    }
+   ]
+  },
+  {
+   "from": "friend",
+   "to": "postgres",
+   "label": "Upsert ProfileFollow: active=true, lastFollowedAt=now()",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "note": "Một câu INSERT ... ON CONFLICT (orUpdate) duy nhất, không mở transaction thủ công.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/friend/services/profile-social.service.ts",
+     "line": 92,
+     "quote": "await this.followRepo"
+    }
+   ]
+  },
+  {
+   "from": "friend",
+   "to": "web",
+   "label": "Trả ProfileFollowDto (đang theo dõi = true)",
+   "kind": "return",
+   "mechanism": "http"
+  },
+  {
+   "from": "web",
+   "to": "friend",
+   "label": "DELETE /profiles/:profileUserId/follow",
+   "kind": "call",
+   "mechanism": "http"
+  },
+  {
+   "from": "friend",
+   "to": "user",
+   "label": "Kiểm hồ sơ đích tồn tại (getByIdOrThrow)",
+   "kind": "call",
+   "mechanism": "di-call",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/friend/services/profile-social.service.ts",
+     "line": 398,
+     "quote": "await this.userService.getByIdOrThrow(profileUserId);"
+    }
+   ]
+  },
+  {
+   "from": "friend",
+   "to": "safety",
+   "label": "Kiểm block hai chiều trước khi bỏ follow",
+   "kind": "call",
+   "mechanism": "di-call",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/friend/services/profile-social.service.ts",
+     "line": 546,
+     "quote": "(await this.safetyService.isBlocked(userAId, userBId)) ||"
+    },
+    {
+     "file": "apps/core-api/src/modules/friend/services/profile-social.service.ts",
+     "line": 547,
+     "quote": "(await this.safetyService.isBlocked(userBId, userAId))"
+    }
+   ]
+  },
+  {
+   "from": "friend",
+   "to": "postgres",
+   "label": "Cập nhật ProfileFollow: active=false (không xóa dòng)",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/friend/services/profile-social.service.ts",
+     "line": 116,
+     "quote": "await this.followRepo.update("
+    }
+   ]
+  },
+  {
+   "from": "friend",
+   "to": "web",
+   "label": "Trả ProfileFollowDto (đang theo dõi = false)",
+   "kind": "return",
+   "mechanism": "http"
+  }
+ ],
+ "groups": [],
+ "invariants": [
+  "Cả ba endpoint đều gọi assertTarget (User) rồi assertNotBlocked (Safety) trước khi đọc/ghi bảng của friend, nên người bị block hai chiều không thể follow hay thấy trạng thái hành động.",
+  "Block được kiểm cả hai chiều (A,B và B,A); lỗi trả 404 'Không tìm thấy hồ sơ' nên không lộ việc bị block.",
+  "Friend chỉ sở hữu ProfileFollow, Conversation và ProfileChatContact; hồ sơ do User sở hữu và luật block do Safety sở hữu nên friend phải hỏi qua service chứ không tự đọc bảng của họ."
+ ],
+ "failureModes": [
+  {
+   "when": "Viewer thao tác với chính hồ sơ của mình",
+   "effect": "assertTarget ném SELF_PROFILE_ACTION (400), không chạm Safety hay DB follow."
+  },
+  {
+   "when": "Hồ sơ đích không tồn tại",
+   "effect": "UserService.getByIdOrThrow ném lỗi, request dừng trước bước kiểm block."
+  },
+  {
+   "when": "Một trong hai bên đã block bên kia",
+   "effect": "assertNotBlocked ném PROFILE_NOT_AVAILABLE (404), không ghi follow, không trả trạng thái."
+  }
+ ],
+ "dataIssues": [],
+ "uncertain": []
+}

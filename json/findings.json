@@ -1,0 +1,313 @@
+[
+ {
+  "id": "V1",
+  "title": "Relay realtime có thể nhân bản event khi chạy nhiều pod?",
+  "services": [
+   "signaling-gateway"
+  ],
+  "status": "fixed",
+  "finding": "ĐÃ SỬA (commit 40e2aa3): relay() giờ emit bằng server.local.to(room) nên mỗi pod chỉ phát cho socket của mình; test hai pod chạy @socket.io/redis-adapter thật. Đánh đổi: pod mất subscription thì socket của pod đó không nhận (ghi trong docs/services/realtime-gateway.md). Quan sát gốc ngày 09/10: Trùng event có thể xảy ra: mỗi pod PSUBSCRIBE realtime:user:* rồi relay() gọi server.to(userRoom(userId)).emit (không phải server.local) trong khi redis-adapter gắn vào cùng Server qua CorsIoAdapter, nên N pod emit N lần và client có thể nhận N lần. Không test nào assert số lần nhận qua relay; docs § 6 nói \"chỉ emit cho room cục bộ\" lệch với code.",
+  "evidence": [
+   {
+    "file": "apps/signaling-gateway/src/app/signaling.gateway.ts",
+    "line": 332,
+    "quote": "this.server.local.to(userRoom(userId)).emit(envelope.event, envelope.data);"
+   },
+   {
+    "file": "apps/signaling-gateway/src/main.ts",
+    "line": 46,
+    "quote": "app.useWebSocketAdapter(new CorsIoAdapter(app, corsOrigins, clusterAdapter));"
+   },
+   {
+    "file": "docs/services/realtime-gateway.md",
+    "line": 87,
+    "quote": "qua Redis pub/sub rồi chỉ emit cho room cục bộ của mình) vốn KHÔNG cần tới cluster adapter để hoạt"
+   }
+  ]
+ },
+ {
+  "id": "V6",
+  "title": "Đếm view video có race khi hai request song song?",
+  "services": [
+   "short-video"
+  ],
+  "status": "fixed",
+  "finding": "ĐÃ SỬA (commit 4f0ae66): Đếm view dùng INSERT ... ON CONFLICT DO NOTHING rồi khoá hàng (pessimistic_write), không còn đường save()+catch unique violation. Quan sát gốc ngày 09/10: Insert video_views được unique (videoId, viewerId) chặn, nhưng cộng viewCount không có guard: transaction đọc view bằng findOne không khoá, tính shouldQualifyNow = nowQualifies && !view.qualified, update không điều kiện qualified=false rồi increment. Hai request song song của cùng viewer cùng đọc qualified=false đều tăng viewCount, nên có race.",
+  "evidence": [
+   {
+    "file": "apps/core-api/src/modules/short-video/short-video.service.ts",
+    "line": 288,
+    "quote": "const shouldQualifyNow = nowQualifies && !view.qualified;"
+   },
+   {
+    "file": "apps/core-api/src/modules/short-video/short-video.service.ts",
+    "line": 298,
+    "quote": "await manager.increment(Video, { id: videoId }, 'viewCount', 1);"
+   },
+   {
+    "file": "apps/core-api/src/modules/short-video/entities/video-view.entity.ts",
+    "line": 16,
+    "quote": "@Index('uq_video_views_video_viewer', ['videoId', 'viewerId'], { unique: true })"
+   }
+  ]
+ },
+ {
+  "id": "V7",
+  "title": "Sweeper video failed có thể bỏ đói video mới?",
+  "services": [
+   "short-video"
+  ],
+  "status": "fixed",
+  "finding": "ĐÃ SỬA (commit 4f0ae66): Thêm cột videos.storage_cleaned_at: hàng đã dọn xong rời hàng đợi, hàng xoá lỗi bị đẩy về cuối nên không còn lặp 200 hàng cũ nhất. Quan sát gốc ngày 09/10: Mỗi tick lấy tối đa VIDEO_SWEEP_BATCH = 200 video failed, ORDER BY updated_at ASC, id ASC, và chỉ gọi storagePort.delete; không có cờ, không xoá, không đổi status hay updated_at sau khi xử lý. Vậy cùng 200 hàng cũ nhất bị đọc lại mỗi tick; nếu backlog failed >200 thì hàng mới hơn không bao giờ vào batch này (chỉ được thử một lần ở nhánh expired lúc chuyển sang failed).",
+  "evidence": [
+   {
+    "file": "apps/core-api/src/modules/short-video/jobs/video-sweeper.service.ts",
+    "line": 91,
+    "quote": "ORDER BY updated_at ASC, id ASC\n          LIMIT $2"
+   },
+   {
+    "file": "apps/core-api/src/modules/short-video/jobs/video-sweeper.service.ts",
+    "line": 101,
+    "quote": "await this.storagePort.delete(video.storage_key);"
+   }
+  ]
+ },
+ {
+  "id": "V8",
+  "title": "sort=ranked loại video chưa có rankScore dù comment nói fallback",
+  "services": [
+   "short-video"
+  ],
+  "status": "confirmed",
+  "finding": "Lệch giữa comment và code: VideoRankingService nói fallback sort=recent khi rankScore IS NULL, nhưng listing với sort=ranked thêm qb.andWhere('v.rankScore IS NOT NULL') và chỉ order theo rankScore, nên video mới chưa được job tính điểm bị loại khỏi danh sách ranked thay vì rơi về thứ tự recent.",
+  "evidence": [
+   {
+    "file": "apps/core-api/src/modules/short-video/jobs/video-ranking.service.ts",
+    "line": 23,
+    "quote": "sự thật — fallback `sort=recent` khi `rankScore IS NULL` (video mới toanh, job chưa kịp chạy)."
+   },
+   {
+    "file": "apps/core-api/src/modules/short-video/short-video.service.ts",
+    "line": 221,
+    "quote": "qb.andWhere('v.rankScore IS NOT NULL');"
+   }
+  ]
+ },
+ {
+  "id": "V10",
+  "title": "Hủy mini-game có thể ghi đè kết quả đã chốt?",
+  "services": [
+   "mini-game"
+  ],
+  "status": "fixed",
+  "finding": "ĐÃ SỬA (commit 8799483): Huỷ ván là UPDATE có điều kiện status = waiting_moves; thua race thì trả 409 hoặc trạng thái cancelled idempotent, không ghi đè ván đã resolved. Quan sát gốc ngày 09/10: cancelSession đọc session và kiểm tra status ngoài transaction (getSessionForParticipant), rồi trong transaction chỉ update theo id, không WHERE status và không khoá dòng. Cancel đua với resolve có thể ghi đè 'resolved' bằng 'cancelled'. Chiều submitMove thì có WHERE status = WaitingMoves.",
+  "evidence": [
+   {
+    "file": "apps/core-api/src/modules/mini-game/mini-game.service.ts",
+    "line": 252,
+    "quote": "if (session.status === MiniGameSessionStatus.Resolved) {"
+   },
+   {
+    "file": "apps/core-api/src/modules/mini-game/mini-game.service.ts",
+    "line": 194,
+    "quote": "{ id: sessionId },"
+   },
+   {
+    "file": "apps/core-api/src/modules/mini-game/mini-game.service.ts",
+    "line": 160,
+    "quote": ".where(`id = :id AND ${moveColumnSql} IS NULL AND status = :status`, {"
+   }
+  ]
+ },
+ {
+  "id": "V11",
+  "title": "Kiểm bundleId Apple bị bỏ qua khi biến môi trường rỗng?",
+  "services": [
+   "economy"
+  ],
+  "status": "fixed",
+  "finding": "ĐÃ SỬA (commit 03ab95e/fb29385): Env validation bắt buộc ECONOMY_APPLE_BUNDLE_ID khi IAP verifier là store, hoặc khi webhook verifier là store và đã điền Apple Root CA; để trống ở các chế độ còn lại vẫn bỏ qua kiểm bundleId. Docs ghi rõ kiểm receipt hiện chưa so bundle_id. Quan sát gốc ngày 09/10: Controller bỏ qua việc đối chiếu bundleId khi ECONOMY_APPLE_BUNDLE_ID rỗng (if (expectedBundleId && ...)). Mặc định rỗng: Joi default(''), .env.example và k8s/base configmap đều để ''. deploy/production/compose.yml không set biến này nên cũng ra mặc định ''. Giá trị thật ngoài repo không biết được.",
+  "evidence": [
+   {
+    "file": "apps/core-api/src/modules/economy/webhooks/economy-webhooks.controller.ts",
+    "line": 69,
+    "quote": "if (expectedBundleId && payload.data.bundleId !== expectedBundleId) {"
+   },
+   {
+    "file": "apps/core-api/src/config/env.validation.ts",
+    "line": 439,
+    "quote": "ECONOMY_APPLE_BUNDLE_ID: Joi.string().when('ECONOMY_IAP_VERIFIER', {"
+   },
+   {
+    "file": "k8s/base/core-api/configmap.yaml",
+    "line": 94,
+    "quote": "ECONOMY_APPLE_BUNDLE_ID: ''"
+   }
+  ]
+ },
+ {
+  "id": "V12",
+  "title": "getHiddenUserIds đọc mọi report vĩnh viễn?",
+  "services": [
+   "safety"
+  ],
+  "status": "confirmed",
+  "finding": "getHiddenUserIds lấy mọi report 2 chiều trong bảng reports không có điều kiện thời gian (comment ghi ẩn vĩnh viễn). canPair dùng cutoff = now - SAFETY_REMATCH_COOLDOWN_DAYS và lọc createdAt >= cutoff cho report gần đây. Hai hàm khác cửa sổ thời gian.",
+  "evidence": [
+   {
+    "file": "apps/core-api/src/modules/safety/safety.service.ts",
+    "line": 273,
+    "quote": "SELECT target_user_id AS other_id FROM reports WHERE reporter_user_id = $1"
+   },
+   {
+    "file": "apps/core-api/src/modules/safety/safety.service.ts",
+    "line": 262,
+    "quote": "(không theo `SAFETY_REPORT_COOLDOWN_DAYS` như matching)"
+   },
+   {
+    "file": "apps/core-api/src/modules/safety/safety.service.ts",
+    "line": 301,
+    "quote": "const cutoff = new Date(Date.now() - cooldownDays * DAY_MS);"
+   }
+  ]
+ },
+ {
+  "id": "V13",
+  "title": "Lazy-expire lời mời có thể không được lưu?",
+  "services": [
+   "matching"
+  ],
+  "status": "confirmed",
+  "finding": "assertNotExpired chỉ gán invite.status = Expired trong bộ nhớ rồi throw DomainException (409); decline/cancel/accept gọi nó bên trong dataSource.transaction nên throw làm rollback, Expired không được lưu. Chỉ InviteSweeperService (UPDATE ... SET status = Expired) ghi DB và giải phóng uq_match_invites_pending_pair.",
+  "evidence": [
+   {
+    "file": "apps/core-api/src/modules/matching/services/invite.service.ts",
+    "line": 625,
+    "quote": "invite.status = MatchInviteStatus.Expired;"
+   },
+   {
+    "file": "apps/core-api/src/modules/matching/services/invite.service.ts",
+    "line": 245,
+    "quote": "this.assertNotExpired(invite);"
+   },
+   {
+    "file": "apps/core-api/src/modules/matching/jobs/invite-sweeper.service.ts",
+    "line": 65,
+    "quote": "SET status = $1, updated_at = now()"
+   }
+  ]
+ },
+ {
+  "id": "M1",
+  "title": "Chú thích đầu file k8s của media-server lỗi thời so với cấu hình",
+  "services": [
+   "media-server"
+  ],
+  "status": "confirmed",
+  "finding": "Đầu k8s/base/media-server/deployment.yaml vẫn viết 'CHƯA chọn phương án nào ở đây vì cần ADR', nhưng thân file đã đặt hostNetwork: true theo ADR 0005. Chú thích đầu file cần cập nhật để khỏi gây hiểu nhầm là mạng RTC chưa được chốt.",
+  "evidence": [
+   {
+    "file": "k8s/base/media-server/deployment.yaml",
+    "line": 11,
+    "quote": "CHƯA chọn phương án nào ở đây vì cần ADR"
+   },
+   {
+    "file": "k8s/base/media-server/deployment.yaml",
+    "line": 58,
+    "quote": "hostNetwork: true"
+   }
+  ]
+ },
+ {
+  "id": "M2",
+  "title": "Sự kiện match.matched được khai báo nhưng không có nơi nào phát",
+  "services": [
+   "matching",
+   "signaling-gateway"
+  ],
+  "status": "confirmed",
+  "finding": "RealtimeEvents.MatchMatched (match.matched) và kiểu MatchMatchedEventData có trong libs/common-dtos nhưng không có chỗ phát nào trong core-api và web không lắng nghe; luồng thật phát match.confirmed. Comment trong matching.metrics.ts vẫn nhắc match.matched. 25 sự kiện còn lại đều có chỗ phát.",
+  "evidence": [
+   {
+    "file": "libs/common-dtos/src/lib/realtime-events.ts",
+    "line": 42,
+    "quote": "MatchMatched: 'match.matched',"
+   },
+   {
+    "file": "apps/core-api/src/modules/matching/matching.metrics.ts",
+    "line": 31,
+    "quote": "TRƯỚC vòng publish realtime `match.matched`"
+   }
+  ]
+ },
+ {
+  "id": "M3",
+  "title": "Movie Match ẩn danh phát realtime bên trong transaction, trái với tài liệu",
+  "services": [
+   "movie-match",
+   "signaling-gateway"
+  ],
+  "status": "confirmed",
+  "finding": "updateAnonState và endAnonWatch gọi publishAnonPlayback ngay trong dataSource.transaction (sau manager.save, trước COMMIT), còn docs/services/realtime-gateway.md ghi publish luôn chạy sau khi transaction commit. Hậu quả thực tế nhỏ vì đây là bước cuối của transaction và event là best-effort, nhưng quy tắc publish-sau-commit không được giữ ở đây.",
+  "evidence": [
+   {
+    "file": "apps/core-api/src/modules/movie-match/movie-match.service.ts",
+    "line": 438,
+    "quote": "await this.publishAnonPlayback(session);"
+   },
+   {
+    "file": "apps/core-api/src/modules/movie-match/movie-match.service.ts",
+    "line": 459,
+    "quote": "await this.publishAnonPlayback(session);"
+   },
+   {
+    "file": "docs/services/realtime-gateway.md",
+    "line": 35,
+    "quote": "Publish luôn chạy **SAU khi DB transaction commit**"
+   }
+  ]
+ },
+ {
+  "id": "M4",
+  "title": "AUTH_MIN_AGE và DEPLOY_ENVIRONMENT có trong .env.example nhưng không có schema hay mã đọc",
+  "services": [
+   "auth",
+   "app-shell"
+  ],
+  "status": "confirmed",
+  "finding": "Hai biến được đặt trong .env.example (AUTH_MIN_AGE còn được nhắc ở dòng chú thích phía dưới) nhưng không có trong schema Joi của core-api hay signaling-gateway và không có mã nào đọc; có thể là cấu hình mồ côi hoặc chưa nối dây.",
+  "evidence": [
+   {
+    "file": ".env.example",
+    "line": 121,
+    "quote": "AUTH_MIN_AGE=18"
+   },
+   {
+    "file": ".env.example",
+    "line": 75,
+    "quote": "DEPLOY_ENVIRONMENT=development"
+   }
+  ]
+ },
+ {
+  "id": "M5",
+  "title": "Đặc tả AsyncAPI trong repo chỉ liệt kê 8 trong 26 sự kiện realtime",
+  "services": [
+   "signaling-gateway"
+  ],
+  "status": "confirmed",
+  "finding": "specs/realtime.asyncapi.yaml khai 8 message và không có schema payload (ghi rõ payload nằm ở kiểu nguồn), trong khi libs/common-dtos khai 26 sự kiện kèm kiểu payload đầy đủ.",
+  "evidence": [
+   {
+    "file": "specs/realtime.asyncapi.yaml",
+    "line": 18,
+    "quote": "soulMessage:"
+   },
+   {
+    "file": "libs/common-dtos/src/lib/realtime-events.ts",
+    "line": 37,
+    "quote": "export const RealtimeEvents = {"
+   }
+  ]
+ }
+]

@@ -1,0 +1,1401 @@
+{
+ "id": "party-room",
+ "title": "Party Room",
+ "tagline": "Phòng audio nhiều người, role và grace rớt mạng",
+ "deployable": "core-api",
+ "role": "Sở hữu phòng party (party_rooms), membership theo dòng, comment append-only, lời mời speaker và vòng đời phòng (host rời/rớt, sweeper, grace reconnect). Quyền publish audio được enforce ở LiveKit SFU qua token/updateParticipant; KHÔNG sở hữu hồ sơ user (User), ví/quà (Gift/Economy) và không phải media-server.",
+ "owns": [
+  "bảng party_rooms (speaker_limit + livekit_url snapshot lúc tạo, host_disconnected_at, close_reason)",
+  "bảng party_room_members (partial unique: 1 membership active/(room,user) và 1 phòng active/user)",
+  "bảng party_room_comments (append-only, unique idempotency_key)",
+  "LiveKit room tên party-{roomId} (tạo/xoá tường minh qua port)"
+ ],
+ "confidence": "high",
+ "endpoints": [
+  {
+   "id": "e1",
+   "kind": "rest",
+   "method": "POST",
+   "path": "/api/v1/party/rooms",
+   "purpose": "Tạo phòng: transaction lưu party_rooms + membership host (speaker_limit và livekit_url snapshot), rồi createRoom LiveKit tường minh và mint token host; SFU fail thì đóng phòng (error) + 503; throttle 5/phút, 1 user chỉ 1 phòng active.",
+   "auth": "jwt",
+   "file": "apps/core-api/src/modules/party-room/party-room.controller.ts",
+   "line": 50,
+   "quote": "@Post()"
+  },
+  {
+   "id": "e2",
+   "kind": "rest",
+   "method": "GET",
+   "path": "/api/v1/party/rooms",
+   "purpose": "Liệt kê phòng active kèm số member, phân trang cursor, lọc q/category; chỉ đọc DB.",
+   "auth": "jwt",
+   "file": "apps/core-api/src/modules/party-room/party-room.controller.ts",
+   "line": 65,
+   "quote": "@Get()"
+  },
+  {
+   "id": "e3",
+   "kind": "rest",
+   "method": "GET",
+   "path": "/api/v1/party/rooms/:id",
+   "purpose": "Chi tiết phòng + member active, nickname lấy từ User (findByIds); là nguồn sự thật mà client poll fallback để biết hostDisconnectedAt/status.",
+   "auth": "jwt",
+   "file": "apps/core-api/src/modules/party-room/party-room.controller.ts",
+   "line": 81,
+   "quote": "@Get(':id')"
+  },
+  {
+   "id": "e4",
+   "kind": "rest",
+   "method": "GET",
+   "path": "/api/v1/party/rooms/:id/comments",
+   "purpose": "Lấy comment mới nhất theo cursor (đi lùi); chỉ member của phòng mới đọc được.",
+   "auth": "jwt",
+   "file": "apps/core-api/src/modules/party-room/party-room.controller.ts",
+   "line": 97,
+   "quote": "@Get(':id/comments')"
+  },
+  {
+   "id": "e5",
+   "kind": "rest",
+   "method": "POST",
+   "path": "/api/v1/party/rooms/:id/comments",
+   "purpose": "Gửi comment: bắt buộc Idempotency-Key (unique DB, replay không bắn lại), throttle 60/phút, kiểm member active dưới lock phòng rồi publish party.comment.created sau commit.",
+   "auth": "jwt",
+   "file": "apps/core-api/src/modules/party-room/party-room.controller.ts",
+   "line": 116,
+   "quote": "@Post(':id/comments')"
+  },
+  {
+   "id": "e6",
+   "kind": "rest",
+   "method": "POST",
+   "path": "/api/v1/party/rooms/:id/join",
+   "purpose": "Join làm audience (token canPublish=false) hoặc rejoin: đếm PARTY_MAX_MEMBERS dưới lock; rejoin của host/member trong grace xoá cờ disconnected và bắn party.host.reconnected / party.member.reconnected; token mint từ role trong DB.",
+   "auth": "jwt",
+   "file": "apps/core-api/src/modules/party-room/party-room.controller.ts",
+   "line": 132,
+   "quote": "@Post(':id/join')"
+  },
+  {
+   "id": "e7",
+   "kind": "rest",
+   "method": "POST",
+   "path": "/api/v1/party/rooms/:id/leave",
+   "purpose": "Rời phòng idempotent: member thường nhả membership + removeParticipant khỏi SFU; host rời chủ động thì đóng phòng ngay (host_left) và báo party.room.closed.",
+   "auth": "jwt",
+   "file": "apps/core-api/src/modules/party-room/party-room.controller.ts",
+   "line": 149,
+   "quote": "@Post(':id/leave')"
+  },
+  {
+   "id": "e8",
+   "kind": "rest",
+   "method": "POST",
+   "path": "/api/v1/party/rooms/:id/members/:userId/role",
+   "purpose": "Host thu quyền speaker về audience dưới lock phòng; role commit trước rồi updateParticipantPublish(canPublish=false) ngoài transaction, lỗi SFU thì rollback role + 503; chỉ host (NOT_HOST 403).",
+   "auth": "jwt",
+   "file": "apps/core-api/src/modules/party-room/party-room.controller.ts",
+   "line": 163,
+   "quote": "@Post(':id/members/:userId/role')"
+  },
+  {
+   "id": "e9",
+   "kind": "rest",
+   "method": "POST",
+   "path": "/api/v1/party/rooms/:id/members/:userId/speaker-invite",
+   "purpose": "Host mời audience lên speaker: chỉ ghi speaker_invite_pending và bắn party.speaker.invite.received tới target; chưa đổi role hay quyền publish.",
+   "auth": "jwt",
+   "file": "apps/core-api/src/modules/party-room/party-room.controller.ts",
+   "line": 181,
+   "quote": "@Post(':id/members/:userId/speaker-invite')"
+  },
+  {
+   "id": "e10",
+   "kind": "rest",
+   "method": "POST",
+   "path": "/api/v1/party/rooms/:id/speaker-invite/accept",
+   "purpose": "Target chấp nhận lời mời: đếm speaker so speaker_limit dưới lock phòng, đổi role, updateParticipantPublish(true), bắn party.role.changed; chỉ chính target mới đổi được role của mình.",
+   "auth": "jwt",
+   "file": "apps/core-api/src/modules/party-room/party-room.controller.ts",
+   "line": 195,
+   "quote": "@Post(':id/speaker-invite/accept')"
+  },
+  {
+   "id": "e11",
+   "kind": "rest",
+   "method": "POST",
+   "path": "/api/v1/party/rooms/:id/speaker-invite/decline",
+   "purpose": "Target từ chối lời mời speaker (idempotent), chỉ xoá cờ speaker_invite_pending.",
+   "auth": "jwt",
+   "file": "apps/core-api/src/modules/party-room/party-room.controller.ts",
+   "line": 208,
+   "quote": "@Post(':id/speaker-invite/decline')"
+  },
+  {
+   "id": "e12",
+   "kind": "webhook",
+   "method": "POST",
+   "path": "/api/v1/party/webhooks/livekit",
+   "purpose": "Nhận webhook LiveKit (participant_left, room_finished) cho room party-*: verify chữ ký JWT trên raw body, sai thì 401; lọc prefix party-, idempotent, set disconnected_at/host_disconnected_at hoặc đóng phòng.",
+   "auth": "webhook-signature",
+   "file": "apps/core-api/src/modules/party-room/webhooks/party-livekit-webhook.controller.ts",
+   "line": 35,
+   "quote": "@Post('livekit')"
+  },
+  {
+   "id": "e13",
+   "kind": "socket-emit",
+   "method": "EMIT",
+   "path": "party.comment.created",
+   "purpose": "Báo comment mới tới mọi member active qua Redis realtime:user:{userId}; chỉ bắn khi insert mới, best-effort sau commit.",
+   "auth": "internal",
+   "file": "apps/core-api/src/modules/party-room/party-room.service.ts",
+   "line": 825,
+   "quote": "event: RealtimeEvents.PartyCommentCreated,"
+  },
+  {
+   "id": "e14",
+   "kind": "socket-emit",
+   "method": "EMIT",
+   "path": "party.host.disconnected",
+   "purpose": "Báo host rớt kết nối ngoài ý muốn (chỉ bắn khi đặt mốc hostDisconnectedAt lần đầu) để client hiện banner chờ; REST poll vẫn là nguồn sự thật.",
+   "auth": "internal",
+   "file": "apps/core-api/src/modules/party-room/party-room.service.ts",
+   "line": 1295,
+   "quote": "event: RealtimeEvents.PartyHostDisconnected,"
+  },
+  {
+   "id": "e15",
+   "kind": "socket-emit",
+   "method": "EMIT",
+   "path": "party.host.reconnected",
+   "purpose": "Báo host đã vào lại trong grace (mốc hostDisconnectedAt được xoá) để client ẩn banner.",
+   "auth": "internal",
+   "file": "apps/core-api/src/modules/party-room/party-room.service.ts",
+   "line": 340,
+   "quote": "event: RealtimeEvents.PartyHostReconnected,"
+  },
+  {
+   "id": "e16",
+   "kind": "socket-emit",
+   "method": "EMIT",
+   "path": "party.member.disconnected",
+   "purpose": "Báo member thường rớt kết nối kèm disconnectedAt; chưa rời roster, chờ grace.",
+   "auth": "internal",
+   "file": "apps/core-api/src/modules/party-room/party-room.service.ts",
+   "line": 1231,
+   "quote": "event: RealtimeEvents.PartyMemberDisconnected,"
+  },
+  {
+   "id": "e17",
+   "kind": "socket-emit",
+   "method": "EMIT",
+   "path": "party.member.joined",
+   "purpose": "Báo member mới vào phòng (role audience) cho các member khác, loại trừ chính người join.",
+   "auth": "internal",
+   "file": "apps/core-api/src/modules/party-room/party-room.service.ts",
+   "line": 328,
+   "quote": "event: RealtimeEvents.PartyMemberJoined,"
+  },
+  {
+   "id": "e18",
+   "kind": "socket-emit",
+   "method": "EMIT",
+   "path": "party.member.left",
+   "purpose": "Báo member rời roster (REST leave hoặc hết grace do sweeper chốt).",
+   "auth": "internal",
+   "file": "apps/core-api/src/modules/party-room/party-room.service.ts",
+   "line": 411,
+   "quote": "event: RealtimeEvents.PartyMemberLeft,"
+  },
+  {
+   "id": "e19",
+   "kind": "socket-emit",
+   "method": "EMIT",
+   "path": "party.member.reconnected",
+   "purpose": "Báo member rớt mạng đã vào lại trong grace, giữ nguyên membership.",
+   "auth": "internal",
+   "file": "apps/core-api/src/modules/party-room/party-room.service.ts",
+   "line": 346,
+   "quote": "event: RealtimeEvents.PartyMemberReconnected,"
+  },
+  {
+   "id": "e20",
+   "kind": "socket-emit",
+   "method": "EMIT",
+   "path": "party.role.changed",
+   "purpose": "Báo role của một member đổi (host thu quyền hoặc target accept speaker) để client đồng bộ quyền mic.",
+   "auth": "internal",
+   "file": "apps/core-api/src/modules/party-room/party-room.service.ts",
+   "line": 494,
+   "quote": "event: RealtimeEvents.PartyRoleChanged,"
+  },
+  {
+   "id": "e21",
+   "kind": "socket-emit",
+   "method": "EMIT",
+   "path": "party.room.closed",
+   "purpose": "Báo phòng đã đóng kèm reason (host_left, finished, swept, error, admin_closed) tới các member active ngay trước khi đóng; chỉ lời gọi thực hiện transition mới bắn.",
+   "auth": "internal",
+   "file": "apps/core-api/src/modules/party-room/party-room.service.ts",
+   "line": 1053,
+   "quote": "event: RealtimeEvents.PartyRoomClosed,"
+  },
+  {
+   "id": "e22",
+   "kind": "socket-emit",
+   "method": "EMIT",
+   "path": "party.speaker.invite.received",
+   "purpose": "Báo riêng cho target rằng host vừa mời lên speaker (publish tới realtime:user:{targetUserId}).",
+   "auth": "internal",
+   "file": "apps/core-api/src/modules/party-room/party-room.service.ts",
+   "line": 560,
+   "quote": "event: RealtimeEvents.PartySpeakerInviteReceived,"
+  },
+  {
+   "id": "e23",
+   "kind": "job",
+   "method": "WORKER",
+   "path": "PartyRoomSweeperService.onApplicationBootstrap",
+   "purpose": "PartyRoomSweeperService: 2 interval (sweeper chính 30s: đóng phòng stale không còn member hoặc không còn trên SFU qua roomExists; grace-check 5s: đóng phòng host rớt quá grace và chốt member rớt quá hạn); bọc clusterSingleton (advisory lock Postgres).",
+   "auth": "internal",
+   "file": "apps/core-api/src/modules/party-room/jobs/party-room-sweeper.service.ts",
+   "line": 61,
+   "quote": "onApplicationBootstrap(): void {"
+  }
+ ],
+ "collaborators": [
+  {
+   "id": "c1",
+   "label": "hồ sơ/region của user",
+   "what": "UserService.getByIdOrThrow(hostUserId) để lấy User.region của host khi tạo phòng, và UserService.findByIds(memberIds) để lấy nickname cho chi tiết phòng.",
+   "why": "Party không sở hữu hồ sơ: nickname chỉ có ở User. Region của host phải do server suy ra từ User.region (không nhận từ client) để ghim livekit_url cho cả phòng theo ADR 0005, cùng nguồn với shard matching.",
+   "ifMissing": "Chi tiết phòng không hiển thị được tên member; khi bật LIVEKIT_REGION_URLS, phòng sẽ không chọn được SFU gần host hoặc phải tin region do client gửi.",
+   "with": "user",
+   "withKind": "service",
+   "direction": "out",
+   "mechanism": "di-call",
+   "endpoints": [
+    "e1",
+    "e3"
+   ],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/party-room/party-room.service.ts",
+     "line": 698,
+     "quote": "? await this.userService.findByIds(members.map((member) => member.userId))"
+    },
+    {
+     "file": "apps/core-api/src/modules/party-room/party-room.service.ts",
+     "line": 1155,
+     "quote": "const host = await this.userService.getByIdOrThrow(hostUserId);"
+    }
+   ],
+   "basis": "ast",
+   "logic": {
+    "verdict": "sound",
+    "note": "resolveHostLivekitUrl đọc host.region và ghim vào livekit_url; findByIds dùng ở getRoom(includeProfiles)."
+   }
+  },
+  {
+   "id": "c2",
+   "label": "token, tạo phòng, quyền mic",
+   "what": "Qua PartyLivekitRoomPort: createRoom(party-{id}, maxParticipants, emptyTimeout), mintJoinToken(ttl, canPublish theo role), updateParticipantPublish, removeParticipant, deleteRoom, roomExists.",
+   "why": "Quyền nói phải được enforce ở SFU chứ không tin client: audience nhận token canPublish=false nên tự unmute bị LiveKit chặn; cấp/thu speaker phải đẩy xuống SFU bằng updateParticipantPublish. Chỉ SFU biết room còn sống nên sweeper phải hỏi roomExists.",
+   "ifMissing": "Audience tự bật mic được hoặc speaker mới không nói được; DB còn phòng mà SFU đã empty-timeout thì phòng treo; rời DB mà SFU còn nối thì state lệch.",
+   "with": "media-server",
+   "withKind": "service",
+   "direction": "out",
+   "mechanism": "sdk",
+   "endpoints": [
+    "e1",
+    "e6",
+    "e7",
+    "e8",
+    "e10",
+    "e12",
+    "e23"
+   ],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/party-room/clients/livekit-party-room.adapter.ts",
+     "line": 21,
+     "quote": "return this.client.createRoom(roomName, opts);"
+    },
+    {
+     "file": "apps/core-api/src/modules/party-room/clients/livekit-party-room.adapter.ts",
+     "line": 30,
+     "quote": "return this.client.mintJoinToken(roomName, identity, ttlSeconds, {"
+    },
+    {
+     "file": "apps/core-api/src/modules/party-room/clients/livekit-party-room.adapter.ts",
+     "line": 42,
+     "quote": "return this.client.updateParticipantPublish(roomName, identity, canPublish);"
+    }
+   ],
+   "basis": "ast",
+   "logic": {
+    "verdict": "sound",
+    "note": "mintToken đặt canPublish chỉ cho Host/Speaker; sweeper dùng roomExists; createRoom có maxParticipants/emptyTimeoutSeconds."
+   }
+  },
+  {
+   "id": "c3",
+   "label": "fanout party.* realtime",
+   "what": "publishRealtimeEvent(realtime:user:{userId}) cho từng member active với 10 event party.* (comment, host/member disconnected-reconnected, joined, left, role.changed, speaker.invite.received, room.closed), payload dựng sẵn.",
+   "why": "Mọi member cần thấy roster/role/trạng thái host gần như tức thời; gateway không có business logic và không có room channel nên core-api phải liệt kê member active và publish per-user SAU commit. Là best-effort, REST poll là fallback.",
+   "ifMissing": "Client chỉ còn poll REST (5s khi socket mất): banner host mất kết nối, lời mời speaker và comment đến trễ hoặc không có hiệu ứng realtime.",
+   "with": "signaling-gateway",
+   "withKind": "service",
+   "direction": "out",
+   "mechanism": "redis-pubsub",
+   "endpoints": [
+    "e5",
+    "e6",
+    "e7",
+    "e8",
+    "e9",
+    "e10",
+    "e12",
+    "e13",
+    "e14",
+    "e15",
+    "e16",
+    "e17",
+    "e18",
+    "e19",
+    "e20",
+    "e21",
+    "e22",
+    "e23"
+   ],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/party-room/party-room.service.ts",
+     "line": 559,
+     "quote": "await publishRealtimeEvent(this.redis, this.logger, targetUserId, {"
+    },
+    {
+     "file": "apps/core-api/src/modules/party-room/party-room.service.ts",
+     "line": 1058,
+     "quote": "publishRealtimeEvent(this.redis, this.logger, uid, envelope),"
+    },
+    {
+     "file": "apps/core-api/src/modules/party-room/party-room.service.ts",
+     "line": 1326,
+     "quote": "publishRealtimeEvent(this.redis, this.logger, m.userId, envelope),"
+    }
+   ],
+   "basis": "ast",
+   "logic": {
+    "verdict": "sound",
+    "note": "publishToRoomMembers/publishRealtimeEvent đều chạy sau khi transaction commit; đúng 10 event party.*."
+   }
+  },
+  {
+   "id": "c5",
+   "label": "phòng/member/comment + lock",
+   "what": "Đọc/ghi party_rooms, party_room_members, party_room_comments; SELECT ... FOR UPDATE trên dòng party_rooms để tuần tự hoá join/leave/role/close; sweeper bọc pg advisory xact lock.",
+   "why": "Các bất biến nằm ở DB: partial unique index (1 membership active/(room,user), 1 phòng active/user), unique idempotency_key của comment, và lock dòng phòng chặn race 2 yêu cầu speaker vượt speaker_limit hoặc sweeper đóng nhầm phòng vừa hồi phục.",
+   "ifMissing": "User vào 2 phòng cùng lúc, vượt cap speaker, comment trùng khi retry, hoặc phòng bị đóng nhầm khi host vừa reconnect.",
+   "with": "postgres",
+   "withKind": "infra",
+   "direction": "out",
+   "mechanism": "shared-db",
+   "endpoints": [
+    "e1",
+    "e2",
+    "e3",
+    "e4",
+    "e5",
+    "e6",
+    "e7",
+    "e8",
+    "e9",
+    "e10",
+    "e11",
+    "e12",
+    "e23"
+   ],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/party-room/entities/party-room-comment.entity.ts",
+     "line": 13,
+     "quote": "@Entity({ name: 'party_room_comments' })"
+    },
+    {
+     "file": "apps/core-api/src/modules/party-room/entities/party-room-member.entity.ts",
+     "line": 21,
+     "quote": "@Entity({ name: 'party_room_members' })"
+    },
+    {
+     "file": "apps/core-api/src/modules/party-room/entities/party-room.entity.ts",
+     "line": 41,
+     "quote": "@Entity({ name: 'party_rooms' })"
+    }
+   ],
+   "review": {
+    "verdict": "partial",
+    "note": "Chưa xác nhận SELECT FOR UPDATE trên party_rooms và advisory lock của sweeper; snippet chỉ cho thấy entity và index."
+   },
+   "logic": {
+    "verdict": "sound",
+    "note": "Đã xác nhận lockActiveRoom/closeRoomById dùng pessimistic_write và ManagedInterval dùng pg_try_advisory_xact_lock."
+   }
+  },
+  {
+   "id": "c6",
+   "label": "admin đóng/liệt kê phòng",
+   "what": "AdminService.closePartyRoom gọi closeRoomById(roomId, AdminClosed, undefined, hook) với hook ghi audit log trong CÙNG transaction; còn listRoomsWithMemberCounts và countActiveRooms cho dashboard.",
+   "why": "Party là chủ của trạng thái phòng và dọn SFU/publish realtime sau commit; admin chỉ được đóng qua cổng này để audit và việc đóng phòng chung một transaction, còn cleanup LiveKit và party.room.closed vẫn do owner chạy.",
+   "ifMissing": "Admin phải sửa thẳng bảng party_rooms: SFU và client không được báo, hoặc đóng phòng mà thiếu audit log.",
+   "with": "admin",
+   "withKind": "service",
+   "direction": "in",
+   "mechanism": "di-call",
+   "endpoints": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/admin/admin.service.ts",
+     "line": 214,
+     "quote": "const result = await this.partyRoomService.closeRoomById("
+    },
+    {
+     "file": "apps/core-api/src/modules/admin/admin.service.ts",
+     "line": 234,
+     "quote": "return this.partyRoomService.listRoomsWithMemberCounts(limit, cursor);"
+    },
+    {
+     "file": "apps/core-api/src/modules/admin/admin.service.ts",
+     "line": 637,
+     "quote": "this.partyRoomService.countActiveRooms(),"
+    }
+   ],
+   "basis": "ast",
+   "logic": {
+    "verdict": "sound",
+    "note": "closeRoomById gọi onTransition(manager, room) trong transaction; deleteRoom và publish chạy sau commit."
+   }
+  },
+  {
+   "id": "c7",
+   "label": "danh sách member phòng",
+   "what": "GiftService gọi PartyRoomService.getActiveRoomMembers(roomId) để kiểm người tặng/nhận đều là member active trước khi trừ kim cương, và để fanout gift.sent cho cả phòng.",
+   "why": "Danh sách member active chỉ nằm trong party_room_members nên Gift phải hỏi Party (không đọc bảng của module khác). Đây là check nghiệp vụ, không phải chốt an toàn tiền: tiền đúng nhờ transaction và idempotency ở economy.",
+   "ifMissing": "Có thể tặng quà cho người đã rời phòng hoặc ở phòng khác, và hiệu ứng quà không có danh sách người nhận để phát.",
+   "with": "gift",
+   "withKind": "service",
+   "direction": "in",
+   "mechanism": "di-call",
+   "endpoints": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/gift/gift.service.ts",
+     "line": 184,
+     "quote": "await this.partyRoomService.getActiveRoomMembers(roomId);"
+    },
+    {
+     "file": "apps/core-api/src/modules/gift/gift.service.ts",
+     "line": 495,
+     "quote": "await this.partyRoomService.getActiveRoomMembers(roomId);"
+    }
+   ],
+   "basis": "ast",
+   "logic": {
+    "verdict": "sound",
+    "note": "gift.service ghi rõ check nghiệp vụ, không phải chốt an toàn tiền; getActiveRoomMembers ném ROOM_CLOSED nếu phòng đã đóng."
+   }
+  },
+  {
+   "id": "c8",
+   "with": "media-server",
+   "withKind": "service",
+   "direction": "in",
+   "mechanism": "webhook",
+   "endpoints": [
+    "e12"
+   ],
+   "label": "webhook LiveKit về party",
+   "what": "LiveKit POST participant_left / room_finished tới /api/v1/party/webhooks/livekit; controller verify chữ ký trên raw body bằng receiveWebhook rồi chỉ xử lý room có prefix party-.",
+   "why": "Chỉ SFU biết người dùng rớt kết nối thật hay room đã kết thúc; DB không thể suy ra từ REST. Cần webhook để đặt disconnected_at/host_disconnected_at và đóng phòng. LiveKit có 2 URL webhook (calling và party), nên mỗi module lọc theo prefix.",
+   "ifMissing": "Host rớt mạng không có mốc hostDisconnectedAt nên grace-check không đóng phòng; member rớt vẫn nằm roster. Sweeper 30s chỉ đóng phòng rỗng hoặc SFU đã mất room, không bắt được phòng còn member.",
+   "evidence": [
+    {
+     "file": "apps/media-server/livekit.yaml",
+     "line": 28,
+     "quote": "- http://host.docker.internal:3000/api/v1/party/webhooks/livekit"
+    }
+   ],
+   "review": {
+    "verdict": "supported"
+   },
+   "logic": {
+    "verdict": "corrected",
+    "note": "Sweeper 30s không đóng được phòng còn member mà SFU còn sống; grace-check phụ thuộc hostDisconnectedAt do webhook đặt."
+   }
+  },
+  {
+   "id": "c9",
+   "with": "media-server",
+   "withKind": "service",
+   "direction": "both",
+   "mechanism": "config",
+   "endpoints": [
+    "e1",
+    "e12"
+   ],
+   "label": "LIVEKIT_API_KEY dùng chung",
+   "what": "core-api (LIVEKIT_URL/API_KEY/API_SECRET) và livekit.yaml dùng chung một cặp khoá: core-api ký token/gọi RoomService, LiveKit ký webhook bằng key inject từ LIVEKIT_WEBHOOK_API_KEY lấy từ cùng LIVEKIT_API_KEY.",
+   "why": "Token join và chữ ký webhook chỉ được tin khi hai bên cùng khoá bí mật; lệch khoá thì SFU từ chối token hoặc core-api từ chối webhook. Party và calling cùng dùng 1 cụm LiveKit nên cùng bộ biến.",
+   "ifMissing": "Token mint ra bị SFU từ chối hoặc webhook bị 401, nên người dùng không vào được phòng và state phòng không cập nhật.",
+   "evidence": [
+    {
+     "file": "apps/media-server/livekit.yaml",
+     "line": 22,
+     "quote": "# Key ký webhook được inject bằng LIVEKIT_WEBHOOK_API_KEY từ cùng LIVEKIT_API_KEY."
+    }
+   ],
+   "review": {
+    "verdict": "supported"
+   },
+   "logic": {
+    "verdict": "sound",
+    "note": "WebhookReceiver(apiKey, apiSecret) và RoomServiceClient dùng cùng cặp khoá; livekit.yaml chú thích khoá webhook cùng nguồn."
+   }
+  },
+  {
+   "id": "c10",
+   "with": "web",
+   "withKind": "client",
+   "direction": "out",
+   "mechanism": "sdk",
+   "endpoints": [
+    "e1",
+    "e6"
+   ],
+   "label": "client nối thẳng LiveKit",
+   "what": "Sau REST create/join, web gọi connectMediaRoom(joined.token, joined.livekitUrl) bằng livekit-client để nối trực tiếp tới SFU với token và URL snapshot của phòng.",
+   "why": "Audio không đi qua core-api; client phải dùng đúng token (đã khoá canPublish theo role) và livekitUrl đã ghim lúc tạo phòng, kể cả khi người join ở region khác host.",
+   "ifMissing": "REST xong nhưng không có luồng audio; hoặc client tự chọn URL SFU sai region.",
+   "evidence": [
+    {
+     "file": "apps/web/src/features/party-room/hooks/use-party-room-media.ts",
+     "line": 87,
+     "quote": "connected = await connectMediaRoom(joined.token, joined.livekitUrl);"
+    }
+   ],
+   "review": {
+    "verdict": "supported"
+   },
+   "logic": {
+    "verdict": "sound",
+    "note": "connectMediaRoom(joined.token, joined.livekitUrl) khớp snapshot livekitUrlOf(room)."
+   }
+  },
+  {
+   "id": "c11",
+   "with": "web",
+   "withKind": "client",
+   "direction": "out",
+   "mechanism": "http",
+   "endpoints": [
+    "e3",
+    "e4",
+    "e5"
+   ],
+   "label": "poll REST khi realtime hụt",
+   "what": "Web poll GET /party/rooms/:id và /comments với interval thích nghi (thưa khi socket khoẻ, sát 5s khi mất) và gửi Idempotency-Key khi POST comment.",
+   "why": "Realtime chỉ best-effort sau commit nên REST phải đủ để client tự đồng bộ roster, hostDisconnectedAt và comment; Idempotency-Key làm retry comment không nhân đôi.",
+   "ifMissing": "Event realtime rớt làm client thấy roster/comment cũ vô thời hạn; retry mạng sinh comment trùng.",
+   "evidence": [
+    {
+     "file": "apps/web/src/features/party-room/api.ts",
+     "line": 167,
+     "quote": "refetchInterval: realtimeConnected"
+    }
+   ],
+   "review": {
+    "verdict": "supported"
+   },
+   "logic": {
+    "verdict": "sound",
+    "note": "PARTY_ROOM_DETAIL_REFETCH_INTERVAL_MS=5000 khi mất socket, HEALTHY=30000; mutation gửi header Idempotency-Key."
+   }
+  }
+ ],
+ "waivedEdges": [
+  {
+   "with": "redis",
+   "reason": "Redis chỉ là đường truyền pub/sub realtime đã mô tả ở collaborator signaling-gateway; module không giữ key, queue hay lock nào trên Redis (PARTY_REDIS chỉ để publish)."
+  }
+ ],
+ "excludedRoutes": [],
+ "notes": [
+  "Doc party-room-service.md §3/§6 nói 'chạy nhiều instance an toàn nhờ closeRoomById idempotent' nhưng code còn bọc 2 interval của PartyRoomSweeperService bằng clusterSingleton (PostgreSQL advisory xact lock) nên mỗi tick chỉ 1 replica làm việc.",
+  "Doc § 1 liệt kê close_reason host_left|finished|swept|error; code còn có admin_closed (PartyRoomCloseReason.AdminClosed) do admin.closePartyRoom gọi closeRoomById kèm audit trong cùng transaction.",
+  "Doc § 8 không liệt kê party.host.disconnected/party.host.reconnected trong danh sách event (chỉ nhắc ở § 4); code emit đủ cả hai.",
+  "Event gift.sent KHÔNG do party-room phát: Gift tự publish qua publishRealtimeEvent sau khi lấy danh sách member từ PartyRoomService.getActiveRoomMembers.",
+  "party-room KHÔNG gọi Safety (block/ban/report) ở bất kỳ endpoint nào (grep Safety/block trong module chỉ ra 0 nơi dùng ngoài spec): user bị block vẫn join cùng phòng và comment được. Đây là khoảng trống so với yêu cầu moderation, cần xác nhận với nghiệp vụ.",
+  "Controller list (GET /party/rooms) và get (GET /party/rooms/:id) chỉ yêu cầu JWT, không kiểm tra là member."
+ ],
+ "techniques": [
+  {
+   "slug": "jwt-bearer",
+   "name": "JWT bearer (access token không trạng thái)",
+   "model": "JWT bearer",
+   "how": "Client gửi access token (JWT) trong header Authorization; guard xác minh chữ ký và hạn rồi gắn user vào request, server không giữ phiên.",
+   "why": "Không trạng thái nên scale ngang dễ và không phải tra DB mỗi request; đánh đổi là không thu hồi tức thì trước khi token hết hạn.",
+   "alternative": "Session phía server (cookie + kho phiên) thu hồi được tức thì nhưng cần kho phiên dùng chung.",
+   "endpoints": [
+    "e1",
+    "e2",
+    "e3",
+    "e4",
+    "e5",
+    "e6",
+    "e7",
+    "e8",
+    "e9",
+    "e10",
+    "e11"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/app/app.module.ts",
+     "line": 117,
+     "quote": "{ provide: APP_GUARD, useClass: JwtAuthGuard },"
+    }
+   ],
+   "auto": true,
+   "count": 11,
+   "id": "t1",
+   "local": "Các route /party/rooms/* đi qua APP_GUARD JwtAuthGuard toàn cục; riêng webhook LiveKit được mở bằng @Public()."
+  },
+  {
+   "slug": "webhook-signature",
+   "name": "Xác thực chữ ký/token của webhook",
+   "model": "Chữ ký webhook",
+   "how": "Webhook phải được xác minh chữ ký/token của nhà cung cấp trên body gốc trước khi xử lý.",
+   "why": "Endpoint webhook công khai nên chữ ký là cách duy nhất chứng minh nguồn gửi.",
+   "endpoints": [
+    "e12"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/party-room/webhooks/party-livekit-webhook.controller.ts",
+     "line": 51,
+     "quote": "event = await this.livekit.receiveWebhook(rawBody, authHeader);"
+    }
+   ],
+   "auto": true,
+   "count": 2,
+   "id": "t2",
+   "local": "PartyLivekitWebhookController gọi livekit.receiveWebhook(rawBody, authHeader) để xác thực chữ ký JWT của LiveKit, sai thì ném PartyRoomErrors.WEBHOOK_INVALID."
+  },
+  {
+   "slug": "capability-token",
+   "name": "Capability token ngắn hạn (grant của LiveKit)",
+   "model": "Capability token",
+   "how": "Cấp token ngắn hạn mang sẵn quyền cụ thể (publish, subscribe) cho đúng phòng.",
+   "why": "Quyền được enforce ngay ở hệ thống media chứ không tin client.",
+   "endpoints": [
+    "e6",
+    "e8",
+    "e10",
+    "e1"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/party-room/clients/livekit-party-room.adapter.ts",
+     "line": 24,
+     "quote": "mintJoinToken("
+    },
+    {
+     "file": "apps/core-api/src/modules/party-room/party-room.controller.ts",
+     "line": 137,
+     "quote": "summary: 'Join phòng làm audience + mint LiveKit token (canPublish=false)',"
+    },
+    {
+     "file": "apps/core-api/src/modules/party-room/party-room.service.ts",
+     "line": 488,
+     "quote": "canPublish: false,"
+    }
+   ],
+   "auto": true,
+   "count": 17,
+   "id": "t3",
+   "local": "LivekitPartyRoomAdapter.mintJoinToken(roomName, identity, ttlSeconds) cấp token LiveKit ngắn hạn; join làm audience (canPublish=false), host/speaker được publish."
+  },
+  {
+   "id": "t4",
+   "slug": "server-authoritative",
+   "name": "Server là nguồn sự thật về giá/quyền (client không quyết)",
+   "model": "Server quyết định",
+   "how": "Giá, số dư, trạng thái và quyền do server tính; client chỉ gửi ý định.",
+   "why": "Client có thể bị sửa nên mọi thứ liên quan tiền hoặc quyền phải do server quyết.",
+   "endpoints": [
+    "e1",
+    "e6"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/party-room/party-room.service.ts",
+     "line": 360,
+     "quote": "token: await this.mintToken(roomId, user.userId, membership.role),"
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "local": "Token và quyền publish suy từ membership.role trong DB (audience canPublish=false ngay từ token); room name party-{id} và livekitUrl do server sinh/snapshot, client không chọn.",
+   "addedByLogicReview": true
+  },
+  {
+   "id": "t5",
+   "slug": "rebac-relationship",
+   "name": "Kiểm tra theo quan hệ (bạn bè, block, thành viên phòng)",
+   "model": "ReBAC",
+   "how": "Cho phép hoặc chặn dựa trên quan hệ giữa hai người: bạn bè, block, cùng phòng.",
+   "why": "Quyền trong mạng xã hội phụ thuộc quan hệ động chứ không phải vai trò cố định.",
+   "endpoints": [
+    "e8",
+    "e9"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/party-room/party-room.service.ts",
+     "line": 441,
+     "quote": "if (!caller || caller.role !== PartyRole.Host) {"
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "local": "Quyền đổi role và mời speaker dựa trên quan hệ membership: caller phải là member active có role Host của đúng phòng, nếu không ném NOT_HOST (403).",
+   "addedByLogicReview": true
+  },
+  {
+   "slug": "global-guard-public-optout",
+   "name": "Guard toàn cục + @Public() để mở",
+   "model": "Mặc định đóng",
+   "how": "Guard JWT đăng ký toàn cục; route nào muốn mở phải gắn @Public() tường minh.",
+   "why": "An toàn theo mặc định: quên cấu hình thì bị chặn chứ không bị mở.",
+   "alternative": "Gắn guard từng controller: dễ sót route.",
+   "endpoints": [
+    "e12"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/party-room/webhooks/party-livekit-webhook.controller.ts",
+     "line": 34,
+     "quote": "@Public()"
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "id": "t6",
+   "local": "Webhook LiveKit gắn @Public() để bỏ qua JwtAuthGuard toàn cục, vì xác thực bằng chữ ký trong controller."
+  },
+  {
+   "slug": "db-transaction",
+   "name": "Transaction DB (một đơn vị công việc)",
+   "model": "Transaction",
+   "how": "Gói nhiều thao tác ghi vào một transaction: cùng commit hoặc cùng rollback.",
+   "why": "Tránh trạng thái nửa vời khi lỗi giữa chừng.",
+   "endpoints": [
+    "e1",
+    "e6",
+    "e7",
+    "e8",
+    "e9",
+    "e10",
+    "e11",
+    "e5",
+    "e23",
+    "e12"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/party-room/party-room.service.ts",
+     "line": 162,
+     "quote": "({ room, membership } = await this.dataSource.transaction("
+    }
+   ],
+   "auto": true,
+   "count": 13,
+   "id": "t7",
+   "local": "Tạo phòng, join, leave, đổi role, speaker-invite chạy trong this.dataSource.transaction(async (manager) => ...) để room và membership đổi nhất quán."
+  },
+  {
+   "slug": "pessimistic-lock",
+   "name": "Khoá bi quan (SELECT … FOR UPDATE)",
+   "model": "Khoá bi quan",
+   "how": "SELECT … FOR UPDATE khoá hàng đang xử lý để giao dịch khác phải chờ.",
+   "why": "Chặn hai request song song cùng đọc rồi cùng ghi (race) trên số dư, ticket, session.",
+   "alternative": "Khoá lạc quan (version) ít chờ hơn nhưng phải retry khi xung đột.",
+   "endpoints": [
+    "e7",
+    "e23",
+    "e1",
+    "e12",
+    "e5",
+    "e6",
+    "e8",
+    "e9",
+    "e10",
+    "e11"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/party-room/party-room.service.ts",
+     "line": 382,
+     "quote": "lock: { mode: 'pessimistic_write' },"
+    }
+   ],
+   "auto": true,
+   "count": 6,
+   "id": "t8",
+   "local": "lockActiveRoom và các findOne lock pessimistic_write trên dòng party_rooms serialize join, leave, đổi role, invite/accept/decline, gửi comment, closeRoomById và webhook disconnect, nên đếm member/speaker và đóng phòng không race."
+  },
+  {
+   "slug": "entity-manager-propagation",
+   "name": "Truyền EntityManager giữa module (chung một transaction)",
+   "model": "Chung transaction",
+   "how": "Module sở hữu dữ liệu nhận EntityManager của giao dịch đang chạy để việc của nó nằm trong cùng transaction.",
+   "why": "Nhiều module dùng chung DB nên atomicity xuyên module không cần saga hay 2PC.",
+   "alternative": "Saga/outbox xuyên service: cần khi tách deployable, thừa khi cùng process.",
+   "endpoints": [
+    "e5",
+    "e6",
+    "e8",
+    "e9",
+    "e10",
+    "e11"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/party-room/party-room.service.ts",
+     "line": 93,
+     "quote": "manager: EntityManager,"
+    }
+   ],
+   "auto": true,
+   "count": 2,
+   "id": "t9",
+   "local": "PartyRoomTransitionHook (manager, room) chỉ được closeRoomById gọi trong transaction đóng phòng; AdminService dùng để ghi audit log cùng transaction, không áp dụng cho join, role hay comment."
+  },
+  {
+   "id": "t10",
+   "slug": "state-machine",
+   "name": "Máy trạng thái tường minh",
+   "model": "State machine",
+   "how": "Trạng thái và các bước chuyển hợp lệ được định nghĩa tường minh.",
+   "why": "Chặn chuyển trạng thái sai thứ tự và dễ kiểm thử.",
+   "endpoints": [
+    "e1",
+    "e7",
+    "e12",
+    "e23"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/party-room/party-room.service.ts",
+     "line": 1019,
+     "quote": "if (!room || room.status === PartyRoomStatus.Closed) {"
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "local": "PartyRoom đi Active -> Closed kèm closeReason (host_left, finished, swept, error, admin_closed); closeRoomById idempotent, phòng đã Closed trả closed=false nên không dọn SFU/publish lần hai.",
+   "addedByLogicReview": true
+  },
+  {
+   "slug": "unique-constraint-guard",
+   "name": "Ràng buộc unique ở DB làm chốt chặn cuối",
+   "model": "Ràng buộc DB",
+   "how": "Ràng buộc unique hoặc index duy nhất ở DB là chốt chặn cuối cho trùng lặp.",
+   "why": "Check-rồi-insert ở tầng code vẫn dính race; DB mới bảo đảm tuyệt đối.",
+   "endpoints": [
+    "e1",
+    "e6",
+    "e5"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/party-room/party-room.service.ts",
+     "line": 21,
+     "quote": "isUniqueViolation,"
+    }
+   ],
+   "auto": true,
+   "count": 4,
+   "id": "t11",
+   "local": "Dùng isUniqueViolation/violatedConstraint từ postgres-errors để bắt vi phạm unique (UQ_PARTY_MEMBERS_ACTIVE_USER, idempotency comment) và xử lý như replay."
+  },
+  {
+   "id": "t12",
+   "slug": "reversal-compensation",
+   "name": "Sửa sai bằng bút toán đảo (reversal), không sửa lịch sử",
+   "model": "Bút toán đảo",
+   "how": "Sửa sai bằng bút toán đảo mới thay vì sửa hoặc xoá lịch sử.",
+   "why": "Lịch sử luôn đầy đủ và truy vết được.",
+   "endpoints": [
+    "e8",
+    "e10"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/party-room/party-room.service.ts",
+     "line": 1100,
+     "quote": "current.role = input.previousRole;"
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "local": "updateParticipantPublish chạy ngoài transaction; nếu LiveKit lỗi, syncPublishPermissionAfterCommit mở transaction mới khôi phục previousRole/previousInvitePending (chỉ khi chưa có chuyển role mới hơn) rồi trả 503.",
+   "addedByLogicReview": true
+  },
+  {
+   "id": "t13",
+   "slug": "append-only",
+   "name": "Bảng chỉ thêm (bất biến)",
+   "model": "Bất biến",
+   "how": "Bảng chỉ thêm, không sửa hoặc xoá dòng cũ.",
+   "why": "Giữ bằng chứng bất biến cho kiểm toán và xử lý báo cáo.",
+   "endpoints": [
+    "e4",
+    "e5"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/party-room/entities/party-room-comment.entity.ts",
+     "line": 10,
+     "quote": "append-only để retry/poll có thứ tự ổn định"
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "local": "party_room_comments chỉ insert, không update/xoá theo vòng đời LiveKit; seq tăng dần do DB cấp làm thứ tự ổn định cho cursor và bằng chứng Trust & Safety.",
+   "addedByLogicReview": true
+  },
+  {
+   "id": "t14",
+   "slug": "idempotency-key",
+   "name": "Idempotency-Key (client sinh, server khử trùng)",
+   "model": "Idempotency-Key",
+   "how": "Client gửi khoá duy nhất cho mỗi thao tác; server lưu khoá (unique) và trả lại kết quả cũ khi gặp lại.",
+   "why": "Retry mạng không tạo bản ghi hoặc trừ tiền hai lần.",
+   "endpoints": [
+    "e5"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/party-room/party-room.service.ts",
+     "line": 838,
+     "quote": "violatedConstraint(err, UQ_PARTY_ROOM_COMMENTS_IDEMPOTENCY)"
+    },
+    {
+     "file": "apps/core-api/src/modules/party-room/entities/party-room-comment.entity.ts",
+     "line": 34,
+     "quote": "idempotencyKey!: string;"
+    },
+    {
+     "file": "apps/core-api/src/modules/party-room/party-room.constants.ts",
+     "line": 17,
+     "quote": "'uq_party_room_comments_idempotency_key';"
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "local": "Chỉ POST comment bắt buộc Idempotency-Key; key lưu dạng party:comment:{userId}:{roomId}:{key}, vi phạm uq_party_room_comments_idempotency_key thì trả lại comment cũ nếu cùng room/sender/content, khác thì 409.",
+   "addedByLogicReview": true
+  },
+  {
+   "slug": "append-only",
+   "name": "Bảng chỉ thêm (bất biến)",
+   "model": "Bất biến",
+   "how": "Bảng chỉ thêm, không sửa hoặc xoá dòng cũ.",
+   "why": "Giữ bằng chứng bất biến cho kiểm toán và xử lý báo cáo.",
+   "endpoints": [],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/party-room/entities/party-room-comment.entity.ts",
+     "line": 10,
+     "quote": "* Bình luận realtime trong Party Room — append-only để retry/poll có thứ tự ổn định và giữ"
+    },
+    {
+     "file": "apps/core-api/src/modules/party-room/party-room.service.ts",
+     "line": 771,
+     "quote": "* đồng thời có thứ tự xác định. Insert append-only + unique idempotency ở DB; event chỉ bắn sau"
+    }
+   ],
+   "auto": true,
+   "count": 2,
+   "id": "t15",
+   "local": "party_room_comments chỉ insert, không xoá theo vòng đời room, giữ thứ tự ổn định và bằng chứng cho Trust & Safety; unique idempotency ở DB."
+  },
+  {
+   "slug": "publish-after-commit",
+   "name": "Chỉ publish sau khi commit",
+   "model": "Sau commit",
+   "how": "Chỉ phát realtime sau khi transaction commit.",
+   "why": "Không bắn sự kiện của giao dịch bị rollback.",
+   "endpoints": [
+    "e7",
+    "e8",
+    "e10",
+    "e13",
+    "e14",
+    "e15",
+    "e16",
+    "e17",
+    "e18",
+    "e19",
+    "e20",
+    "e21",
+    "e22"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/party-room/party-room.service.ts",
+     "line": 408,
+     "quote": "// Fanout ngay sau commit để roster của các member còn lại cập nhật tức thì; lệnh kick SFU"
+    }
+   ],
+   "auto": true,
+   "count": 4,
+   "id": "t16",
+   "local": "Sự kiện như PartyMemberLeft được publishToRoomMembers sau khi transaction commit, replay comment không bắn lại event."
+  },
+  {
+   "id": "t17",
+   "slug": "polling-fallback",
+   "name": "REST polling làm fallback cho realtime best-effort",
+   "model": "Polling dự phòng",
+   "how": "Client vẫn đọc trạng thái qua REST khi realtime rớt.",
+   "why": "Realtime best-effort nên cần đường dự phòng đúng đắn.",
+   "endpoints": [
+    "e3",
+    "e4"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/web/src/features/party-room/api.ts",
+     "line": 167,
+     "quote": "refetchInterval: realtimeConnected"
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "local": "Web refetch GET /party/rooms/:id và /comments mỗi 30s khi socket khoẻ, 5s khi mất realtime, vì event party.* chỉ best-effort và REST là nguồn sự thật.",
+   "addedByLogicReview": true
+  },
+  {
+   "id": "t18",
+   "slug": "grace-timer",
+   "name": "Timer ân hạn trước khi đóng/kết thúc",
+   "model": "Timer ân hạn",
+   "how": "Hẹn giờ ân hạn trước khi đóng hoặc kết thúc (ví dụ host rớt mạng).",
+   "why": "Tránh đóng phòng vì mất kết nối thoáng qua.",
+   "endpoints": [
+    "e6",
+    "e12",
+    "e23"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/party-room/jobs/party-room-sweeper.service.ts",
+     "line": 116,
+     "quote": "const cutoff = new Date(Date.now() - graceSeconds * 1000);"
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "local": "Host/member rớt chỉ bị đánh dấu hostDisconnectedAt/disconnectedAt; job 5s đóng sau PARTY_HOST_DISCONNECT_GRACE_SECONDS (15s mặc định) hoặc chốt member sau PARTY_MEMBER_DISCONNECT_GRACE_SECONDS; join lại trong grace xoá cờ.",
+   "addedByLogicReview": true
+  },
+  {
+   "id": "t19",
+   "slug": "singleton-worker-lock",
+   "name": "Worker singleton nhờ advisory lock",
+   "model": "Singleton",
+   "how": "Advisory lock bảo đảm chỉ một replica chạy worker tại một thời điểm.",
+   "why": "Tránh chạy trùng khi scale nhiều pod.",
+   "endpoints": [
+    "e23"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/common/scheduling/managed-interval.ts",
+     "line": 128,
+     "quote": "`SELECT pg_try_advisory_xact_lock("
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "local": "Hai ManagedInterval của sweeper truyền clusterSingleton: { dataSource }, nên mỗi tick chỉ một replica giữ pg_try_advisory_xact_lock litmatch:cluster-job:{jobName}; replica khác rollback và chờ followerRetry.",
+   "addedByLogicReview": true
+  },
+  {
+   "id": "t20",
+   "slug": "sweeper",
+   "name": "Sweeper dọn dữ liệu hết hạn",
+   "model": "Sweeper",
+   "how": "Job quét dọn bản ghi hết hạn.",
+   "why": "Giải phóng tài nguyên và tránh ghi rác.",
+   "endpoints": [
+    "e23"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/party-room/jobs/party-room-sweeper.service.ts",
+     "line": 206,
+     "quote": "if (!(await this.livekit.roomExists(partyRoomName(room.id)))) {"
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "local": "sweepStaleRooms quét tối đa 100 phòng active quá PARTY_STALE_ROOM_SECONDS, đóng (swept) nếu không còn member hoặc roomExists trên SFU trả false; SFU lỗi thì bỏ qua, không đóng oan.",
+   "addedByLogicReview": true
+  },
+  {
+   "id": "t21",
+   "slug": "interval-worker",
+   "name": "Worker lặp (interval / ManagedInterval)",
+   "model": "Worker lặp",
+   "how": "Vòng lặp theo chu kỳ trong process (ManagedInterval).",
+   "why": "Worker nền đơn giản, không cần hạ tầng queue riêng.",
+   "endpoints": [
+    "e23"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/party-room/jobs/party-room-sweeper.service.ts",
+     "line": 50,
+     "quote": "private readonly sweeperJob = new ManagedInterval();"
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "local": "PartyRoomSweeperService.onApplicationBootstrap khởi hai ManagedInterval: sweeperJob (PARTY_SWEEPER_INTERVAL_MS, 30s) và hostGraceJob (PARTY_HOST_GRACE_CHECK_INTERVAL_MS, 5s), dừng ở onApplicationShutdown.",
+   "addedByLogicReview": true
+  },
+  {
+   "slug": "sweeper",
+   "name": "Sweeper dọn dữ liệu hết hạn",
+   "model": "Sweeper",
+   "how": "Job quét dọn bản ghi hết hạn.",
+   "why": "Giải phóng tài nguyên và tránh ghi rác.",
+   "endpoints": [],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/party-room/jobs/party-room-sweeper.service.ts",
+     "line": 46,
+     "quote": "export class PartyRoomSweeperService"
+    },
+    {
+     "file": "apps/core-api/src/modules/party-room/party-room.module.ts",
+     "line": 29,
+     "quote": "PartyRoomSweeperService,"
+    }
+   ],
+   "auto": true,
+   "count": 3,
+   "id": "t22",
+   "local": "PartyRoomSweeperService đối chiếu DB với SFU để đóng phòng rỗng hoặc SFU đã tự đóng khi webhook rớt."
+  },
+  {
+   "slug": "interval-worker",
+   "name": "Worker lặp (interval / ManagedInterval)",
+   "model": "Worker lặp",
+   "how": "Vòng lặp theo chu kỳ trong process (ManagedInterval).",
+   "why": "Worker nền đơn giản, không cần hạ tầng queue riêng.",
+   "endpoints": [],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/party-room/jobs/party-room-sweeper.service.ts",
+     "line": 50,
+     "quote": "private readonly sweeperJob = new ManagedInterval();"
+    }
+   ],
+   "auto": true,
+   "count": 2,
+   "id": "t23",
+   "local": "PartyRoomSweeperService giữ hai ManagedInterval: sweeperJob quét phòng và hostGraceJob xử lý host rớt quá thời gian ân hạn."
+  },
+  {
+   "slug": "rate-limit-throttler",
+   "name": "Rate limit (@nestjs/throttler)",
+   "model": "Rate limit",
+   "how": "@Throttle giới hạn số request theo khoảng thời gian cho từng route.",
+   "why": "Chặn spam và dò quét bằng cách giới hạn số request theo thời gian, trước khi request tới logic nghiệp vụ.",
+   "endpoints": [
+    "e1",
+    "e5",
+    "e6",
+    "e2",
+    "e3",
+    "e4",
+    "e7",
+    "e8",
+    "e9",
+    "e10",
+    "e11",
+    "e12"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/party-room/party-room.controller.ts",
+     "line": 51,
+     "quote": "@Throttle({ default: { limit: 5, ttl: minutes(1) } })"
+    },
+    {
+     "file": "apps/core-api/src/app/app.module.ts",
+     "line": 116,
+     "quote": "{ provide: APP_GUARD, useClass: ThrottlerGuard },"
+    }
+   ],
+   "auto": true,
+   "count": 15,
+   "id": "t24",
+   "local": "@Throttle riêng trên tạo phòng 5/phút, gửi comment 60/phút, join 20/phút; các route còn lại chỉ chịu ThrottlerGuard APP_GUARD toàn cục với hạn mức mặc định."
+  },
+  {
+   "slug": "best-effort-degrade",
+   "name": "Best-effort: lỗi phụ không phá nghiệp vụ chính",
+   "model": "Best-effort",
+   "how": "Việc phụ (push, realtime) lỗi chỉ ghi log, không phá nghiệp vụ chính.",
+   "why": "Nghiệp vụ đã commit không nên hỏng vì kênh phụ.",
+   "endpoints": [
+    "e7",
+    "e13",
+    "e14",
+    "e15",
+    "e16",
+    "e17",
+    "e18",
+    "e19",
+    "e20",
+    "e21",
+    "e22"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/party-room/party-room.service.ts",
+     "line": 409,
+     "quote": "// là cleanup best-effort và không được phép giữ event realtime phía sau một media timeout."
+    },
+    {
+     "file": "apps/core-api/src/modules/party-room/ports/livekit-party-room.ts",
+     "line": 50,
+     "quote": "/** Đóng room trên SFU — best-effort ở MỌI nhánh close (chống leak resource, docs/10 § Party Room). */"
+    }
+   ],
+   "auto": true,
+   "count": 4,
+   "id": "t25",
+   "local": "Kick participant và deleteRoom trên SFU là cleanup best-effort, không giữ event realtime phía sau media timeout (publishToRoomMembers ngay sau commit)."
+  },
+  {
+   "slug": "openapi-contract",
+   "name": "Hợp đồng OpenAPI + client sinh tự động",
+   "model": "OpenAPI",
+   "how": "OpenAPI sinh từ code và client TypeScript sinh tự động.",
+   "why": "Client và server không lệch hợp đồng.",
+   "endpoints": [
+    "e1",
+    "e2",
+    "e3",
+    "e4",
+    "e5",
+    "e6",
+    "e7",
+    "e8",
+    "e9",
+    "e10",
+    "e11"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/party-room/party-room.controller.ts",
+     "line": 52,
+     "quote": "@ApiOperation({"
+    }
+   ],
+   "auto": true,
+   "count": 11,
+   "id": "t26",
+   "local": "PartyRoomController dùng @ApiOperation, @ApiOkResponse({ type: JoinPartyRoomDto }) để mô tả hợp đồng OpenAPI từng route."
+  },
+  {
+   "id": "t27",
+   "slug": "cursor-pagination",
+   "name": "Phân trang cursor (keyset)",
+   "model": "Keyset",
+   "how": "Phân trang theo cursor thay vì offset.",
+   "why": "Ổn định khi dữ liệu thay đổi và nhanh ở trang sâu.",
+   "endpoints": [
+    "e2",
+    "e4"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/party-room/party-room.service.ts",
+     "line": 758,
+     "quote": "const page = buildCursorPage(rows, limit, (last) => ({"
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "local": "listRooms phân trang theo cặp (created_at, id) giảm dần; listComments đi lùi theo seq bigint do DB cấp, cursor decode và kiểm tra, sai thì CURSOR_INVALID (400).",
+   "addedByLogicReview": true
+  },
+  {
+   "slug": "cursor-pagination",
+   "name": "Phân trang cursor (keyset)",
+   "model": "Keyset",
+   "how": "Phân trang theo cursor thay vì offset.",
+   "why": "Ổn định khi dữ liệu thay đổi và nhanh ở trang sâu.",
+   "endpoints": [],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/party-room/dto/party-room.dtos.ts",
+     "line": 47,
+     "quote": "export class ListPartyRoomsQueryDto extends CursorPageQueryDto {"
+    }
+   ],
+   "auto": true,
+   "count": 2,
+   "id": "t28",
+   "local": "GET /party/rooms dùng ListPartyRoomsQueryDto extends CursorPageQueryDto để phân trang cursor, kèm lọc tên và category."
+  }
+ ]
+}

@@ -1,0 +1,170 @@
+{
+ "id": "story-create-with-image",
+ "title": "Đăng story kèm ảnh và dọn story hết hạn",
+ "summary": "Story chỉ được lưu khi ảnh đã được Media xác nhận là của đúng chủ, đúng purpose Story và đã upload hợp lệ; sau đó một sweeper nền của Feed xoá cứng các story hết hạn nên Feed và Media phải phối hợp.",
+ "caption": "Client gửi mediaAssetId, Feed nhờ Media xác nhận và đổi thành URL ảnh rồi mới lưu Story; sweeper định kỳ xoá story hết hạn.",
+ "participants": [
+  {
+   "id": "web",
+   "label": "Web client",
+   "kind": "client"
+  },
+  {
+   "id": "feed",
+   "label": "Feed",
+   "kind": "service"
+  },
+  {
+   "id": "media",
+   "label": "Media",
+   "kind": "service"
+  },
+  {
+   "id": "postgres",
+   "label": "PostgreSQL",
+   "kind": "infra"
+  }
+ ],
+ "steps": [
+  {
+   "from": "web",
+   "to": "feed",
+   "label": "POST /stories kèm mediaAssetId, caption, audience và Idempotency-Key",
+   "kind": "call",
+   "mechanism": "http",
+   "note": "Route yêu cầu JWT (JwtAuthGuard toàn cục). Guest không gọi Media và bị StoryService.assertNotGuest chặn.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/app/app.module.ts",
+     "line": 154,
+     "quote": "{ provide: APP_GUARD, useClass: JwtAuthGuard },"
+    }
+   ]
+  },
+  {
+   "from": "feed",
+   "to": "media",
+   "label": "resolveImageUrl(userId, mediaAssetId, purpose Story)",
+   "kind": "call",
+   "mechanism": "di-call",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/feed/controllers/story.controller.ts",
+     "line": 57,
+     "quote": "? await this.mediaService.resolveImageUrl("
+    }
+   ]
+  },
+  {
+   "from": "media",
+   "to": "postgres",
+   "label": "Tìm asset theo id và ownerUserId; sai chủ hoặc sai purpose thì 404",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/media/media.service.ts",
+     "line": 85,
+     "quote": "const asset = await this.assetRepo.findOne({"
+    }
+   ]
+  },
+  {
+   "from": "media",
+   "to": "postgres",
+   "label": "Kiểm tra file đã upload, chuyển asset sang trạng thái Ready",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "note": "Khi asset chưa Ready và provider không phải dev, Media kiểm tra size/contentType và promote file rồi mới lưu Ready.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/media/media.service.ts",
+     "line": 126,
+     "quote": "await this.assetRepo.save(asset);"
+    }
+   ]
+  },
+  {
+   "from": "media",
+   "to": "feed",
+   "label": "Trả URL công khai của ảnh đã xác nhận",
+   "kind": "return",
+   "mechanism": "di-call"
+  },
+  {
+   "from": "feed",
+   "to": "postgres",
+   "label": "Lưu Story với mediaUrl, expiresAt theo STORY_TTL_HOURS, idempotencyKey",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "note": "Vi phạm unique idempotencyKey: trả story cũ nếu cùng mediaUrl, khác thì 409.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/feed/services/story.service.ts",
+     "line": 61,
+     "quote": "return await this.storyRepo.save("
+    }
+   ]
+  },
+  {
+   "from": "feed",
+   "to": "web",
+   "label": "Trả StoryDto vừa tạo",
+   "kind": "return",
+   "mechanism": "http"
+  },
+  {
+   "from": "feed",
+   "to": "postgres",
+   "label": "Sweeper theo chu kỳ: DELETE story hết hạn, tối đa 500 dòng mỗi tick",
+   "kind": "async",
+   "mechanism": "shared-db",
+   "note": "Chạy bằng interval từ STORY_SWEEPER_INTERVAL_MS; story_views tự cascade xoá theo FK.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/feed/jobs/story-sweeper.service.ts",
+     "line": 60,
+     "quote": "await this.dataSource.query("
+    }
+   ]
+  }
+ ],
+ "groups": [
+  {
+   "from": 2,
+   "to": 4,
+   "label": "Media xác nhận asset",
+   "kind": "external"
+  },
+  {
+   "from": 8,
+   "to": 8,
+   "label": "Sweeper nền",
+   "kind": "besteffort"
+  }
+ ],
+ "invariants": [
+  "Story chỉ nhận assetId; Media là nơi duy nhất xác nhận asset đúng chủ và đúng purpose Story, và (khi MEDIA_STORAGE_PROVIDER khác 'dev') đã upload hợp lệ với size/contentType khớp, trước khi Feed lưu mediaUrl; provider dev bỏ qua kiểm tra file.",
+  "Feed gọi Media trước khi lưu Story, nên asset không hợp lệ sẽ bị từ chối mà không tạo bản ghi Story nào."
+ ],
+ "failureModes": [
+  {
+   "when": "Asset không tồn tại, sai chủ hoặc sai purpose",
+   "effect": "Media ném ASSET_NOT_FOUND (404), Feed không lưu story."
+  },
+  {
+   "when": "Ảnh chưa upload xong hoặc size/contentType không khớp",
+   "effect": "Media ném ASSET_NOT_READY (422), story không được tạo."
+  },
+  {
+   "when": "Cùng Idempotency-Key nhưng mediaUrl khác",
+   "effect": "Feed trả 409 POST_IDEMPOTENCY_CONFLICT."
+  },
+  {
+   "when": "Một tick sweeper lỗi",
+   "effect": "Lỗi được log qua logger.error, tick sau chạy lại; read-path vẫn lọc story hết hạn nên đúng đắn không bị ảnh hưởng."
+  }
+ ],
+ "dataIssues": [],
+ "uncertain": []
+}

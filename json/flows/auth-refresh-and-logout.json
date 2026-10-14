@@ -1,0 +1,41 @@
+{
+ "id": "auth-refresh-and-logout",
+ "title": "Làm mới phiên và đăng xuất (cookie httpOnly + CSRF)",
+ "summary": "Web giữ refresh token trong cookie httpOnly; khi access token hết hạn web gọi /auth/refresh để xoay vòng token, và /auth/logout để thu hồi phiên. Module auth giữ phiên refresh nhưng phải hỏi module user để biết user còn hợp lệ (không bị ban) tại thời điểm làm mới.",
+ "caption": "Hình cho thấy auth xoay vòng refresh token trong transaction, kiểm tra lại user bên module user, rồi đăng xuất thu hồi token.",
+ "participants": [
+  {"id": "web", "label": "Web client", "kind": "client"},
+  {"id": "auth", "label": "auth", "kind": "service"},
+  {"id": "user", "label": "user", "kind": "service"},
+  {"id": "postgres", "label": "PostgreSQL", "kind": "infra"}
+ ],
+ "steps": [
+  {"from": "web", "to": "auth", "label": "POST /auth/refresh kèm cookie refresh và header X-CSRF-Token", "kind": "call", "mechanism": "http", "note": "Route có @UseGuards(CsrfGuard): cookie CSRF phải khớp header, sai thì trả 401 CSRF_TOKEN_INVALID trước khi vào service."},
+  {"from": "auth", "to": "postgres", "label": "Tìm phiên theo SHA-256 của refresh token; thiếu/đã thu hồi/hết hạn thì từ chối", "kind": "call", "mechanism": "shared-db", "evidence": [{"file": "apps/core-api/src/modules/auth/services/token.service.ts", "line": 71, "quote": "this.refreshSessions.findByTokenHash("}]},
+  {"from": "auth", "to": "user", "label": "Lấy user theo id để biết isGuest và role dùng ký access token", "kind": "call", "mechanism": "di-call", "evidence": [{"file": "apps/core-api/src/modules/auth/services/token.service.ts", "line": 81, "quote": "const user = await this.userService.getByIdOrThrow(session.userId);"}]},
+  {"from": "auth", "to": "postgres", "label": "Khoá dòng phiên cũ, đánh dấu rotated, chèn refresh token mới cùng family", "kind": "call", "mechanism": "shared-db", "note": "Nếu phiên đã rotated hoặc UPDATE có điều kiện không ghi được dòng nào thì thu hồi cả family và trả 'reused'.", "evidence": [{"file": "apps/core-api/src/modules/auth/repositories/typeorm-refresh-session.adapter.ts", "line": 39, "quote": "return this.dataSource.transaction(async (manager) => {"}]},
+  {"from": "postgres", "to": "auth", "label": "Kết quả rotated, invalid hoặc reused (reused trả 401 REFRESH_TOKEN_REUSED)", "kind": "return", "mechanism": "shared-db"},
+  {"from": "auth", "to": "user", "label": "Đọc lại user để kiểm tra trạng thái đúng thời điểm làm mới", "kind": "call", "mechanism": "di-call", "evidence": [{"file": "apps/core-api/src/modules/auth/auth.service.ts", "line": 128, "quote": "const user = await this.userService.getByIdOrThrow(userId);"}]},
+  {"from": "auth", "to": "postgres", "label": "Nếu user không active thì thu hồi refresh token vừa cấp rồi ném lỗi", "kind": "call", "mechanism": "shared-db", "note": "Nhánh lỗi của assertActive: chỉ chạy khi user bị chặn giữa hai lần refresh.", "evidence": [{"file": "apps/core-api/src/modules/auth/auth.service.ts", "line": 132, "quote": "await this.tokenService.revoke(tokens.refreshToken);"}]},
+  {"from": "auth", "to": "web", "label": "200: accessToken + csrfToken mới; Set-Cookie refresh và CSRF mới", "kind": "return", "mechanism": "http", "note": "csrfToken sinh bằng generateCsrfToken(); refreshToken được bóc khỏi body và chỉ nằm trong cookie httpOnly."},
+  {"from": "web", "to": "auth", "label": "POST /auth/logout kèm cookie refresh và X-CSRF-Token", "kind": "call", "mechanism": "http", "note": "Cùng CsrfGuard như refresh."},
+  {"from": "auth", "to": "postgres", "label": "Đặt revokedAt cho phiên chưa thu hồi khớp hash (idempotent)", "kind": "call", "mechanism": "shared-db", "evidence": [{"file": "apps/core-api/src/modules/auth/services/token.service.ts", "line": 107, "quote": "await this.refreshSessions.revoke(this.hash(refreshPlain));"}]},
+  {"from": "auth", "to": "web", "label": "204 No Content và xoá các cookie xác thực", "kind": "return", "mechanism": "http", "evidence": [{"file": "apps/core-api/src/modules/auth/auth.controller.ts", "line": 140, "quote": "clearAuthCookies("}]}
+ ],
+ "groups": [
+  {"from": 4, "to": 4, "label": "Transaction xoay vòng phiên", "kind": "transaction"}
+ ],
+ "invariants": [
+  "Đánh dấu rotated phải là UPDATE có điều kiện rotated_at IS NULL trong transaction có khoá pessimistic_write, nên hai request song song cùng một token chỉ một request thắng; request thua bị coi là reuse và thu hồi cả family.",
+  "auth phải đọc lại user ở module user sau khi rotate để user bị ban giữa hai lần refresh không giữ được phiên mới; khi đó token vừa cấp bị thu hồi.",
+  "Cả refresh và logout cần CsrfGuard (double-submit cookie và header) vì refresh token nằm trong cookie httpOnly được trình duyệt tự gửi."
+ ],
+ "failureModes": [
+  {"when": "Thiếu hoặc sai CSRF token", "effect": "CsrfGuard ném 401 CSRF_TOKEN_INVALID, không chạm DB."},
+  {"when": "Thiếu cookie refresh, hoặc refresh token không tồn tại, đã thu hồi hay hết hạn", "effect": "Trả 401 REFRESH_TOKEN_INVALID."},
+  {"when": "Refresh token đã được xoay vòng dùng lại", "effect": "Thu hồi cả family trong transaction và trả 401 REFRESH_TOKEN_REUSED."},
+  {"when": "User bị chặn giữa hai lần refresh", "effect": "assertActive ném lỗi, token mới vừa cấp bị thu hồi, không có cookie mới."}
+ ],
+ "dataIssues": [],
+ "uncertain": []
+}

@@ -1,0 +1,1135 @@
+{
+ "id": "movie-match",
+ "title": "Movie Match",
+ "deployable": "core-api",
+ "role": "Sở hữu phiên xem chung 2 người (friend mode: 2 bạn tự chọn URL YouTube; anonymous mode: hàng đợi ghép người lạ, server chọn video, chat + rating, chỉ mutual-like mới mở Friendship) và là nguồn sự thật duy nhất của playback state. KHÔNG stream/proxy video (client tự phát từ URL), KHÔNG có SFU/LiveKit hay tiền, KHÔNG sở hữu quan hệ bạn (Friend) hay block/report (Safety).",
+ "owns": [
+  "bảng movie_sessions (cặp canonical low/high, videoUrl, positionSeconds, isPlaying, positionUpdatedAt, status, mode friend|anonymous, expiresAt, watchEndedAt, low/highRating, outcome)",
+  "bảng movie_session_active_participants (PK user_id: 1 user chỉ có 1 phiên active, ghi/xoá cùng transaction với movie_sessions.status)",
+  "bảng movie_match_queue_entries (PK user_id: hàng chờ ghép ẩn danh riêng của module, không dùng queue của Matching)",
+  "bảng movie_session_messages (chat ẩn danh append-only, idempotency_key UNIQUE dạng movie:msg:{userId}:{key}, cursor theo seq)",
+  "Postgres advisory lock 'litmatch:movie-match:pairing' (tuần tự hoá matcher ẩn danh)",
+  "client ioredis riêng MOVIE_MATCH_REDIS chỉ để PUBLISH realtime:user:{userId}; module không lưu key nào trong Redis"
+ ],
+ "confidence": "high",
+ "endpoints": [
+  {
+   "id": "e1",
+   "kind": "rest",
+   "method": "POST",
+   "path": "/api/v1/movie-match/sessions",
+   "purpose": "Tạo phiên xem chung với 1 bạn (friendUserId + videoUrl): URL phải http/https và host thuộc MOVIE_MATCH_ALLOWED_VIDEO_HOSTS, bắt buộc areFriends (404 chung), idempotent theo cặp, 409 nếu một trong hai đang active ở phiên khác.",
+   "auth": "jwt",
+   "file": "apps/core-api/src/modules/movie-match/movie-match.controller.ts",
+   "line": 50,
+   "quote": "@Post('sessions')"
+  },
+  {
+   "id": "e2",
+   "kind": "rest",
+   "method": "PATCH",
+   "path": "/api/v1/movie-match/sessions/:id/state",
+   "purpose": "Participant cập nhật positionSeconds/isPlaying của phiên bạn bè (last-write-wins, không lock, không Idempotency-Key), 409 nếu đã ended, rồi publish movie.state.changed cho cả hai.",
+   "auth": "jwt",
+   "file": "apps/core-api/src/modules/movie-match/movie-match.controller.ts",
+   "line": 69,
+   "quote": "@Patch('sessions/:id/state')"
+  },
+  {
+   "id": "e3",
+   "kind": "rest",
+   "method": "POST",
+   "path": "/api/v1/movie-match/sessions/:id/end",
+   "purpose": "Một trong hai participant kết thúc phiên bạn bè (endReason=left), idempotent; đổi status và xoá 2 dòng active-participant cùng transaction rồi publish movie.session.ended.",
+   "auth": "jwt",
+   "file": "apps/core-api/src/modules/movie-match/movie-match.controller.ts",
+   "line": 90,
+   "quote": "@Post('sessions/:id/end')"
+  },
+  {
+   "id": "e4",
+   "kind": "rest",
+   "method": "GET",
+   "path": "/api/v1/movie-match/sessions/:id",
+   "purpose": "Poll fallback cho realtime: trả MovieSessionDto (kèm partnerUserId) cho participant; không tồn tại hoặc không phải participant đều 404 chung (chống IDOR).",
+   "auth": "jwt",
+   "file": "apps/core-api/src/modules/movie-match/movie-match.controller.ts",
+   "line": 104,
+   "quote": "@Get('sessions/:id')"
+  },
+  {
+   "id": "e5",
+   "kind": "rest",
+   "method": "POST",
+   "path": "/api/v1/movie-match/anon/queue",
+   "purpose": "Vào hàng đợi ghép ẩn danh (idempotent): advisory lock tuần tự hoá matcher, ghép với entry cũ nhất vượt qua SafetyService.canPair, server chọn video từ MOVIE_MATCH_ANON_VIDEO_URLS; người đến trước chỉ biết đã ghép qua poll.",
+   "auth": "jwt",
+   "file": "apps/core-api/src/modules/movie-match/movie-match.controller.ts",
+   "line": 117,
+   "quote": "@Post('anon/queue')"
+  },
+  {
+   "id": "e6",
+   "kind": "rest",
+   "method": "GET",
+   "path": "/api/v1/movie-match/anon/current",
+   "purpose": "Trả state phục hồi/poll của flow ẩn danh (idle|queued|watching|rating|completed) theo vai trò tương đối, không lộ partner; hết giờ xem được xử lý lazy (mở phase rating) ngay trong request này.",
+   "auth": "jwt",
+   "file": "apps/core-api/src/modules/movie-match/movie-match.controller.ts",
+   "line": 131,
+   "quote": "@Get('anon/current')"
+  },
+  {
+   "id": "e7",
+   "kind": "rest",
+   "method": "DELETE",
+   "path": "/api/v1/movie-match/anon/current",
+   "purpose": "Huỷ hàng đợi hoặc dismiss kết quả/phiên ẩn danh: phiên đang active bị chốt outcome=cancelled cho CẢ HAI và caller được giải phóng active-participant; không publish realtime, bên kia thấy qua poll.",
+   "auth": "jwt",
+   "file": "apps/core-api/src/modules/movie-match/movie-match.controller.ts",
+   "line": 142,
+   "quote": "@Delete('anon/current')"
+  },
+  {
+   "id": "e8",
+   "kind": "rest",
+   "method": "PATCH",
+   "path": "/api/v1/movie-match/anon/sessions/:id/state",
+   "purpose": "Cập nhật playback phiên ẩn danh (last-write-wins) chỉ khi còn trong phần xem (409 sau khi finish/hết giờ), khoá pessimistic_write dòng session rồi publish movie.state.changed.",
+   "auth": "jwt",
+   "file": "apps/core-api/src/modules/movie-match/movie-match.controller.ts",
+   "line": 156,
+   "quote": "@Patch('anon/sessions/:id/state')"
+  },
+  {
+   "id": "e9",
+   "kind": "rest",
+   "method": "POST",
+   "path": "/api/v1/movie-match/anon/sessions/:id/finish",
+   "purpose": "Bấm 'Kết thúc' phần xem chung: đặt watchEndedAt và dừng playback để mở phase rating cho cả hai, idempotent; publish movie.state.changed (isPlaying=false).",
+   "auth": "jwt",
+   "file": "apps/core-api/src/modules/movie-match/movie-match.controller.ts",
+   "line": 175,
+   "quote": "@Post('anon/sessions/:id/finish')"
+  },
+  {
+   "id": "e10",
+   "kind": "rest",
+   "method": "POST",
+   "path": "/api/v1/movie-match/anon/sessions/:id/rating",
+   "purpose": "Chốt rating like/boring/rude đúng một lần (đổi giá trị → 409, chỉ mở sau watchEndedAt): non-like → not_matched ngay; cả hai like → FriendService.ensureFriendship(source=movie_match) cùng transaction rồi mới lộ partnerUserId.",
+   "auth": "jwt",
+   "file": "apps/core-api/src/modules/movie-match/movie-match.controller.ts",
+   "line": 191,
+   "quote": "@Post('anon/sessions/:id/rating')"
+  },
+  {
+   "id": "e11",
+   "kind": "rest",
+   "method": "POST",
+   "path": "/api/v1/movie-match/anon/sessions/:id/messages",
+   "purpose": "Gửi chat ẩn danh trong phiên (HTTP 201): bắt buộc header Idempotency-Key (khoá DB movie:msg:{userId}:{key}, cùng key khác nội dung → 409), giới hạn MOVIE_MATCH_MESSAGE_MAX_LENGTH, không publish realtime (client poll).",
+   "auth": "jwt",
+   "file": "apps/core-api/src/modules/movie-match/movie-match.controller.ts",
+   "line": 207,
+   "quote": "@Post('anon/sessions/:id/messages')"
+  },
+  {
+   "id": "e12",
+   "kind": "rest",
+   "method": "GET",
+   "path": "/api/v1/movie-match/anon/sessions/:id/messages",
+   "purpose": "Liệt kê chat của phiên ẩn danh theo cursor seq; chỉ participant đọc được, sender trả vai trò tương đối me|partner nên không lộ userId.",
+   "auth": "jwt",
+   "file": "apps/core-api/src/modules/movie-match/movie-match.controller.ts",
+   "line": 229,
+   "quote": "@Get('anon/sessions/:id/messages')"
+  },
+  {
+   "id": "e13",
+   "kind": "rest",
+   "method": "POST",
+   "path": "/api/v1/movie-match/anon/sessions/:id/reactions",
+   "purpose": "Gửi reaction emoji nổi (whitelist 4 emoji): realtime-only, không persist, không kèm userId, @Throttle 60 request/phút, trả 204 và publish movie.reaction.sent cho cả hai.",
+   "auth": "jwt",
+   "file": "apps/core-api/src/modules/movie-match/movie-match.controller.ts",
+   "line": 250,
+   "quote": "@Post('anon/sessions/:id/reactions')"
+  },
+  {
+   "id": "e14",
+   "kind": "socket-emit",
+   "method": "EMIT",
+   "path": "movie.session.started",
+   "purpose": "Báo cho cả hai bạn có phiên xem chung mới (sessionId, videoUrl, initiatorUserId) sau khi transaction tạo phiên commit; chỉ socket đã verify JWT của đúng người nhận mới nhận.",
+   "auth": "internal",
+   "file": "apps/core-api/src/modules/movie-match/movie-match.service.ts",
+   "line": 173,
+   "quote": "event: RealtimeEvents.MovieSessionStarted,"
+  },
+  {
+   "id": "e15",
+   "kind": "socket-emit",
+   "method": "EMIT",
+   "path": "movie.state.changed",
+   "purpose": "Fanout playback state (positionSeconds, isPlaying, positionUpdatedAt) cho cả hai participant, phát từ updateState (friend) và publishAnonPlayback (ẩn danh); chỉ là gợi ý refetch sớm, REST GET vẫn là nguồn sự thật.",
+   "auth": "internal",
+   "file": "apps/core-api/src/modules/movie-match/movie-match.service.ts",
+   "line": 221,
+   "quote": "event: RealtimeEvents.MovieStateChanged,"
+  },
+  {
+   "id": "e16",
+   "kind": "socket-emit",
+   "method": "EMIT",
+   "path": "movie.session.ended",
+   "purpose": "Báo cả hai phiên bạn bè đã kết thúc (reason=left) sau khi endSession commit; nhánh ẩn danh KHÔNG phát event này (kết quả ẩn danh chỉ lấy qua poll).",
+   "auth": "internal",
+   "file": "apps/core-api/src/modules/movie-match/movie-match.service.ts",
+   "line": 271,
+   "quote": "event: RealtimeEvents.MovieSessionEnded,"
+  },
+  {
+   "id": "e17",
+   "kind": "socket-emit",
+   "method": "EMIT",
+   "path": "movie.reaction.sent",
+   "purpose": "Fanout reaction emoji ephemeral (sessionId, emoji, không có userId) cho cả hai participant phiên ẩn danh; client lỡ event chỉ mất hiệu ứng.",
+   "auth": "internal",
+   "file": "apps/core-api/src/modules/movie-match/movie-match.service.ts",
+   "line": 632,
+   "quote": "event: RealtimeEvents.MovieReactionSent,"
+  }
+ ],
+ "collaborators": [
+  {
+   "id": "c1",
+   "with": "friend",
+   "withKind": "service",
+   "direction": "out",
+   "mechanism": "di-call",
+   "endpoints": [
+    "e1",
+    "e10"
+   ],
+   "what": "Gọi FriendService.areFriends khi tạo phiên bạn bè; ở rateAnon, khi cả hai 'like' thì gọi FriendService.ensureFriendship(manager, low, high, FriendshipSource.MovieMatch) bằng chính EntityManager của transaction đang giữ khoá phiên.",
+   "why": "Friend là chủ của Friendship + Conversation; Movie Match không có bảng quan hệ riêng nên phải hỏi Friend ai là bạn. Mutual-like phải tạo Friendship + Conversation CÙNG transaction với rating để bất biến 'có Friendship ⟺ có Conversation' không lệch (cùng bất biến Soul/Palm Match).",
+   "ifMissing": "Thiếu areFriends: ai cũng ép người lạ vào phiên xem chung và đẩy realtime tới họ. Thiếu ensureFriendship (hoặc gọi ngoài transaction): outcome=matched nhưng không có bạn/hội thoại để chat tiếp, hoặc có Friendship dù rating bị rollback.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/movie-match/movie-match.service.ts",
+     "line": 123,
+     "quote": "if (!(await this.friendService.areFriends(userId, friendUserId))) {"
+    },
+    {
+     "file": "apps/core-api/src/modules/movie-match/movie-match.service.ts",
+     "line": 510,
+     "quote": "await this.friendService.ensureFriendship("
+    },
+    {
+     "file": "apps/core-api/src/database/migrations/1755900000000-movie-match-anon.ts",
+     "line": 11,
+     "quote": "Nới CHECK friendships.source cho nguồn mới 'movie_match'"
+    }
+   ],
+   "label": "bạn bè · mở friendship",
+   "basis": "ast",
+   "logic": {
+    "verdict": "sound"
+   }
+  },
+  {
+   "id": "c2",
+   "with": "safety",
+   "withKind": "service",
+   "direction": "out",
+   "mechanism": "di-call",
+   "endpoints": [
+    "e5"
+   ],
+   "what": "Trong joinAnonQueue, với từng ứng viên (tối đa 20 entry cũ nhất) gọi SafetyService.canPair(userId, candidate.user_id) ngay lúc ghép; ứng viên bị từ chối thì bỏ qua và thử người kế tiếp.",
+   "why": "Block/Report thuộc Safety và có thể phát sinh SAU khi user vào hàng đợi; vì ghép với người lạ nên phải hỏi lại đúng lúc ghép (không tin state lúc enqueue), gồm cả cooldown sau report/block gần đây (SAFETY_REMATCH_COOLDOWN_DAYS).",
+   "ifMissing": "Hai người đã block hoặc vừa report nhau vẫn có thể bị ghép lại vào cùng một phiên ẩn danh, vô hiệu hoá lớp bảo vệ của Safety.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/movie-match/movie-match.service.ts",
+     "line": 338,
+     "quote": "if (await this.safetyService.canPair(userId, candidate.user_id)) {"
+    },
+    {
+     "file": "apps/core-api/src/modules/safety/safety.service.ts",
+     "line": 291,
+     "quote": "async canPair(userAId: string, userBId: string): Promise<boolean> {"
+    },
+    {
+     "file": "apps/core-api/src/modules/safety/safety.service.ts",
+     "line": 298,
+     "quote": "'SAFETY_REMATCH_COOLDOWN_DAYS',"
+    }
+   ],
+   "label": "canPair: chặn block/report",
+   "basis": "ast",
+   "logic": {
+    "verdict": "sound"
+   }
+  },
+  {
+   "id": "c3",
+   "with": "signaling-gateway",
+   "withKind": "service",
+   "direction": "out",
+   "mechanism": "redis-pubsub",
+   "endpoints": [
+    "e1",
+    "e2",
+    "e3",
+    "e8",
+    "e9",
+    "e13",
+    "e14",
+    "e15",
+    "e16",
+    "e17"
+   ],
+   "what": "Sau khi ghi DB, publishRealtimeEvent đẩy movie.* vào realtime:user:{userId} của CẢ HAI participant; friend (e1,e2,e3) publish sau khi ghi/commit, còn anon e8/e9 gọi publishAnonPlayback ngay trong transaction đang giữ khoá, trước commit. Gateway PSUBSCRIBE rồi emit xuống socket đã xác thực.",
+   "why": "Hai participant là hai client khác nhau cần thấy play/pause/seek gần tức thì; core-api không giữ socket nên phải qua gateway (chỉ relay, không business logic). Ẩn danh được quyết ở core-api: payload reaction không có userId vì gateway không đọc/sửa payload.",
+   "ifMissing": "Không có fanout thì client chỉ còn poll (web: 10s phiên bạn bè, 5s phiên ẩn danh): xem chung trễ hàng giây và hiệu ứng reaction (chỉ có qua realtime) mất hẳn; nghiệp vụ trong DB vẫn đúng.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/movie-match/movie-match.service.ts",
+     "line": 182,
+     "quote": "publishRealtimeEvent(this.redis, this.logger, uid, envelope),"
+    },
+    {
+     "file": "apps/signaling-gateway/src/app/signaling.gateway.ts",
+     "line": 332,
+     "quote": "this.server.local.to(userRoom(userId)).emit(envelope.event, envelope.data);"
+    },
+    {
+     "file": "apps/core-api/src/common/realtime/publish-realtime.ts",
+     "line": 12,
+     "quote": "BEST-EFFORT theo thiết kế: nuốt lỗi + log warn, KHÔNG throw"
+    }
+   ],
+   "label": "phát movie.* sau ghi DB",
+   "basis": "ast",
+   "logic": {
+    "verdict": "corrected",
+    "note": "anon e8/e9 gọi publishAnonPlayback bên trong transaction (trước commit), không phải sau commit như friend flow."
+   }
+  },
+  {
+   "id": "c4",
+   "with": "redis",
+   "withKind": "infra",
+   "direction": "out",
+   "mechanism": "redis-pubsub",
+   "endpoints": [
+    "e1",
+    "e2",
+    "e3",
+    "e8",
+    "e9",
+    "e13",
+    "e14",
+    "e15",
+    "e16",
+    "e17"
+   ],
+   "what": "Module tạo client ioredis riêng (MOVIE_MATCH_REDIS, từ REDIS_URL) chỉ để PUBLISH lên realtime:user:{userId}; không lưu session, hàng đợi hay khoá nào trong Redis (tất cả nằm ở Postgres).",
+   "why": "core-api và signaling-gateway là hai process riêng, không có API nội bộ giữa chúng nên Redis pub/sub là đường duy nhất tới gateway; pub/sub không đảm bảo giao nên state thật phải ghi Postgres trước và client luôn có REST poll.",
+   "ifMissing": "Redis lỗi thì publishRealtimeEvent nuốt lỗi + log warn: nghiệp vụ vẫn thành công nhưng mọi event movie.* im lặng, client chỉ còn polling.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/movie-match/redis/movie-match-redis.provider.ts",
+     "line": 7,
+     "quote": "Client ioredis riêng của Movie Match — chỉ để publish realtime"
+    },
+    {
+     "file": "apps/core-api/src/modules/movie-match/redis/movie-match-redis.provider.ts",
+     "line": 14,
+     "quote": "createCoreRedisClient(config.getOrThrow('REDIS_URL', { infer: true })),"
+    },
+    {
+     "file": "apps/signaling-gateway/src/app/signaling.gateway.ts",
+     "line": 346,
+     "quote": ".psubscribe(REALTIME_USER_CHANNEL_PATTERN)"
+    }
+   ],
+   "label": "PUBLISH realtime:user",
+   "review": {
+    "verdict": "supported"
+   },
+   "logic": {
+    "verdict": "sound"
+   }
+  },
+  {
+   "id": "c5",
+   "with": "postgres",
+   "withKind": "infra",
+   "direction": "out",
+   "mechanism": "shared-db",
+   "endpoints": [
+    "e1",
+    "e2",
+    "e3",
+    "e4",
+    "e5",
+    "e6",
+    "e7",
+    "e8",
+    "e9",
+    "e10",
+    "e11",
+    "e12",
+    "e13"
+   ],
+   "what": "Ghi/đọc movie_sessions, movie_session_active_participants, movie_match_queue_entries, movie_session_messages; dùng pg_advisory_xact_lock cho matcher ẩn danh và khoá dòng pessimistic_write cho các bước đổi phase.",
+   "why": "PK user_id của movie_session_active_participants là chốt DB cho 'một user một phiên active' (2 partial index đơn cột không bắt được xung đột chéo low/high); advisory lock chặn hai matcher cùng ghép một ứng viên; khoá dòng làm rating/finish/dismiss tuần tự để quyết mutual-like đúng. Advisory lock là một khoá toàn cục duy nhất cho mọi người dùng (không chia theo region/tuổi), nên ghép ẩn danh tuần tự toàn cluster.",
+   "ifMissing": "Race: một user nằm trong 2 phiên active, hai người cùng ghép một ứng viên, hoặc hai rating đồng thời chốt outcome khác nhau; chat retry sinh tin nhắn trùng.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/movie-match/movie-match.service.ts",
+     "line": 153,
+     "quote": "await manager.insert(MovieSessionActiveParticipant, ["
+    },
+    {
+     "file": "apps/core-api/src/modules/movie-match/movie-match.service.ts",
+     "line": 680,
+     "quote": "await manager.query('SELECT pg_advisory_xact_lock(hashtext($1))', ["
+    },
+    {
+     "file": "apps/core-api/src/modules/movie-match/entities/movie-session-active-participant.entity.ts",
+     "line": 18,
+     "quote": "@Entity({ name: 'movie_session_active_participants' })"
+    }
+   ],
+   "label": "phiên, hàng đợi, chat",
+   "review": {
+    "verdict": "supported"
+   },
+   "logic": {
+    "verdict": "sound"
+   }
+  },
+  {
+   "id": "c6",
+   "with": "web",
+   "withKind": "client",
+   "direction": "in",
+   "mechanism": "http",
+   "endpoints": [
+    "e1",
+    "e2",
+    "e3",
+    "e4",
+    "e5",
+    "e6",
+    "e7",
+    "e8",
+    "e9",
+    "e10",
+    "e11",
+    "e12",
+    "e13"
+   ],
+   "what": "Web gọi REST của module và tự phát video bằng YouTube IFrame API: gửi PATCH state khi user play/pause/seek, nội suy vị trí từ positionSeconds + (now - positionUpdatedAt), poll GET /anon/current mỗi 5s khi queued/watching/rating. Ngoài ra web nghe 4 event movie.* qua socket (xem entry socket riêng).",
+   "why": "Server chỉ giữ state, không stream/proxy video nên client phải tự phát và tự nội suy. Flow ẩn danh không publish realtime khi ghép xong, rating, dismiss hay chat mới (chỉ playback + reaction), nên chỉ poll mới thấy các chuyển phase đó.",
+   "ifMissing": "Không có client phát/đồng bộ thì không có video để xem chung; không poll thì người chờ trong hàng đợi không bao giờ biết đã được ghép và bên kia không thấy rating/huỷ.",
+   "evidence": [
+    {
+     "file": "apps/web/src/features/movie-match/components/youtube-player.tsx",
+     "line": 120,
+     "quote": "playerRef.current = new YT.Player(elementId, {"
+    },
+    {
+     "file": "apps/web/src/features/movie-match/anon-api.ts",
+     "line": 18,
+     "quote": "export const MOVIE_ANON_CURRENT_REFETCH_INTERVAL_MS = 5_000;"
+    },
+    {
+     "file": "apps/web/src/features/movie-match/components/movie-session-view.tsx",
+     "line": 33,
+     "quote": "const elapsed = (nowMs - new Date(positionUpdatedAt).getTime()) / 1000;"
+    }
+   ],
+   "label": "REST + YouTube IFrame",
+   "review": {
+    "verdict": "supported"
+   },
+   "logic": {
+    "verdict": "sound"
+   }
+  },
+  {
+   "id": "c51",
+   "with": "web",
+   "withKind": "client",
+   "direction": "out",
+   "mechanism": "socket",
+   "endpoints": [
+    "e14",
+    "e15",
+    "e16",
+    "e17"
+   ],
+   "label": "movie.* → refetch/hiệu ứng",
+   "what": "Web đăng ký useRealtimeEvent cho movie.session.started (trang movie-match mở phòng khi người kia khởi tạo), movie.state.changed (invalidate/refetch session, cả friend lẫn anon), movie.session.ended (đóng phòng friend) và movie.reaction.sent (hiện emoji nổi).",
+   "why": "Hai người xem phải thấy play/pause/seek của nhau gần tức thì nên state được đẩy qua gateway; payload chỉ là gợi ý refetch (REST GET vẫn là nguồn sự thật) trừ reaction là realtime-only không persist nên mất event là mất hiệu ứng. Flow ẩn danh không phát event khi ghép xong/rating/chat nên các chuyển phase đó chỉ lấy được bằng poll.",
+   "ifMissing": "Playback lệch vài giây theo chu kỳ poll (5s anon, 10s friend), người kia không tự được kéo vào phòng khi phiên bạn bè bắt đầu, reaction không bao giờ hiện.",
+   "evidence": [
+    {
+     "file": "apps/web/src/app/(app)/movie-match/page.tsx",
+     "line": 31,
+     "quote": "RealtimeEvents.MovieSessionStarted,"
+    },
+    {
+     "file": "apps/web/src/features/movie-match/components/movie-session-view.tsx",
+     "line": 52,
+     "quote": "RealtimeEvents.MovieStateChanged,"
+    },
+    {
+     "file": "apps/web/src/features/movie-match/components/anon-match-view.tsx",
+     "line": 202,
+     "quote": "RealtimeEvents.MovieReactionSent,"
+    }
+   ],
+   "review": {
+    "verdict": "supported"
+   },
+   "logic": {
+    "verdict": "sound"
+   }
+  },
+  {
+   "id": "c52",
+   "with": "external:youtube",
+   "withKind": "external",
+   "direction": "both",
+   "mechanism": "config",
+   "endpoints": [
+    "e1",
+    "e5"
+   ],
+   "label": "whitelist host YouTube",
+   "what": "Server chỉ kiểm hostname videoUrl theo MOVIE_MATCH_ALLOWED_VIDEO_HOSTS (mặc định youtube.com,youtu.be, kèm mọi subdomain) và tự chọn video anon từ MOVIE_MATCH_ANON_VIDEO_URLS; web thì chỉ phát được URL mà extractYoutubeVideoId hiểu (youtube.com/watch?v=, youtu.be/) qua YouTube IFrame API.",
+   "why": "Server không stream hay proxy video, client tự tải player của YouTube; vì vậy tập host server cho phép phải là tập con của những gì player web phát được. Hai bên sửa độc lập (env vs mã web) nên là một hợp đồng ngầm: server chấp nhận music.youtube.com nhưng web trả null videoId.",
+   "ifMissing": "Thêm host khác hoặc subdomain vào env: phiên tạo thành công (201) nhưng cả hai client không có video để phát; pool anon trỏ tới URL không phải YouTube thì mọi phiên ẩn danh ghép được mà không xem được.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/movie-match/movie-match.service.ts",
+     "line": 934,
+     "quote": ".getOrThrow('MOVIE_MATCH_ALLOWED_VIDEO_HOSTS', { infer: true })"
+    },
+    {
+     "file": "apps/web/src/features/movie-match/youtube-url.ts",
+     "line": 17,
+     "quote": "if (host === 'youtu.be') {"
+    }
+   ],
+   "review": {
+    "verdict": "supported"
+   },
+   "logic": {
+    "verdict": "sound"
+   }
+  }
+ ],
+ "waivedEdges": [],
+ "excludedRoutes": [],
+ "notes": [
+  "Doc lỗi thời: docs/services/movie-match-service.md § 1 viết module 'chỉ phụ thuộc friend và realtime-gateway', nhưng code còn import SafetyModule (SafetyService.canPair khi ghép ẩn danh); chính § 9 của doc mới nhắc điều này.",
+  "Doc/comment lỗi thời: § 2-3 của doc, docstring MovieMatchService và entity MovieSession nói 'không có bảng message riêng, chat đi qua Conversation' chỉ đúng cho friend mode; flow ẩn danh có bảng movie_session_messages riêng (2 người chưa là bạn nên chưa có Conversation).",
+  "Doc § 7 chỉ liệt kê 3 event movie.*; code phát thêm movie.reaction.sent (nhánh ẩn danh). docs/services/realtime-gateway.md § 4 (bảng producer) cũng không liệt kê movie-match/mini-game dù § 2 có tên event.",
+  "Doc § 5.5 'không có timer, session không tự hết hạn' chỉ đúng friend mode: phiên ẩn danh có expiresAt nhưng xử lý LAZY khi có request (module không có @Cron/@Interval/@OnEvent nên không có endpoint kind job/consumer). Hết giờ chỉ mở phase rating; MovieMatchOutcome.Expired và MovieSessionEndReason.Replaced có trong enum nhưng không nhánh code nào set.",
+  "Realtime của flow ẩn danh rất mỏng (chỉ 5 call site publishRealtimeEvent trong service): chỉ playback (movie.state.changed) và reaction. joinAnonQueue (ghép xong), rateAnon, dismissAnonCurrent và chat KHÔNG publish; movie.session.ended chỉ phát ở friend mode. Web phải poll GET /anon/current và GET messages mỗi 5s.",
+  "Xác nhận bằng code — lệch quy ước 'publish SAU commit' (docs/03 § 3.7, realtime-gateway.md § 3): publishAnonPlayback được gọi BÊN TRONG callback dataSource.transaction ở updateAnonState (movie-match.service.ts:438) và endAnonWatch (:459) nên event movie.state.changed rời đi trước khi transaction commit (nguy cơ event \"ma\" nếu commit lỗi, hoặc client refetch trước commit thấy trạng thái cũ); nhánh friend-mode (updateState :209-212, endSession :249-278) publish đúng sau khi ghi xong. Vì publishRealtimeEvent nuốt lỗi và payload chỉ là gợi ý refetch nên hậu quả thực tế nhỏ, nhưng vẫn là vi phạm quy ước.",
+  "Xác nhận bằng đọc code (chưa chạy): getSessionForParticipant (movie-match.service.ts:659-674) chỉ kiểm tra caller là participant, KHÔNG lọc session.mode; MovieSessionDto.from luôn gán partnerUserId (dto/movie-match.dtos.ts:67,79) và friend-mode GET/PATCH/POST end dùng chính hàm đó. Participant của phiên ẨN DANH biết sessionId (anon state view có trả) nên có thể GET /movie-match/sessions/:id để lấy userId đối phương trước mutual-like, phá ẩn danh (trái giả định M5 trong docs/plans/2026-07-15-ui-contract-completion.md). Cũng có thể PATCH /sessions/:id/state (updateState :199, không lock, không lazy-expire) hoặc POST /sessions/:id/end (endSession :244: set status ended + xoá active-participant + phát movie.session.ended) lên phiên ẩn danh, bỏ qua phase rating và outcome của luồng anon.",
+  "NGHI VẤN: friend-mode createSession chỉ gọi areFriends, không gọi SafetyService (block/report); module safety không đụng tới Friendship nên người bị chặn mà vẫn là bạn có thể mở phiên và đẩy realtime tới người chặn. Friend chat thì có check block (friend.service.ts:346). Chưa xác minh bằng chạy thật.",
+  "Mỗi user phải gọi DELETE /anon/current để rời kết quả terminal: completeAnonSession và rateAnon không xoá dòng movie_session_active_participants, và phase rating không có hạn chót; trong lúc đó mở phiên bạn bè bị 409 MOVIE_SESSION_ALREADY_ACTIVE còn vào lại queue chỉ trả state phiên cũ.",
+  "Không có kiểm tra isGuest ở cả friend lẫn anonymous flow (JwtAuthGuard toàn cục cho guest qua); docs/06 chỉ giới hạn guest ở nạp diamond, điểm quy đổi và quota match. Mọi REST endpoint chỉ dùng JWT toàn cục, không có @Public hay @RequireRoles; duy nhất reaction có @Throttle riêng 60/phút.",
+  "Không có inbound DI: slice tĩnh báo inbound=[], chỉ AppModule import MovieMatchModule; index.ts export MovieMatchService 'để dành' theo blueprint. Kỹ thuật queue ghép ẩn danh (advisory lock + PK queue + PK active-participant) được sao chép từ Palm Match, không dùng chung code và không dùng queue Redis của Matching.",
+  "Server không gọi YouTube hay media-server: chỉ whitelist hostname videoUrl bằng new URL() (MOVIE_MATCH_ALLOWED_VIDEO_HOSTS, so khớp hostname === host hoặc hostname.endsWith(`.${host}`) nên nhận cả music.youtube.com/studio.youtube.com); anonymous mode lấy video từ MOVIE_MATCH_ANON_VIDEO_URLS (pool rỗng → 409 ANON_VIDEO_POOL_EMPTY). Web thì chỉ trích videoId từ host youtube.com/youtu.be sau khi bỏ www./m. (youtube-url.ts:15-25), nên URL subdomain khác hoặc host được thêm vào env mà web không hiểu sẽ qua được server nhưng không phát được. Endpoint socket-emit ghi auth internal cho đồng nhất với các module khác (socket nhận event đã qua handshake JWT ở signaling-gateway).",
+  "Kỹ thuật ghép ẩn danh dùng 1 advisory lock DUY NHẤT toàn cục (pg_advisory_xact_lock(hashtext(MOVIE_MATCH_ADVISORY_LOCK_KEY)), movie-match.service.ts:679-683; blocking, không phải try-lock) nên mọi joinAnonQueue/dismiss trên mọi pod tuần tự hoá qua một khoá Postgres, khác Matching (queue Redis chia shard theo matchType/region/ageBand). Đúng cho correctness, nhưng là điểm nghẽn thông lượng khi tính capacity-roadmap."
+ ],
+ "tagline": "Phiên xem chung 2 người, playback state",
+ "techniques": [
+  {
+   "slug": "jwt-bearer",
+   "name": "JWT bearer (access token không trạng thái)",
+   "model": "JWT bearer",
+   "how": "Client gửi access token (JWT) trong header Authorization; guard xác minh chữ ký và hạn rồi gắn user vào request, server không giữ phiên.",
+   "why": "Không trạng thái nên scale ngang dễ và không phải tra DB mỗi request; đánh đổi là không thu hồi tức thì trước khi token hết hạn.",
+   "alternative": "Session phía server (cookie + kho phiên) thu hồi được tức thì nhưng cần kho phiên dùng chung.",
+   "endpoints": [
+    "e1",
+    "e2",
+    "e3",
+    "e4",
+    "e5",
+    "e6",
+    "e7",
+    "e8",
+    "e9",
+    "e10",
+    "e11",
+    "e12",
+    "e13"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/app/app.module.ts",
+     "line": 117,
+     "quote": "{ provide: APP_GUARD, useClass: JwtAuthGuard },"
+    }
+   ],
+   "auto": true,
+   "count": 13,
+   "id": "t1",
+   "local": "Mọi endpoint của service được bảo vệ bởi `JwtAuthGuard` đăng ký qua `APP_GUARD` toàn cục trong app.module.ts, nên cần bearer JWT hợp lệ mới vào được controller."
+  },
+  {
+   "slug": "rebac-relationship",
+   "name": "Kiểm tra theo quan hệ (bạn bè, block, thành viên phòng)",
+   "model": "ReBAC",
+   "how": "Cho phép hoặc chặn dựa trên quan hệ giữa hai người: bạn bè, block, cùng phòng.",
+   "why": "Quyền trong mạng xã hội phụ thuộc quan hệ động chứ không phải vai trò cố định.",
+   "endpoints": [
+    "e1",
+    "e5"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/movie-match/movie-match.service.ts",
+     "line": 123,
+     "quote": "if (!(await this.friendService.areFriends(userId, friendUserId))) {"
+    }
+   ],
+   "auto": true,
+   "count": 2,
+   "id": "t2",
+   "local": "Tạo phiên xem chung chỉ cho bạn bè: `friendService.areFriends(userId, friendUserId)` sai thì ném `MovieMatchErrors.NOT_FRIEND`."
+  },
+  {
+   "id": "t3",
+   "slug": "server-authoritative",
+   "name": "Server là nguồn sự thật về giá/quyền (client không quyết)",
+   "model": "Server quyết định",
+   "how": "Giá, số dư, trạng thái và quyền do server tính; client chỉ gửi ý định.",
+   "why": "Client có thể bị sửa nên mọi thứ liên quan tiền hoặc quyền phải do server quyết.",
+   "endpoints": [
+    "e5"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/movie-match/movie-match.service.ts",
+     "line": 292,
+     "quote": "Server tự chọn video từ config"
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "local": "Server tự chọn video anon từ MOVIE_MATCH_ANON_VIDEO_URLS, client không gửi URL nên người lạ không ép video tuỳ ý.",
+   "addedByLogicReview": true
+  },
+  {
+   "slug": "idempotency-key",
+   "name": "Idempotency-Key (client sinh, server khử trùng)",
+   "model": "Idempotency-Key",
+   "how": "Client gửi khoá duy nhất cho mỗi thao tác; server lưu khoá (unique) và trả lại kết quả cũ khi gặp lại.",
+   "why": "Retry mạng không tạo bản ghi hoặc trừ tiền hai lần.",
+   "endpoints": [
+    "e11"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/movie-match/entities/movie-match-anon.entities.ts",
+     "line": 46,
+     "quote": "idempotencyKey!: string;"
+    },
+    {
+     "file": "apps/core-api/src/modules/movie-match/movie-match.constants.ts",
+     "line": 23,
+     "quote": "export function movieMessageIdempotencyKey("
+    },
+    {
+     "file": "apps/core-api/src/modules/movie-match/movie-match.controller.ts",
+     "line": 26,
+     "quote": "ApiIdempotencyKeyHeader,"
+    }
+   ],
+   "auto": true,
+   "count": 12,
+   "id": "t4",
+   "local": "Chỉ chat ẩn danh (e11) bắt Idempotency-Key: cột idempotencyKey unique với prefix movieMessageIdempotencyKey; cùng key khác nội dung trả 409 MESSAGE_IDEMPOTENCY_CONFLICT; tạo phiên bạn bè idempotent theo cặp."
+  },
+  {
+   "slug": "db-transaction",
+   "name": "Transaction DB (một đơn vị công việc)",
+   "model": "Transaction",
+   "how": "Gói nhiều thao tác ghi vào một transaction: cùng commit hoặc cùng rollback.",
+   "why": "Tránh trạng thái nửa vời khi lỗi giữa chừng.",
+   "endpoints": [
+    "e1",
+    "e3",
+    "e5",
+    "e6",
+    "e7",
+    "e8",
+    "e9",
+    "e10"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/movie-match/movie-match.service.ts",
+     "line": 139,
+     "quote": "created = await this.dataSource.transaction(async (manager) => {"
+    }
+   ],
+   "auto": true,
+   "count": 8,
+   "id": "t5",
+   "local": "Tạo phiên và các bước ghép ẩn danh chạy trong `this.dataSource.transaction(async (manager) => ...)` để ghi session và trạng thái cùng một đơn vị công việc."
+  },
+  {
+   "slug": "entity-manager-propagation",
+   "name": "Truyền EntityManager giữa module (chung một transaction)",
+   "model": "Chung transaction",
+   "how": "Module sở hữu dữ liệu nhận EntityManager của giao dịch đang chạy để việc của nó nằm trong cùng transaction.",
+   "why": "Nhiều module dùng chung DB nên atomicity xuyên module không cần saga hay 2PC.",
+   "alternative": "Saga/outbox xuyên service: cần khi tách deployable, thừa khi cùng process.",
+   "endpoints": [
+    "e5",
+    "e7",
+    "e6",
+    "e8",
+    "e9",
+    "e10"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/movie-match/movie-match.service.ts",
+     "line": 679,
+     "quote": "private async lockAnonMatcher(manager: EntityManager): Promise<void> {"
+    }
+   ],
+   "auto": true,
+   "count": 6,
+   "id": "t6",
+   "local": "Flow ẩn danh truyền `manager: EntityManager` vào helper như `lockAnonMatcher(manager)` để lock và đọc/ghi cùng transaction."
+  },
+  {
+   "slug": "pessimistic-lock",
+   "name": "Khoá bi quan (SELECT … FOR UPDATE)",
+   "model": "Khoá bi quan",
+   "how": "SELECT … FOR UPDATE khoá hàng đang xử lý để giao dịch khác phải chờ.",
+   "why": "Chặn hai request song song cùng đọc rồi cùng ghi (race) trên số dư, ticket, session.",
+   "alternative": "Khoá lạc quan (version) ít chờ hơn nhưng phải retry khi xung đột.",
+   "endpoints": [
+    "e7",
+    "e5",
+    "e6",
+    "e8",
+    "e9",
+    "e10"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/movie-match/movie-match.service.ts",
+     "line": 400,
+     "quote": "lock: { mode: 'pessimistic_write' },"
+    }
+   ],
+   "auto": true,
+   "count": 3,
+   "id": "t7",
+   "local": "Khi ghép/kết thúc ẩn danh, `manager.findOne(MovieSession, { lock: { mode: 'pessimistic_write' } })` khoá dòng session đang active."
+  },
+  {
+   "slug": "unique-constraint-guard",
+   "name": "Ràng buộc unique ở DB làm chốt chặn cuối",
+   "model": "Ràng buộc DB",
+   "how": "Ràng buộc unique hoặc index duy nhất ở DB là chốt chặn cuối cho trùng lặp.",
+   "why": "Check-rồi-insert ở tầng code vẫn dính race; DB mới bảo đảm tuyệt đối.",
+   "endpoints": [
+    "e1",
+    "e5",
+    "e11"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/movie-match/entities/movie-match-anon.entities.ts",
+     "line": 45,
+     "quote": "@Column({ type: 'varchar', length: 255, unique: true })"
+    },
+    {
+     "file": "apps/core-api/src/modules/movie-match/movie-match.service.ts",
+     "line": 160,
+     "quote": "if (!isUniqueViolation(err)) throw err;"
+    }
+   ],
+   "auto": true,
+   "count": 4,
+   "id": "t8",
+   "local": "Chống race tạo phiên: bắt `isUniqueViolation(err)` rồi đọc lại `findActiveByPair`; cột `idempotencyKey` có `unique: true` chặn tin nhắn trùng."
+  },
+  {
+   "slug": "advisory-lock",
+   "name": "Advisory lock (pg_advisory) để serialize / singleton",
+   "model": "Advisory lock",
+   "how": "pg_advisory_xact_lock khoá theo khoá logic, không cần có hàng cụ thể, giữ đến hết transaction.",
+   "why": "Tuần tự hoá việc không gắn với một hàng (ghép đôi, worker singleton).",
+   "endpoints": [
+    "e5",
+    "e7"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/movie-match/movie-match.service.ts",
+     "line": 680,
+     "quote": "await manager.query('SELECT pg_advisory_xact_lock(hashtext($1))', ["
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "id": "t9",
+   "local": "`lockAnonMatcher` chạy `pg_advisory_xact_lock(hashtext($1))` với `MOVIE_MATCH_ADVISORY_LOCK_KEY` để tuần tự hoá việc ghép đôi ẩn danh."
+  },
+  {
+   "slug": "append-only",
+   "name": "Bảng chỉ thêm (bất biến)",
+   "model": "Bất biến",
+   "how": "Bảng chỉ thêm, không sửa hoặc xoá dòng cũ.",
+   "why": "Giữ bằng chứng bất biến cho kiểm toán và xử lý báo cáo.",
+   "endpoints": [],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/movie-match/entities/movie-match-anon.entities.ts",
+     "line": 21,
+     "quote": "* Chat trong phiên ẩn danh — APPEND-ONLY, sống theo session (khác Friend Chat: 2 người CHƯA"
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "id": "t10",
+   "local": "Entity chat ẩn danh trong movie-match-anon.entities.ts được khai báo APPEND-ONLY: chỉ thêm tin, sống theo session, không sửa."
+  },
+  {
+   "id": "t11",
+   "slug": "redis-pubsub-fanout",
+   "name": "Redis pub/sub fanout (at-most-once, không replay)",
+   "model": "Pub/Sub",
+   "how": "core-api PUBLISH lên kênh realtime:user:{id}; gateway PSUBSCRIBE rồi đẩy xuống socket; không lưu, không replay.",
+   "why": "Sự kiện chỉ là gợi ý còn REST là nguồn sự thật nên at-most-once là đủ và rất rẻ.",
+   "alternative": "Redis Streams hoặc Kafka bền và replay được nhưng cần consumer group + ack: thừa với tin gợi ý.",
+   "endpoints": [
+    "e14",
+    "e15",
+    "e16",
+    "e17"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/movie-match/movie-match.service.ts",
+     "line": 182,
+     "quote": "publishRealtimeEvent(this.redis, this.logger, uid, envelope)"
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "local": "Bốn event movie.* được đóng gói `RealtimeEnvelope` rồi `publishRealtimeEvent(this.redis, ...)` tới từng participant qua Redis pub/sub; client lỡ thì đọc lại bằng REST."
+  },
+  {
+   "id": "t12",
+   "slug": "polling-fallback",
+   "name": "REST polling làm fallback cho realtime best-effort",
+   "model": "Polling dự phòng",
+   "how": "Client vẫn đọc trạng thái qua REST khi realtime rớt.",
+   "why": "Realtime best-effort nên cần đường dự phòng đúng đắn.",
+   "endpoints": [
+    "e4",
+    "e6",
+    "e12"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/web/src/features/movie-match/anon-api.ts",
+     "line": 18,
+     "quote": "MOVIE_ANON_CURRENT_REFETCH_INTERVAL_MS = 5_000"
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "local": "Web poll GET /anon/current và anon messages mỗi 5s (MOVIE_ANON_*_REFETCH_INTERVAL_MS), phiên bạn bè 10s; luồng ẩn danh không phát realtime khi ghép/rating/chat nên chỉ poll thấy.",
+   "addedByLogicReview": true
+  },
+  {
+   "id": "t13",
+   "slug": "publish-after-commit",
+   "name": "Chỉ publish sau khi commit",
+   "model": "Sau commit",
+   "how": "Chỉ phát realtime sau khi transaction commit.",
+   "why": "Không bắn sự kiện của giao dịch bị rollback.",
+   "endpoints": [
+    "e14",
+    "e16"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/movie-match/movie-match.service.ts",
+     "line": 180,
+     "quote": "await Promise.all("
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "local": "Event started/ended chỉ được publish sau khi transaction tạo hoặc kết thúc phiên đã commit, trong `Promise.all` trên hai userId."
+  },
+  {
+   "id": "t14",
+   "slug": "lazy-expiry",
+   "name": "Hết hạn lười (xử lý khi có request)",
+   "model": "Hết hạn lười",
+   "how": "Hết hạn được xử lý khi có request đụng tới, không cần job.",
+   "why": "Đúng đắn không phụ thuộc job; job chỉ để dọn.",
+   "endpoints": [
+    "e5",
+    "e6",
+    "e8",
+    "e9",
+    "e10"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/movie-match/movie-match.service.ts",
+     "line": 772,
+     "quote": "Hết giờ xem → mở phase rating"
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "local": "lazyExpireAnon đặt watchEndedAt = expiresAt và isPlaying=false khi request tới sau hạn, mở phase rating mà không terminal; không có @Cron/worker.",
+   "addedByLogicReview": true
+  },
+  {
+   "slug": "lazy-expiry",
+   "name": "Hết hạn lười (xử lý khi có request)",
+   "model": "Hết hạn lười",
+   "how": "Hết hạn được xử lý khi có request đụng tới, không cần job.",
+   "why": "Đúng đắn không phụ thuộc job; job chỉ để dọn.",
+   "endpoints": [],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/movie-match/entities/movie-session.entity.ts",
+     "line": 90,
+     "quote": "/** Deadline phiên ẩn danh (config MOVIE_MATCH_ANON_DURATION_SECONDS) — lazy expiry. */"
+    },
+    {
+     "file": "apps/core-api/src/modules/movie-match/movie-match.service.ts",
+     "line": 364,
+     "quote": "/** REST recovery/poll state — lazy expiry deadline server. */"
+    }
+   ],
+   "auto": true,
+   "count": 2,
+   "id": "t15",
+   "local": "Phiên ẩn danh có cột `expiresAt`; hết hạn được xử lý lười qua `expireAnonForUser(manager, userId)` khi `getAnonCurrent` được gọi, không có worker."
+  },
+  {
+   "slug": "rate-limit-throttler",
+   "name": "Rate limit (@nestjs/throttler)",
+   "model": "Rate limit",
+   "how": "@Throttle giới hạn số request theo khoảng thời gian cho từng route.",
+   "why": "Chặn spam và dò quét bằng cách giới hạn số request theo thời gian, trước khi request tới logic nghiệp vụ.",
+   "endpoints": [
+    "e13",
+    "e1",
+    "e2",
+    "e3",
+    "e4",
+    "e5",
+    "e6",
+    "e7",
+    "e8",
+    "e9",
+    "e10",
+    "e11",
+    "e12"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/movie-match/movie-match.controller.ts",
+     "line": 252,
+     "quote": "@Throttle({ default: { limit: 60, ttl: minutes(1) } })"
+    },
+    {
+     "file": "apps/core-api/src/app/app.module.ts",
+     "line": 116,
+     "quote": "{ provide: APP_GUARD, useClass: ThrottlerGuard },"
+    }
+   ],
+   "auto": true,
+   "count": 14,
+   "id": "t16",
+   "local": "Reaction ẩn danh giới hạn riêng `@Throttle({ default: { limit: 60, ttl: minutes(1) } })` ngoài ThrottlerGuard toàn cục."
+  },
+  {
+   "id": "t17",
+   "slug": "best-effort-degrade",
+   "name": "Best-effort: lỗi phụ không phá nghiệp vụ chính",
+   "model": "Best-effort",
+   "how": "Việc phụ (push, realtime) lỗi chỉ ghi log, không phá nghiệp vụ chính.",
+   "why": "Nghiệp vụ đã commit không nên hỏng vì kênh phụ.",
+   "endpoints": [
+    "e2",
+    "e8",
+    "e9",
+    "e13",
+    "e14",
+    "e15",
+    "e16",
+    "e17"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/common/realtime/publish-realtime.ts",
+     "line": 30,
+     "quote": "client còn polling fallback"
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "local": "publishRealtimeEvent bọc try/catch, lỗi Redis chỉ log warn; nghiệp vụ movie.* vẫn thành công và client dùng REST poll.",
+   "addedByLogicReview": true
+  },
+  {
+   "slug": "openapi-contract",
+   "name": "Hợp đồng OpenAPI + client sinh tự động",
+   "model": "OpenAPI",
+   "how": "OpenAPI sinh từ code và client TypeScript sinh tự động.",
+   "why": "Client và server không lệch hợp đồng.",
+   "endpoints": [
+    "e1",
+    "e2",
+    "e3",
+    "e4",
+    "e5",
+    "e6",
+    "e7",
+    "e8",
+    "e9",
+    "e10",
+    "e11",
+    "e12",
+    "e13"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/movie-match/movie-match.controller.ts",
+     "line": 52,
+     "quote": "@ApiOperation({"
+    }
+   ],
+   "auto": true,
+   "count": 13,
+   "id": "t18",
+   "local": "Controller mô tả từng route bằng `@ApiOperation` (vd POST sessions idempotent) để sinh hợp đồng OpenAPI."
+  },
+  {
+   "slug": "cursor-pagination",
+   "name": "Phân trang cursor (keyset)",
+   "model": "Keyset",
+   "how": "Phân trang theo cursor thay vì offset.",
+   "why": "Ổn định khi dữ liệu thay đổi và nhanh ở trang sâu.",
+   "endpoints": [
+    "e12"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/movie-match/movie-match.controller.ts",
+     "line": 236,
+     "quote": "@Query() query: CursorPageQueryDto,"
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "id": "t19",
+   "local": "`GET anon/sessions/:id/messages` nhận `@Query() query: CursorPageQueryDto` và trả `MovieMessagesPageDto` phân trang theo cursor."
+  },
+  {
+   "id": "t20",
+   "slug": "anti-enumeration",
+   "name": "Chống dò tài khoản",
+   "model": "Chống dò",
+   "how": "Phản hồi đồng nhất để không dò được tài khoản có tồn tại hay không.",
+   "why": "Chống thu thập người dùng.",
+   "endpoints": [
+    "e2",
+    "e3",
+    "e4",
+    "e8",
+    "e9",
+    "e10",
+    "e11",
+    "e12",
+    "e13"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/movie-match/movie-match.service.ts",
+     "line": 658,
+     "quote": "gộp 404 (docs/10 § 10.1.D"
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "local": "getSessionForParticipant/lockedAnonSession/anonSessionForParticipant gộp không tồn tại, sai mode và không phải participant thành cùng 404 NOT_FOUND (chống IDOR).",
+   "addedByLogicReview": true
+  },
+  {
+   "id": "t21",
+   "slug": "data-minimization",
+   "name": "Tối thiểu hoá dữ liệu trả về (ẩn danh, DTO công khai)",
+   "model": "Tối thiểu dữ liệu",
+   "how": "Chỉ trả trường cần thiết (DTO công khai, ẩn danh theo từng người nhận).",
+   "why": "Giảm rò rỉ dữ liệu: chỉ trả đúng các trường cần thiết cho người nhận thay vì cả bản ghi nội bộ.",
+   "endpoints": [
+    "e13",
+    "e17"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/movie-match/movie-match.service.ts",
+     "line": 610,
+     "quote": "KHÔNG persist, KHÔNG kèm userId"
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "local": "Reaction chỉ gồm sessionId + emoji whitelist, không persist và không kèm userId; anonView trả vai trò tương đối nên không lộ partner trước khi mutual-like.",
+   "addedByLogicReview": true
+  }
+ ]
+}

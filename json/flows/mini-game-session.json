@@ -1,0 +1,289 @@
+{
+ "id": "mini-game-session",
+ "title": "Mini game giữa hai bạn bè",
+ "summary": "Một bạn mời bạn bè chơi oẳn tù tì, hai bên nộp move ẩn theo lượt; mini-game phải hỏi friend xem hai người có là bạn không, ghi phiên vào PostgreSQL rồi báo realtime qua Redis và signaling-gateway tới web.",
+ "caption": "Tạo phiên (kiểm tra bạn bè, ghi DB, báo realtime) rồi nộp move; khi đủ 2 move thì server chốt thắng thua và báo cả hai bên.",
+ "participants": [
+  {
+   "id": "web",
+   "label": "Web client",
+   "kind": "client"
+  },
+  {
+   "id": "mini-game",
+   "label": "Mini Game",
+   "kind": "service"
+  },
+  {
+   "id": "friend",
+   "label": "Friend",
+   "kind": "service"
+  },
+  {
+   "id": "postgres",
+   "label": "PostgreSQL",
+   "kind": "infra"
+  },
+  {
+   "id": "redis",
+   "label": "Redis",
+   "kind": "infra"
+  },
+  {
+   "id": "signaling-gateway",
+   "label": "Signaling Gateway",
+   "kind": "service"
+  }
+ ],
+ "steps": [
+  {
+   "from": "web",
+   "to": "mini-game",
+   "label": "POST /mini-game/sessions: mời bạn chơi",
+   "kind": "call",
+   "mechanism": "http"
+  },
+  {
+   "from": "mini-game",
+   "to": "friend",
+   "label": "Hỏi areFriends(userId, friendUserId)",
+   "kind": "call",
+   "mechanism": "di-call",
+   "note": "Nếu không phải bạn thì ném DomainException NOT_FRIEND (404) trước khi chạm DB.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/mini-game/mini-game.service.ts",
+     "line": 71,
+     "quote": "if (!(await this.friendService.areFriends(userId, friendUserId))) {"
+    }
+   ]
+  },
+  {
+   "from": "mini-game",
+   "to": "postgres",
+   "label": "Chuẩn hoá cặp user rồi tìm ván đang chờ của cặp này",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "note": "Nếu đã có ván chờ thì trả luôn, không tạo mới.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/mini-game/mini-game.service.ts",
+     "line": 301,
+     "quote": "return this.sessionRepo.findOneBy({"
+    }
+   ]
+  },
+  {
+   "from": "mini-game",
+   "to": "postgres",
+   "label": "Lưu MiniGameSession và 2 dòng MiniGameActiveParticipant",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "note": "Unique violation thì rollback cả transaction rồi đọc lại cặp để phân biệt replay với 409 ALREADY_WAITING.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/mini-game/mini-game.service.ts",
+     "line": 86,
+     "quote": "created = await this.dataSource.transaction(async (manager) => {"
+    }
+   ]
+  },
+  {
+   "from": "mini-game",
+   "to": "redis",
+   "label": "Publish MiniGameSessionStarted cho cả hai user",
+   "kind": "async",
+   "mechanism": "redis-pubsub",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/mini-game/mini-game.service.ts",
+     "line": 130,
+     "quote": "publishRealtimeEvent(this.redis, this.logger, uid, envelope),"
+    },
+    {
+     "file": "apps/core-api/src/common/realtime/redis-realtime-publisher.adapter.ts",
+     "line": 11,
+     "quote": "return this.redis.publish(channel, payload);"
+    }
+   ]
+  },
+  {
+   "from": "redis",
+   "to": "signaling-gateway",
+   "label": "Gateway PSUBSCRIBE realtime:user:* nhận envelope",
+   "kind": "async",
+   "mechanism": "redis-pubsub",
+   "evidence": [
+    {
+     "file": "apps/signaling-gateway/src/app/signaling.gateway.ts",
+     "line": 346,
+     "quote": ".psubscribe(REALTIME_USER_CHANNEL_PATTERN)"
+    }
+   ]
+  },
+  {
+   "from": "signaling-gateway",
+   "to": "web",
+   "label": "Đẩy minigame.session.started xuống socket của hai bạn",
+   "kind": "async",
+   "mechanism": "socket",
+   "evidence": [
+    {
+     "file": "apps/signaling-gateway/src/app/signaling.gateway.ts",
+     "line": 346,
+     "quote": ".psubscribe(REALTIME_USER_CHANNEL_PATTERN)"
+    }
+   ]
+  },
+  {
+   "from": "mini-game",
+   "to": "web",
+   "label": "Trả phiên vừa tạo cho người mời",
+   "kind": "return",
+   "mechanism": "http"
+  },
+  {
+   "from": "web",
+   "to": "mini-game",
+   "label": "POST /mini-game/sessions/:id/moves: nộp move",
+   "kind": "call",
+   "mechanism": "http"
+  },
+  {
+   "from": "mini-game",
+   "to": "postgres",
+   "label": "Đọc phiên, kiểm tra người nộp là participant",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/mini-game/mini-game.service.ts",
+     "line": 313,
+     "quote": "const session = await this.sessionRepo.findOneBy({ id: sessionId });"
+    }
+   ]
+  },
+  {
+   "from": "mini-game",
+   "to": "postgres",
+   "label": "UPDATE move có điều kiện; đủ 2 move thì chốt thắng thua, xoá participant",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "note": "Update 0 dòng thì 409 MOVE_ALREADY_SUBMITTED. Mới 1 move thì không resolve và không publish.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/mini-game/mini-game.service.ts",
+     "line": 155,
+     "quote": "await this.dataSource.transaction(async (manager) => {"
+    }
+   ]
+  },
+  {
+   "from": "mini-game",
+   "to": "redis",
+   "label": "Publish MiniGameSessionResolved (2 move + người thắng) cho cả hai",
+   "kind": "async",
+   "mechanism": "redis-pubsub",
+   "note": "Chỉ chạy khi ván đã resolved.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/mini-game/mini-game.service.ts",
+     "line": 232,
+     "quote": "publishRealtimeEvent(this.redis, this.logger, uid, envelope),"
+    },
+    {
+     "file": "apps/core-api/src/common/realtime/redis-realtime-publisher.adapter.ts",
+     "line": 11,
+     "quote": "return this.redis.publish(channel, payload);"
+    }
+   ]
+  },
+  {
+   "from": "redis",
+   "to": "signaling-gateway",
+   "label": "Gateway nhận envelope kết quả qua realtime:user:*",
+   "kind": "async",
+   "mechanism": "redis-pubsub",
+   "evidence": [
+    {
+     "file": "apps/signaling-gateway/src/app/signaling.gateway.ts",
+     "line": 346,
+     "quote": ".psubscribe(REALTIME_USER_CHANNEL_PATTERN)"
+    }
+   ]
+  },
+  {
+   "from": "signaling-gateway",
+   "to": "web",
+   "label": "Đẩy kết quả thắng/thua xuống socket của hai bạn",
+   "kind": "async",
+   "mechanism": "socket",
+   "evidence": [
+    {
+     "file": "apps/signaling-gateway/src/app/signaling.gateway.ts",
+     "line": 346,
+     "quote": ".psubscribe(REALTIME_USER_CHANNEL_PATTERN)"
+    }
+   ]
+  },
+  {
+   "from": "mini-game",
+   "to": "web",
+   "label": "Trả phiên đã cập nhật cho người vừa nộp",
+   "kind": "return",
+   "mechanism": "http"
+  }
+ ],
+ "groups": [
+  {
+   "from": 4,
+   "to": 4,
+   "label": "Transaction tạo phiên + participant",
+   "kind": "transaction"
+  },
+  {
+   "from": 5,
+   "to": 7,
+   "label": "Publish sau khi commit, lỗi chỉ log warn",
+   "kind": "besteffort"
+  },
+  {
+   "from": 11,
+   "to": 11,
+   "label": "Transaction nộp move và chốt kết quả",
+   "kind": "transaction"
+  },
+  {
+   "from": 12,
+   "to": 14,
+   "label": "Publish sau khi commit, lỗi chỉ log warn",
+   "kind": "besteffort"
+  }
+ ],
+ "invariants": [
+  "Phiên và 2 dòng MiniGameActiveParticipant được ghi trong cùng 1 transaction, nên unique violation rollback cả hai và không để lại row mồ côi; mỗi user chỉ chờ move ở 1 ván.",
+  "Nộp move dùng UPDATE có điều kiện (move IS NULL và status waiting_moves) trong transaction, nên double-submit hoặc ván đã chốt trả 409 và không đổi được move đã nộp.",
+  "Chỉ publish realtime sau khi transaction đã xong; khi mới có 1 move thì không publish gì, nên không lộ move của đối phương.",
+  "Friend sở hữu quan hệ bạn bè, nên mini-game phải hỏi friend.areFriends trước khi tạo phiên thay vì tự đọc bảng bạn bè."
+ ],
+ "failureModes": [
+  {
+   "when": "Hai người chưa là bạn hoặc tự mời chính mình",
+   "effect": "Ném DomainException NOT_FRIEND (404), không ghi DB, không publish."
+  },
+  {
+   "when": "Request khác vừa tạo phiên trước (unique violation)",
+   "effect": "Transaction rollback; đọc lại cặp, nếu đúng cặp thì trả phiên cũ, nếu không thì 409 ALREADY_WAITING."
+  },
+  {
+   "when": "Nộp move lần 2 hoặc ván không còn chờ move",
+   "effect": "UPDATE 0 dòng, ném 409 MOVE_ALREADY_SUBMITTED, transaction rollback."
+  },
+  {
+   "when": "Redis publish thất bại",
+   "effect": "publishRealtimeEvent bắt lỗi và chỉ logger.warn; DB đã commit và HTTP vẫn trả thành công, client dùng polling fallback."
+  }
+ ],
+ "dataIssues": [],
+ "uncertain": []
+}

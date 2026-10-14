@@ -1,0 +1,508 @@
+{
+ "id": "app-shell",
+ "title": "App shell (health, capabilities)",
+ "tagline": "Health probe và hợp đồng capabilities",
+ "deployable": "core-api",
+ "role": "Cung cấp /health, /health/live, /health/ready (probe cho Docker/k8s) và GET /api/v1/capabilities (hợp đồng tính năng runtime cho web/admin). Không có bảng riêng, không chứa business logic; chỉ kiểm tra Postgres/Redis và phản chiếu cấu hình env của các module khác.",
+ "owns": [
+  "không sở hữu bảng/khoá Redis nào (readiness mở kết nối ioredis riêng chỉ để PING)"
+ ],
+ "confidence": "high",
+ "endpoints": [
+  {
+   "id": "e1",
+   "kind": "rest",
+   "method": "GET",
+   "path": "/health",
+   "purpose": "Alias liveness cũ: trả { status: 'ok', uptimeSeconds }, không gọi dependency, @Public và @SkipThrottle.",
+   "auth": "public",
+   "file": "apps/core-api/src/app/health.controller.ts",
+   "line": 18,
+   "quote": "@Get()"
+  },
+  {
+   "id": "e2",
+   "kind": "rest",
+   "method": "GET",
+   "path": "/health/live",
+   "purpose": "Liveness: chỉ cho biết process còn chạy (dùng cho Docker HEALTHCHECK và k8s livenessProbe), không chạm Postgres/Redis, @Public và @SkipThrottle.",
+   "auth": "public",
+   "file": "apps/core-api/src/app/health.controller.ts",
+   "line": 26,
+   "quote": "@Get('live')"
+  },
+  {
+   "id": "e3",
+   "kind": "rest",
+   "method": "GET",
+   "path": "/health/ready",
+   "purpose": "Readiness: chạy song song SELECT 1 trên Postgres và PING Redis (timeout 1s), trả 503 nếu một trong hai down để orchestrator rút pod khỏi load balancer; @Public, throttle 30/phút.",
+   "auth": "public",
+   "file": "apps/core-api/src/app/health.controller.ts",
+   "line": 36,
+   "quote": "@Get('ready')"
+  },
+  {
+   "id": "e4",
+   "kind": "rest",
+   "method": "GET",
+   "path": "/api/v1/capabilities",
+   "purpose": "Trả CapabilitiesDto (auth.phoneOtp/google/apple/facebook/guest, topUp.web/native, video, notifications.push) suy ra từ env thật và danh sách bảo trì CAPABILITY_MAINTENANCE_FEATURES; @Public, @SkipThrottle.",
+   "auth": "public",
+   "file": "apps/core-api/src/app/capabilities.controller.ts",
+   "line": 16,
+   "quote": "@Get()"
+  }
+ ],
+ "collaborators": [
+  {
+   "id": "c50",
+   "with": "postgres",
+   "withKind": "infra",
+   "direction": "out",
+   "mechanism": "shared-db",
+   "endpoints": [
+    "e3"
+   ],
+   "label": "SELECT 1 kiểm sống",
+   "what": "ReadinessService.checkPostgres chạy dataSource.query('SELECT 1') với timeout 1s qua DataSource TypeORM dùng chung.",
+   "why": "core-api không thể phục vụ request nghiệp vụ nếu không có Postgres (nguồn sự thật duy nhất của mọi module), nên pod chỉ được nhận traffic khi truy vấn đơn giản này thành công; timeout 1s tránh probe treo làm kubelet kẹt.",
+   "ifMissing": "Pod mới lên hoặc mất DB vẫn được cân bằng tải vào, mọi request trả 500 thay vì bị rút khỏi rotation.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/app/readiness.service.ts",
+     "line": 57,
+     "quote": "await this.withTimeout(this.dataSource.query('SELECT 1'), 1_000);"
+    }
+   ],
+   "review": {
+    "verdict": "supported"
+   },
+   "logic": {
+    "verdict": "sound"
+   }
+  },
+  {
+   "id": "c51",
+   "with": "redis",
+   "withKind": "infra",
+   "direction": "out",
+   "mechanism": "redis-state",
+   "endpoints": [
+    "e3"
+   ],
+   "label": "PING Redis kiểm sống",
+   "what": "ReadinessService giữ một ioredis riêng (lazyConnect, không retry, không offline queue) và gọi PING với timeout 1s.",
+   "why": "Redis phục vụ rate limit, realtime publish và presence nên mất Redis làm core-api suy giảm; probe dùng client riêng không retry để kết quả phản ánh trạng thái thật ngay lập tức và không làm nhiễu client nghiệp vụ.",
+   "ifMissing": "Redis chết mà readiness vẫn xanh: rate limit/realtime hỏng im lặng và orchestrator không phát hiện.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/app/readiness.service.ts",
+     "line": 67,
+     "quote": "await this.withTimeout(this.redis.ping(), 1_000);"
+    }
+   ],
+   "review": {
+    "verdict": "supported"
+   },
+   "logic": {
+    "verdict": "sound"
+   }
+  },
+  {
+   "id": "c52",
+   "with": "web",
+   "withKind": "client",
+   "direction": "in",
+   "mechanism": "http",
+   "endpoints": [
+    "e4"
+   ],
+   "label": "đọc capabilities để bật nút",
+   "what": "apps/web useCapabilities gọi GET /api/v1/capabilities (staleTime Infinity, retry false); login-form dùng isCapabilityUsable để bật/tắt phoneOtp, guest, Google/Apple/Facebook (kèm clientId), top-up dùng topUp.*.",
+   "why": "Khả năng thật (provider có credential hay không, đang bảo trì không) chỉ server biết; contract yêu cầu frontend không tự suy từ build env, nên client phải hỏi để không hiện nút đăng nhập/nạp tiền mà server sẽ từ chối.",
+   "ifMissing": "Web hiện nút Google/OTP/nạp tiền chưa cấu hình rồi nhận lỗi 400/403 khi bấm; không thể bảo trì từng tính năng từ server.",
+   "evidence": [
+    {
+     "file": "apps/web/src/shared/capabilities/api.ts",
+     "line": 24,
+     "quote": "const response = await apiClient.GET('/api/v1/capabilities');"
+    }
+   ],
+   "review": {
+    "verdict": "supported"
+   },
+   "logic": {
+    "verdict": "sound"
+   }
+  },
+  {
+   "id": "c53",
+   "with": "admin-console",
+   "withKind": "client",
+   "direction": "in",
+   "mechanism": "http",
+   "endpoints": [
+    "e4"
+   ],
+   "label": "capabilities cho trang login",
+   "what": "apps/admin có bản useCapabilities riêng gọi cùng /api/v1/capabilities; login-page kiểm isCapabilityUsable(auth.phoneOtp) và các provider trước khi cho đăng nhập.",
+   "why": "Admin cũng đăng nhập qua module auth nên cần biết phương thức nào đang bật; dùng chung hợp đồng runtime thay vì env build để một lần deploy server đổi được cả hai frontend.",
+   "ifMissing": "Admin console hiện phương thức đăng nhập không dùng được hoặc phải hard-code theo env build.",
+   "evidence": [
+    {
+     "file": "apps/admin/src/shared/capabilities/api.ts",
+     "line": 24,
+     "quote": "const response = await apiClient.GET('/api/v1/capabilities');"
+    }
+   ],
+   "review": {
+    "verdict": "supported"
+   },
+   "logic": {
+    "verdict": "sound"
+   }
+  },
+  {
+   "id": "c54",
+   "with": "auth",
+   "withKind": "service",
+   "direction": "out",
+   "mechanism": "config",
+   "endpoints": [
+    "e4"
+   ],
+   "label": "phản chiếu cờ đăng nhập",
+   "what": "CapabilitiesService đọc AUTH_PHONE_OTP_ENABLED, AUTH_GOOGLE_CLIENT_ID, AUTH_APPLE_CLIENT_ID, AUTH_FACEBOOK_APP_ID/SECRET để tính auth.* và trả clientId cho client.",
+   "why": "Chính các env này quyết định AuthService có cho đăng nhập hay không (assertPhoneOtpEnabled trả 403, SocialVerifierService từ chối provider chưa cấu hình), nên capabilities phải đọc đúng cùng nguồn để không nói 'enabled' khi auth sẽ từ chối.",
+   "ifMissing": "Hai nơi lệch nhau: UI báo đăng nhập khả dụng nhưng /auth/* trả 403/400.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/app/capabilities.service.ts",
+     "line": 191,
+     "quote": "const configured = this.config.getOrThrow('AUTH_PHONE_OTP_ENABLED', {"
+    }
+   ],
+   "review": {
+    "verdict": "supported"
+   },
+   "logic": {
+    "verdict": "sound"
+   }
+  },
+  {
+   "id": "c55",
+   "with": "economy",
+   "withKind": "service",
+   "direction": "out",
+   "mechanism": "config",
+   "endpoints": [
+    "e4"
+   ],
+   "label": "phản chiếu cờ nạp tiền",
+   "what": "CapabilitiesService đọc ECONOMY_IAP_VERIFIER, ECONOMY_APPLE_SHARED_SECRET, ECONOMY_GOOGLE_* và PAYOS_* để tính topUp.web/native/nativeApple/nativeGoogle.",
+   "why": "Economy chỉ xác nhận được giao dịch khi verifier (dev/store/disabled) và credential PayOS/Apple/Google đúng cấu hình; client phải biết trước kênh nạp nào dùng được để không dẫn người dùng vào luồng thanh toán server không xác nhận được (suy luận).",
+   "ifMissing": "Hiển thị gói nạp cho kênh chưa có credential, khiến giao dịch thất bại sau khi người dùng đã bắt đầu thanh toán.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/app/capabilities.service.ts",
+     "line": 47,
+     "quote": "const iapVerifier = this.config.getOrThrow('ECONOMY_IAP_VERIFIER', {"
+    }
+   ],
+   "review": {
+    "verdict": "supported"
+   },
+   "logic": {
+    "verdict": "sound",
+    "note": "Đúng với code: mode disabled/thiếu credential PayOS bị Economy từ chối; bỏ marker '(suy luận)'.",
+    "viaVerify": "V3"
+   }
+  },
+  {
+   "id": "c56",
+   "with": "notification",
+   "withKind": "service",
+   "direction": "out",
+   "mechanism": "config",
+   "endpoints": [
+    "e4"
+   ],
+   "label": "phản chiếu cờ push",
+   "what": "CapabilitiesService đọc NOTIFICATION_PUSH_PROVIDER (dev|fcm|apns|disabled) để tính notifications.push.",
+   "why": "Push di động được chọn bằng NOTIFICATION_PUSH_PROVIDER ở common/platform (dev adapter bị cấm ở production, dev-platform-adapters.ts:33-37); web-push là port riêng bật bằng WEB_PUSH_ENABLED mà capabilities không phản ánh. Hiện chỉ \"dev\" ngoài production ra Beta, mọi giá trị khác kể cả fcm/apns đã cấu hình ra Disabled (capabilities.service.ts:158-166).",
+   "ifMissing": "Hợp đồng báo push Disabled ở production dù FCM/APNs/web-push có thể đang gửi được; chưa có client đọc cờ này nên chưa có UI sai, nhưng client nào bắt đầu dựa vào nó sẽ ẩn tính năng push đang chạy.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/app/capabilities.service.ts",
+     "line": 63,
+     "quote": "const pushProvider = this.config.getOrThrow('NOTIFICATION_PUSH_PROVIDER', {"
+    }
+   ],
+   "review": {
+    "verdict": "supported"
+   },
+   "logic": {
+    "verdict": "sound"
+   }
+  },
+  {
+   "id": "c57",
+   "with": "short-video",
+   "withKind": "service",
+   "direction": "out",
+   "mechanism": "config",
+   "endpoints": [
+    "e4"
+   ],
+   "label": "phản chiếu cờ upload video",
+   "what": "CapabilitiesService đọc VIDEO_UPLOAD_ENABLED và NODE_ENV để tính video.upload/video.transcode (chỉ Beta ngoài production).",
+   "why": "ShortVideoService từ chối upload khi VIDEO_UPLOAD_ENABLED tắt và production chưa có adapter storage/transcode thật; capabilities phải cùng điều kiện để client không mời người dùng tải video lên rồi bị từ chối.",
+   "ifMissing": "Nút tải video hiện ở production dù server không có adapter xử lý video.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/app/capabilities.service.ts",
+     "line": 60,
+     "quote": "const videoEnabled = this.config.getOrThrow('VIDEO_UPLOAD_ENABLED', {"
+    }
+   ],
+   "review": {
+    "verdict": "supported"
+   },
+   "logic": {
+    "verdict": "sound"
+   }
+  },
+  {
+   "id": "c58",
+   "with": "external:kubernetes-docker",
+   "withKind": "external",
+   "direction": "in",
+   "mechanism": "http",
+   "endpoints": [
+    "e2",
+    "e3"
+   ],
+   "label": "probe live/ready",
+   "what": "Orchestrator gọi trực tiếp /health/live và /health/ready (không có prefix /api/v1): Docker HEALTHCHECK (apps/core-api/Dockerfile) và k8s livenessProbe dùng live, k8s readinessProbe và docker-compose.dev.yml dùng ready.",
+   "why": "Probe tách làm hai: live không chạm Postgres/Redis (chỉ biết process còn sống), ready chạy SELECT 1 + PING Redis (timeout 1s) rồi trả 503 để orchestrator rút pod khỏi load balancer. Path phải khớp tường minh với route ngoài global prefix (comment k8s/base/core-api/deployment.yaml).",
+   "ifMissing": "Orchestrator không phát hiện pod treo hoặc mất DB/Redis: pod chết vẫn nhận traffic hoặc không được khởi động lại.",
+   "evidence": [
+    {
+     "file": "k8s/base/core-api/deployment.yaml",
+     "line": 68,
+     "quote": "path: /health/live"
+    },
+    {
+     "file": "k8s/base/core-api/deployment.yaml",
+     "line": 76,
+     "quote": "path: /health/ready"
+    },
+    {
+     "file": "apps/core-api/Dockerfile",
+     "line": 15,
+     "quote": "CMD wget -qO- http://127.0.0.1:3000/health/live >/dev/null || exit 1"
+    }
+   ],
+   "review": {
+    "verdict": "supported"
+   },
+   "logic": {
+    "verdict": "sound"
+   }
+  }
+ ],
+ "waivedEdges": [],
+ "excludedRoutes": [],
+ "notes": [
+  "Health/capabilities KHÔNG có prefix /api/v1 cho /health* (k8s/base/core-api/deployment.yaml ghi rõ); /capabilities nằm dưới /api/v1.",
+  "Readiness chỉ kiểm Postgres (SELECT 1) và Redis (PING), timeout 1s mỗi cái; không kiểm Kafka, LiveKit hay nhà cung cấp ngoài. /health/live không gọi dependency nào.",
+  "Docker HEALTHCHECK (apps/core-api/Dockerfile, deploy/hosted) dùng /health/live; k8s dùng live cho liveness và ready cho readiness; docker-compose.dev.yml dùng /health/ready.",
+  "CapabilitiesService.notifications.push chỉ trả Beta khi NOTIFICATION_PUSH_PROVIDER=\"dev\" ngoài production, còn lại luôn Disabled (capabilities.service.ts:155-167). Đã đối chiếu: push di động (fcm/apns/dev/disabled) chọn qua NOTIFICATION_PUSH_PROVIDER ở platform.module.ts, còn web-push là WebPushNotificationPort riêng bật bằng WEB_PUSH_ENABLED (web-push-notification.adapter.ts:23) và NotificationService.sendPush gọi cả hai. Capabilities không đọc WEB_PUSH_ENABLED và không có nhánh Enabled cho fcm/apns, nên trong production cờ luôn Disabled dù push có thể đang chạy. Hiện không client nào trong apps/web, apps/admin đọc notifications.push (chỉ auth.* và topUp.* dùng isCapabilityUsable), nên đây là lệch hợp đồng chưa gây lỗi UI; cần chủ module xác nhận ý định.",
+  "Cấu hình topUp.web coi PayOS sẵn sàng khi đủ PAYOS_CLIENT_ID/API_KEY/CHECKSUM_KEY và có redirect URL; capabilities không gọi PayOS nên 'enabled' chỉ nghĩa là đã cấu hình, không phải PayOS đang sống.",
+  "Không có docs/services cho app-shell; mô tả dựa trên code."
+ ],
+ "techniques": [
+  {
+   "slug": "global-guard-public-optout",
+   "name": "Guard toàn cục + @Public() để mở",
+   "model": "Mặc định đóng",
+   "how": "Guard JWT đăng ký toàn cục; route nào muốn mở phải gắn @Public() tường minh.",
+   "why": "An toàn theo mặc định: quên cấu hình thì bị chặn chứ không bị mở.",
+   "alternative": "Gắn guard từng controller: dễ sót route.",
+   "endpoints": [
+    "e1",
+    "e2",
+    "e3",
+    "e4"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/app/health.controller.ts",
+     "line": 16,
+     "quote": "@Public()"
+    },
+    {
+     "file": "apps/core-api/src/app/capabilities.controller.ts",
+     "line": 14,
+     "quote": "@Public()"
+    }
+   ],
+   "auto": true,
+   "count": 8,
+   "id": "t1",
+   "local": "HealthController và CapabilitiesController gắn @Public() cùng @SkipThrottle() để probe và capabilities không cần JWT."
+  },
+  {
+   "id": "t2",
+   "slug": "derived-state",
+   "name": "Trạng thái suy ra từ dữ liệu gốc/thời gian (không lưu cờ)",
+   "model": "Trạng thái suy ra",
+   "how": "Trạng thái được tính lại từ dữ liệu gốc và giờ server mỗi lần đọc, không lưu cờ.",
+   "why": "Không cần timer hay job để chuyển trạng thái và không có cờ bị lệch.",
+   "endpoints": [
+    "e4"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/app/capabilities.service.ts",
+     "line": 23,
+     "quote": "'CAPABILITY_MAINTENANCE_FEATURES'"
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "local": "CapabilitiesDto không lưu trữ: mỗi lần gọi tính lại từ env thật (credential, NODE_ENV) cộng danh sách CAPABILITY_MAINTENANCE_FEATURES, nên trạng thái luôn khớp cấu hình đang chạy.",
+   "addedByLogicReview": true
+  },
+  {
+   "slug": "rate-limit-throttler",
+   "name": "Rate limit (@nestjs/throttler)",
+   "model": "Rate limit",
+   "how": "@Throttle giới hạn số request theo khoảng thời gian cho từng route.",
+   "why": "Chặn spam và dò quét bằng cách giới hạn số request theo thời gian, trước khi request tới logic nghiệp vụ.",
+   "endpoints": [
+    "e3"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/app/health.controller.ts",
+     "line": 35,
+     "quote": "@Throttle({ default: { limit: 30, ttl: minutes(1) } })"
+    },
+    {
+     "file": "apps/core-api/src/app/app.module.ts",
+     "line": 116,
+     "quote": "{ provide: APP_GUARD, useClass: ThrottlerGuard },"
+    }
+   ],
+   "auto": true,
+   "count": 2,
+   "id": "t3",
+   "local": "Chỉ GET /health/ready có @Throttle 30 lần/phút; /health, /health/live và /capabilities (e4) gắn @SkipThrottle nên không chịu ThrottlerGuard."
+  },
+  {
+   "id": "t4",
+   "slug": "fail-closed",
+   "name": "Lỗi thì chặn (fail closed)",
+   "model": "Fail closed",
+   "how": "Khi thành phần kiểm tra lỗi thì từ chối thay vì cho qua.",
+   "why": "An toàn hơn khi mất Redis hoặc quota.",
+   "endpoints": [
+    "e3"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/app/readiness.service.ts",
+     "line": 60,
+     "quote": "return 'down';"
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "local": "ReadinessService coi lỗi hoặc timeout 1s của SELECT 1 / PING Redis là 'down', trả 503 để orchestrator rút pod thay vì giả định dependency còn sống.",
+   "addedByLogicReview": true
+  },
+  {
+   "slug": "openapi-contract",
+   "name": "Hợp đồng OpenAPI + client sinh tự động",
+   "model": "OpenAPI",
+   "how": "OpenAPI sinh từ code và client TypeScript sinh tự động.",
+   "why": "Client và server không lệch hợp đồng.",
+   "endpoints": [
+    "e1",
+    "e2",
+    "e3",
+    "e4"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/app/health.controller.ts",
+     "line": 19,
+     "quote": "@ApiOperation({ summary: 'Liveness check tương thích endpoint cũ' })"
+    },
+    {
+     "file": "apps/core-api/src/app/capabilities.controller.ts",
+     "line": 17,
+     "quote": "@ApiOperation({"
+    }
+   ],
+   "auto": true,
+   "count": 4,
+   "id": "t5",
+   "local": "Các route health và capabilities có @ApiOperation mô tả hợp đồng, capabilities là contract runtime cho mọi frontend."
+  },
+  {
+   "id": "t6",
+   "slug": "data-minimization",
+   "name": "Tối thiểu hoá dữ liệu trả về (ẩn danh, DTO công khai)",
+   "model": "Tối thiểu dữ liệu",
+   "how": "Chỉ trả trường cần thiết (DTO công khai, ẩn danh theo từng người nhận).",
+   "why": "Giảm rò rỉ dữ liệu: chỉ trả đúng các trường cần thiết cho người nhận thay vì cả bản ghi nội bộ.",
+   "endpoints": [
+    "e4"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/app/capabilities.service.ts",
+     "line": 186,
+     "quote": "clientId: available && clientId !== '' ? clientId : null,"
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "local": "Endpoint public chỉ trả clientId (không bí mật) và chỉ khi provider available; secret như AUTH_FACEBOOK_APP_SECRET, PAYOS_API_KEY chỉ dùng để tính cờ, không đưa vào response.",
+   "addedByLogicReview": true
+  },
+  {
+   "slug": "health-readiness",
+   "name": "Liveness / readiness probe",
+   "model": "Probe",
+   "how": "Liveness và readiness probe cho orchestrator.",
+   "why": "K8s biết khi nào gửi traffic hoặc khởi động lại.",
+   "endpoints": [
+    "e1",
+    "e2",
+    "e3"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/app/health.controller.ts",
+     "line": 14,
+     "quote": "constructor(private readonly readiness: ReadinessService) {}"
+    }
+   ],
+   "auto": true,
+   "count": 2,
+   "id": "t7",
+   "local": "HealthController tách live, ready dùng ReadinessService (Postgres và Redis) cho liveness/readiness probe."
+  }
+ ]
+}

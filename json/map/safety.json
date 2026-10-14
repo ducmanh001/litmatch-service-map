@@ -1,0 +1,784 @@
+{
+ "id": "safety",
+ "title": "Safety (Trust & Safety)",
+ "tagline": "Report, block và luật ẩn người dùng",
+ "deployable": "core-api",
+ "role": "Sở hữu log append-only Report/Block, trust-score penalty chống vote-kick và các câu hỏi đồng bộ 'hai người này có được thấy/ghép/nhắn nhau không' (isBlocked, getBlockedUserIds, getHiddenUserIds, canPair). KHÔNG sở hữu ban tài khoản (UserStatus.Banned nằm ở User/Admin), không sở hữu video/feed (module gọi tự validate target) và không áp penalty lên hàng đợi matching (Matching tự đọc trustScore).",
+ "owns": [
+  "bảng reports (append-only; chỉ cột status pending|resolved|dismissed được sửa bởi moderator; targetType user|video)",
+  "bảng blocks (log action blocked|unblocked; trạng thái = dòng mới nhất theo cặp)",
+  "unique index uq_reports_video_reporter (1 người report 1 video 1 lần)"
+ ],
+ "confidence": "high",
+ "endpoints": [
+  {
+   "id": "e1",
+   "kind": "rest",
+   "method": "POST",
+   "path": "/api/v1/safety/reports",
+   "purpose": "Report 1 user: chặn tự report, khoá dòng users của target rồi ghi Report + trừ trust score (1 report hiệu lực/cặp/SAFETY_REPORT_COOLDOWN_DAYS, trần SAFETY_TRUST_PENALTY_DAILY_CAP/ngày) trong CÙNG transaction; throttle 10 report/giờ/tài khoản.",
+   "auth": "jwt",
+   "file": "apps/core-api/src/modules/safety/safety.controller.ts",
+   "line": 33,
+   "quote": "@Post('reports')"
+  },
+  {
+   "id": "e2",
+   "kind": "rest",
+   "method": "POST",
+   "path": "/api/v1/safety/blocks/:targetUserId",
+   "purpose": "Block target (idempotent): chặn tự block, xác nhận target tồn tại, ghi dòng action=blocked nếu dòng mới nhất chưa là blocked; trả 204.",
+   "auth": "jwt",
+   "file": "apps/core-api/src/modules/safety/safety.controller.ts",
+   "line": 55,
+   "quote": "@Post('blocks/:targetUserId')"
+  },
+  {
+   "id": "e3",
+   "kind": "rest",
+   "method": "DELETE",
+   "path": "/api/v1/safety/blocks/:targetUserId",
+   "purpose": "Unblock target (idempotent): chỉ ghi dòng action=unblocked khi dòng mới nhất đang là blocked; trả 204.",
+   "auth": "jwt",
+   "file": "apps/core-api/src/modules/safety/safety.controller.ts",
+   "line": 65,
+   "quote": "@Delete('blocks/:targetUserId')"
+  },
+  {
+   "id": "e4",
+   "kind": "rest",
+   "method": "GET",
+   "path": "/api/v1/safety/blocks/:targetUserId",
+   "purpose": "Cho caller biết MÌNH có đang block target hay không (một chiều, không lộ việc bị block ngược).",
+   "auth": "jwt",
+   "file": "apps/core-api/src/modules/safety/safety.controller.ts",
+   "line": 75,
+   "quote": "@Get('blocks/:targetUserId')"
+  }
+ ],
+ "collaborators": [
+  {
+   "id": "c1",
+   "label": "kiểm tra target, trừ điểm",
+   "what": "UserService.getByIdOrThrow(targetUserId) trước khi report/block; UserService.adjustTrustScore(manager, targetUserId, -penalty, floor) với manager của transaction report.",
+   "why": "trustScore là cột của User nên chỉ User được sửa; Safety phải truyền EntityManager của mình để Report và điểm trừ commit/rollback cùng nhau (không lệch nếu một bước lỗi). getByIdOrThrow chặn report/block vào id không tồn tại.",
+   "ifMissing": "Có thể ghi Report/Block cho user không tồn tại; nếu trừ điểm ở transaction riêng thì Report có mà điểm không trừ (hoặc ngược lại) khi một bước fail.",
+   "with": "user",
+   "withKind": "service",
+   "direction": "out",
+   "mechanism": "di-call",
+   "endpoints": [
+    "e1",
+    "e2"
+   ],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/safety/safety.service.ts",
+     "line": 66,
+     "quote": "await this.userService.getByIdOrThrow(targetUserId);"
+    },
+    {
+     "file": "apps/core-api/src/modules/safety/safety.service.ts",
+     "line": 128,
+     "quote": "await this.userService.adjustTrustScore("
+    },
+    {
+     "file": "apps/core-api/src/modules/safety/safety.service.ts",
+     "line": 199,
+     "quote": "await this.userService.getByIdOrThrow(targetUserId);"
+    }
+   ],
+   "basis": "ast",
+   "logic": {
+    "verdict": "sound",
+    "note": "getByIdOrThrow chạy trước transaction; adjustTrustScore nhận manager của transaction report — đúng."
+   }
+  },
+  {
+   "id": "c2",
+   "label": "khoá dòng users của target",
+   "what": "manager.getRepository(User).findOne({ lock: pessimistic_write }) trên dòng users của target ngay đầu transaction report().",
+   "why": "Cooldown theo cặp và trần penalty/ngày được tính bằng cách đọc tổng đã áp rồi mới ghi. Hai report đồng thời của nhiều reporter sẽ cùng đọc tổng cũ và vượt trần, nên phải tuần tự hoá theo target trên dòng users bền vững (comment safety.service.ts:84-86).",
+   "ifMissing": "Report dồn dập đồng thời vượt SAFETY_TRUST_PENALTY_DAILY_CAP hoặc trừ trùng trong cùng cooldown, cho phép vote-kick đánh sập trust score.",
+   "with": "user",
+   "withKind": "service",
+   "direction": "out",
+   "mechanism": "shared-db",
+   "endpoints": [
+    "e1"
+   ],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/safety/safety.service.ts",
+     "line": 87,
+     "quote": "await manager.getRepository(User).findOne({"
+    }
+   ],
+   "basis": "ast",
+   "logic": {
+    "verdict": "sound",
+    "note": "findOne pessimistic_write trên User target ở đầu transaction trước khi đọc tổng penalty/cooldown — đúng comment 84-86."
+   }
+  },
+  {
+   "id": "c3",
+   "label": "reports/blocks append-only",
+   "what": "Ghi và truy vấn reports/blocks; trạng thái block = dòng mới nhất theo cặp (findOne ORDER BY createdAt DESC, DISTINCT ON cho tập 2 chiều); canPair đọc report/block trong cửa sổ SAFETY_REMATCH_COOLDOWN_DAYS, còn getHiddenUserIds lấy mọi report từng có (không theo cooldown).",
+   "why": "Log append-only giữ toàn bộ lịch sử block/unblock/report cho điều tra T&S (docs/06: hành động nhạy cảm không được xoá), nên 'đang block' phải suy từ dòng mới nhất thay vì sửa một dòng trạng thái.",
+   "ifMissing": "Mất lịch sử điều tra, không có nguồn sự thật chung để Feed, Friend, Discovery, Matching cùng kiểm tra cùng một luật block/report.",
+   "with": "postgres",
+   "withKind": "infra",
+   "direction": "out",
+   "mechanism": "shared-db",
+   "endpoints": [
+    "e1",
+    "e2",
+    "e3",
+    "e4"
+   ],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/safety/entities/block.entity.ts",
+     "line": 20,
+     "quote": "@Entity({ name: 'blocks' })"
+    },
+    {
+     "file": "apps/core-api/src/modules/safety/entities/report.entity.ts",
+     "line": 42,
+     "quote": "@Entity({ name: 'reports' })"
+    }
+   ],
+   "review": {
+    "verdict": "supported"
+   },
+   "logic": {
+    "verdict": "corrected",
+    "note": "getHiddenUserIds đọc mọi report của cặp, không giới hạn cửa sổ cooldown; chỉ canPair dùng cooldown."
+   }
+  },
+  {
+   "id": "c4",
+   "label": "queue + đổi status report",
+   "what": "AdminService.listReports gọi SafetyService.findReportsPage(filter, limit, offset); resolveReport/dismissReport gọi setReportStatus(manager, reportId, status) trong cùng transaction với auditLogService.record.",
+   "why": "Chỉ Safety sở hữu bảng reports nên admin phải đi qua nó; nhận manager để đổi status và audit log commit cùng nhau (hành động nhạy cảm không được thành công một nửa, cùng pattern UserService.banUser). Chỉ cột status được mutate.",
+   "ifMissing": "Moderator không có queue để xem report; hoặc resolve/dismiss mà thiếu audit log, hoặc admin sửa trực tiếp bảng của Safety.",
+   "with": "admin",
+   "withKind": "service",
+   "direction": "in",
+   "mechanism": "di-call",
+   "endpoints": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/admin/admin.service.ts",
+     "line": 112,
+     "quote": "return this.safetyService.findReportsPage(filter, limit, offset);"
+    },
+    {
+     "file": "apps/core-api/src/modules/admin/admin.service.ts",
+     "line": 129,
+     "quote": "const report = await this.safetyService.setReportStatus("
+    }
+   ],
+   "basis": "ast",
+   "logic": {
+    "verdict": "sound",
+    "note": "AdminService.setReportStatus mở dataSource.transaction, gọi safetyService.setReportStatus(manager) rồi auditLogService.record — đúng."
+   }
+  },
+  {
+   "id": "c5",
+   "label": "lọc người bị ẩn (discovery)",
+   "what": "DiscoveryService.browse và NearbyService gọi SafetyService.getHiddenUserIds(userId) rồi nối vào excludeUserIds của query ứng viên.",
+   "why": "Discovery chỉ biết thông tin hồ sơ; tập 'đã block 2 chiều hoặc từng report nhau' do Safety giữ. Phải lấy tập ẩn một lần cho cả trang rồi loại ở query (gọi từng ứng viên sẽ N+1); report ẩn vĩnh viễn vì reports là append-only.",
+   "ifMissing": "Người dùng vẫn thấy người họ vừa block/report (hoặc người đã block họ) trong danh sách duyệt và nearby, kể cả sau khi bấm block.",
+   "with": "discovery",
+   "withKind": "service",
+   "direction": "in",
+   "mechanism": "di-call",
+   "endpoints": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/discovery/discovery.service.ts",
+     "line": 49,
+     "quote": "const hiddenUserIds = await this.safetyService.getHiddenUserIds("
+    },
+    {
+     "file": "apps/core-api/src/modules/discovery/nearby.service.ts",
+     "line": 174,
+     "quote": "const hiddenUserIds = await this.safetyService.getHiddenUserIds("
+    }
+   ],
+   "basis": "ast",
+   "logic": {
+    "verdict": "sound",
+    "note": "Hidden-set = block 2 chiều + mọi report 2 chiều, vĩnh viễn (comment getHiddenUserIds); discovery/nearby lấy một lần cho cả trang."
+   }
+  },
+  {
+   "id": "c6",
+   "label": "loại tác giả bị block",
+   "what": "FeedService.listFeed gọi getBlockedUserIds(viewer) để NOT IN authorUserId; listUserTimeline gọi isBlocked 2 chiều rồi trả rỗng; StoryService (feed/services/story.service.ts) cũng lọc story, kiểm isBlocked 2 chiều khi xem và lọc người xem story theo getBlockedUserIds.",
+   "why": "Bài đăng thuộc Feed nhưng quan hệ block thuộc Safety. Feed lọc cả trang bằng một query tập id và với timeline trả rỗng (không throw) để không lộ trạng thái block bằng hành vi khác với 'chưa đăng bài' (oracle-safe).",
+   "ifMissing": "Bài của người đã block (hoặc người block mình) vẫn hiện trong feed và timeline, hoặc lỗi khác biệt làm lộ ai block ai.",
+   "with": "feed",
+   "withKind": "service",
+   "direction": "in",
+   "mechanism": "di-call",
+   "endpoints": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/feed/feed.service.ts",
+     "line": 103,
+     "quote": "const blockedIds = await this.safetyService.getBlockedUserIds(user.userId);"
+    },
+    {
+     "file": "apps/core-api/src/modules/feed/feed.service.ts",
+     "line": 150,
+     "quote": "(await this.safetyService.isBlocked(viewer.userId, authorUserId)) ||"
+    },
+    {
+     "file": "apps/core-api/src/modules/feed/feed.service.ts",
+     "line": 151,
+     "quote": "(await this.safetyService.isBlocked(authorUserId, viewer.userId));"
+    }
+   ],
+   "basis": "ast",
+   "logic": {
+    "verdict": "sound",
+    "note": "getBlockedUserIds 2 chiều; story.service.ts dùng cả isBlocked 2 chiều và getBlockedUserIds như mô tả."
+   }
+  },
+  {
+   "id": "c7",
+   "label": "chặn chat/gọi khi bị block",
+   "what": "FriendService.sendMessage gọi isBlocked(userId, partnerId) và isBlocked(partnerId, userId), nếu block trả CONVERSATION_NOT_FOUND 404; ProfileSocialService.canCall/assertNotBlocked kiểm block 2 chiều ngay trước khi mint token cuộc gọi/xem hành động hồ sơ.",
+   "why": "Block phải có hiệu lực ngay ở thời điểm GỬI/GỌI chứ không chỉ khi mở conversation: Friend giữ conversation nên phải hỏi Safety mỗi lần, và isBlocked chỉ một chiều nên phải gọi hai lần. Trả cùng mã lỗi với 'không phải thành viên' để không có oracle.",
+   "ifMissing": "Người bị block vẫn nhắn hoặc gọi được cho người đã block họ, hoặc mã lỗi khác biệt tiết lộ ai block ai.",
+   "with": "friend",
+   "withKind": "service",
+   "direction": "in",
+   "mechanism": "di-call",
+   "endpoints": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/friend/friend.service.ts",
+     "line": 346,
+     "quote": "(await this.safetyService.isBlocked(userId, partnerId)) ||"
+    },
+    {
+     "file": "apps/core-api/src/modules/friend/friend.service.ts",
+     "line": 347,
+     "quote": "(await this.safetyService.isBlocked(partnerId, userId))"
+    },
+    {
+     "file": "apps/core-api/src/modules/friend/services/profile-social.service.ts",
+     "line": 152,
+     "quote": "this.safetyService.isBlocked(userAId, userBId),"
+    }
+   ],
+   "basis": "ast",
+   "logic": {
+    "verdict": "sound",
+    "note": "friend.service.ts gọi isBlocked hai chiều rồi CONVERSATION_NOT_FOUND 404; canCall/assertNotBlocked kiểm 2 chiều."
+   }
+  },
+  {
+   "id": "c8",
+   "label": "canPair khi ghép; ẩn lời mời",
+   "what": "Matching gọi SafetyService.canPair(a, b) qua token MATCH_INTERACTION_POLICY (useExisting SafetyService) trong tryPair của matcher-worker và khi accept invite; invite.service còn gọi getHiddenUserIds khi tạo lời mời và khi đọc inbox.",
+   "why": "Block/report có thể phát sinh sau khi ticket vào hàng đợi hoặc lời mời được tạo (docs/10 § 10.0.C), nên chốt phải kiểm lại ĐÚNG lúc ghép/accept, không chỉ lúc enqueue. Lời gọi canPair được gọi khi transaction của Matching đang mở nhưng chạy trên kết nối riêng của Safety; kết quả quyết định có tạo MatchSession hay không.",
+   "ifMissing": "Hai người vừa block hoặc report nhau vẫn bị ghép/accept nếu một trong hai block sau lúc vào hàng đợi; inbox hiển thị lời mời từ người đã ẩn.",
+   "with": "matching",
+   "withKind": "service",
+   "direction": "in",
+   "mechanism": "di-call",
+   "endpoints": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/matching/services/invite.service.ts",
+     "line": 199,
+     "quote": "const hiddenInviterIds = await this.safetyService.getHiddenUserIds("
+    },
+    {
+     "file": "apps/core-api/src/modules/matching/services/invite.service.ts",
+     "line": 581,
+     "quote": "const hiddenIds = await this.safetyService.getHiddenUserIds(inviterId);"
+    }
+   ],
+   "basis": "ast",
+   "logic": {
+    "verdict": "corrected",
+    "note": "canPair không chạy trong transaction của Matching: không nhận manager, dùng repo của Safety (kết nối riêng)."
+   }
+  },
+  {
+   "id": "c9",
+   "label": "ẩn mood của người bị block",
+   "what": "MoodService.getPublicMood gọi getBlockedUserIds(viewerId) và trả null nếu targetId có trong tập (viewer khác target).",
+   "why": "Mood hiển thị trên hồ sơ/danh sách bạn; block 2 chiều phải che nó, và phải kiểm lại mỗi lần đọc (không cache) để unblock/block có hiệu lực ngay (docs/10 § 10.0.C). Chỉ xét block, không xét report.",
+   "ifMissing": "Người bị block vẫn thấy mood hiện tại của người block họ.",
+   "with": "mood",
+   "withKind": "service",
+   "direction": "in",
+   "mechanism": "di-call",
+   "endpoints": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/mood/mood.service.ts",
+     "line": 131,
+     "quote": "const blockedIds = await this.safetyService.getBlockedUserIds(viewerId);"
+    }
+   ],
+   "basis": "ast",
+   "logic": {
+    "verdict": "sound",
+    "note": "getPublicMood chỉ gọi getBlockedUserIds, không xét report, không cache — đúng."
+   }
+  },
+  {
+   "id": "c10",
+   "label": "canPair trong ghép movie",
+   "what": "MovieMatchService duyệt ứng viên trong hàng đợi và gọi SafetyService.canPair(userId, candidate.user_id) bên trong transaction ghép; false thì thử ứng viên kế tiếp.",
+   "why": "Movie-match có hàng đợi riêng (không đi qua Matching) nên tự phải kiểm block/report ĐÚNG lúc ghép, không tin trạng thái lúc enqueue. Lời gọi đồng bộ vì nó quyết định ứng viên nào thành đối tác của session.",
+   "ifMissing": "Hai người đã block/report nhau vẫn bị ghép xem phim cùng nhau.",
+   "with": "movie-match",
+   "withKind": "service",
+   "direction": "in",
+   "mechanism": "di-call",
+   "endpoints": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/movie-match/movie-match.service.ts",
+     "line": 338,
+     "quote": "if (await this.safetyService.canPair(userId, candidate.user_id)) {"
+    }
+   ],
+   "basis": "ast",
+   "logic": {
+    "verdict": "sound",
+    "note": "canPair gọi trong vòng lặp ứng viên bên trong transaction ghép, false thì thử người kế (movie-match.service.ts:338)."
+   }
+  },
+  {
+   "id": "c11",
+   "label": "canPair trong ghép palm",
+   "what": "PalmMatchService duyệt ứng viên hàng đợi và gọi SafetyService.canPair(userId, candidate.user_id) trong transaction ghép, bỏ qua ứng viên bị từ chối.",
+   "why": "Tương tự movie-match: hàng đợi palm tự quản nên phải hỏi Safety đúng lúc ghép; cặp bị block active hoặc có report/block trong SAFETY_REMATCH_COOLDOWN_DAYS không được gặp lại.",
+   "ifMissing": "Cặp đã block/report nhau vẫn được ghép palm match lại.",
+   "with": "palm-match",
+   "withKind": "service",
+   "direction": "in",
+   "mechanism": "di-call",
+   "endpoints": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/palm-match/palm-match.service.ts",
+     "line": 158,
+     "quote": "if (await this.safetyService.canPair(userId, candidate.user_id)) {"
+    }
+   ],
+   "basis": "ast",
+   "logic": {
+    "verdict": "sound",
+    "note": "palm-match tương tự; canPair gồm block active và report/block trong SAFETY_REMATCH_COOLDOWN_DAYS đúng code."
+   }
+  },
+  {
+   "id": "c12",
+   "label": "ghi report video, đếm",
+   "what": "ShortVideoService.reportVideo gọi SafetyService.reportVideo(reporterId, videoId, reason, description) và nhận distinctReporterCount để so VIDEO_REPORT_AUTOHIDE_THRESHOLD rồi tự ẩn video.",
+   "why": "Report nằm chung bảng reports (targetType=video) với unique (reporter, video); Safety trung lập, không biết bảng videos và không trừ trust score nên short-video phải tự validate video và tự quyết auto-hide dựa trên số reporter Safety trả về.",
+   "ifMissing": "Short-video phải tự dựng bảng report riêng, hoặc không có đếm distinct reporter nên không auto-hide được video bị report nhiều.",
+   "with": "short-video",
+   "withKind": "service",
+   "direction": "in",
+   "mechanism": "di-call",
+   "endpoints": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/short-video/short-video.service.ts",
+     "line": 490,
+     "quote": "const { distinctReporterCount } = await this.safetyService.reportVideo("
+    }
+   ],
+   "basis": "ast",
+   "logic": {
+    "verdict": "sound",
+    "note": "reportVideo không trừ trust score, bắt unique violation rồi trả distinctReporterCount; short-video tự so ngưỡng."
+   }
+  }
+ ],
+ "waivedEdges": [],
+ "excludedRoutes": [],
+ "notes": [
+  "Doc § 1 nói Report 'không có cột trạng thái mutable ở GĐ4'; code đã có Report.status (pending|resolved|dismissed) và SafetyService.setReportStatus do AdminService gọi trong cùng transaction với audit log (admin.service.ts:129). Doc § 5 'chưa có admin review' đã lỗi thời.",
+  "Doc § 1/§ 2 chỉ mô tả report user; code còn có Report.targetType=video, targetVideoId và SafetyService.reportVideo (short-video gọi) KHÔNG trừ trust score, trả distinctReporterCount để short-video tự quyết auto-hide.",
+  "Doc § 2 ghi report(): Promise<void> và adjustTrustScore(userId, -delta, reason, manager?); code trả Promise<Report> và UserService.adjustTrustScore(manager, userId, delta, floor) (clamp bằng GREATEST(floor, trust_score + delta) trong SQL).",
+  "SafetyService.getHiddenUserIds (Discovery/Matching invite) không có trong doc: hợp của block active 2 chiều và MỌI report từng tồn tại giữa cặp, vĩnh viễn, bất kể status (kể cả dismissed/resolved) và không theo SAFETY_REPORT_COOLDOWN_DAYS. Khác canPair (có cooldown SAFETY_REMATCH_COOLDOWN_DAYS).",
+  "isBlocked chỉ một chiều; Feed (listUserTimeline), Friend (sendMessage, canCall) phải tự gọi hai lần đảo chiều, còn getBlockedUserIds và canPair đã xét 2 chiều. Dễ sót nếu module mới chỉ gọi một chiều.",
+  "Ràng buộc 'không ghép khi block/report' đi qua token DI MATCH_INTERACTION_POLICY (matching.module.ts:70 useExisting SafetyService; gọi ở matcher-worker.service.ts:277 và invite.service.ts:475) nên AST không thấy lời gọi canPair của Matching; collaborator c8 mô tả cả hai.",
+  "Safety không có kiểm tra ban: user bị Banned chặn ở User/auth, không qua SafetyService. Party-room, calling mint token trực tiếp, gift, soul-match không gọi Safety (chỉ Friend.canCall gián tiếp bảo vệ cuộc gọi); ngoài các module trong danh sách inbound không có nơi nào enforce block."
+ ],
+ "techniques": [
+  {
+   "id": "t1",
+   "slug": "other:idempotent-write",
+   "name": "Ghi idempotent theo dòng mới nhất",
+   "how": "block khi dòng mới nhất đã là blocked và unblock khi chưa blocked đều return sớm không ghi dòng thừa nên gọi lặp (retry/double tap) vô hại, trả 204.",
+   "why": "block khi dòng mới nhất đã là blocked và unblock khi chưa blocked đều return sớm không ghi dòng thừa nên gọi lặp (retry/double tap) vô hại, trả 204.",
+   "endpoints": [
+    "e2",
+    "e3"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/safety/safety.service.ts",
+     "line": 201,
+     "quote": "if (latest === BlockAction.Blocked) return;"
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "local": "block khi dòng mới nhất đã là blocked và unblock khi chưa blocked đều return sớm không ghi dòng thừa nên gọi lặp (retry/double tap) vô hại, trả 204.",
+   "addedByLogicReview": true
+  },
+  {
+   "id": "t2",
+   "slug": "other:pair-cooldown",
+   "name": "Cooldown trừ điểm theo cặp reporter-target",
+   "how": "Cùng một reporter report lại cùng target trong SAFETY_REPORT_COOLDOWN_DAYS vẫn được ghi làm bằng chứng nhưng trustPenaltyApplied = 0, chống vote-kick lặp.",
+   "why": "Cùng một reporter report lại cùng target trong SAFETY_REPORT_COOLDOWN_DAYS vẫn được ghi làm bằng chứng nhưng trustPenaltyApplied = 0, chống vote-kick lặp.",
+   "endpoints": [
+    "e1"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/safety/safety.service.ts",
+     "line": 93,
+     "quote": "const alreadyPenalizedThisPair ="
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "local": "Cùng một reporter report lại cùng target trong SAFETY_REPORT_COOLDOWN_DAYS vẫn được ghi làm bằng chứng nhưng trustPenaltyApplied = 0, chống vote-kick lặp.",
+   "addedByLogicReview": true
+  },
+  {
+   "slug": "jwt-bearer",
+   "name": "JWT bearer (access token không trạng thái)",
+   "model": "JWT bearer",
+   "how": "Client gửi access token (JWT) trong header Authorization; guard xác minh chữ ký và hạn rồi gắn user vào request, server không giữ phiên.",
+   "why": "Không trạng thái nên scale ngang dễ và không phải tra DB mỗi request; đánh đổi là không thu hồi tức thì trước khi token hết hạn.",
+   "alternative": "Session phía server (cookie + kho phiên) thu hồi được tức thì nhưng cần kho phiên dùng chung.",
+   "endpoints": [
+    "e1",
+    "e2",
+    "e3",
+    "e4"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/app/app.module.ts",
+     "line": 117,
+     "quote": "{ provide: APP_GUARD, useClass: JwtAuthGuard },"
+    }
+   ],
+   "auto": true,
+   "count": 4,
+   "id": "t3",
+   "local": "Các route /safety/* (report, block, unblock, trạng thái block) được JwtAuthGuard toàn cục bảo vệ, user lấy từ @CurrentUser()."
+  },
+  {
+   "slug": "rebac-relationship",
+   "name": "Kiểm tra theo quan hệ (bạn bè, block, thành viên phòng)",
+   "model": "ReBAC",
+   "how": "Cho phép hoặc chặn dựa trên quan hệ giữa hai người: bạn bè, block, cùng phòng.",
+   "why": "Quyền trong mạng xã hội phụ thuộc quan hệ động chứ không phải vai trò cố định.",
+   "endpoints": [
+    "e4"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/safety/safety.controller.ts",
+     "line": 82,
+     "quote": "const blocked = await this.safetyService.isBlocked("
+    },
+    {
+     "file": "apps/core-api/src/modules/safety/safety.service.ts",
+     "line": 225,
+     "quote": "async isBlocked("
+    }
+   ],
+   "auto": true,
+   "count": 6,
+   "id": "t4",
+   "local": "GET /safety/blocks/:targetUserId gọi safetyService.isBlocked(user.userId, targetUserId), kiểm tra quan hệ block một chiều giữa hai user."
+  },
+  {
+   "id": "t5",
+   "slug": "derived-state",
+   "name": "Trạng thái suy ra từ dữ liệu gốc/thời gian (không lưu cờ)",
+   "model": "Trạng thái suy ra",
+   "how": "Trạng thái được tính lại từ dữ liệu gốc và giờ server mỗi lần đọc, không lưu cờ.",
+   "why": "Không cần timer hay job để chuyển trạng thái và không có cờ bị lệch.",
+   "endpoints": [
+    "e2",
+    "e3",
+    "e4"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/safety/safety.service.ts",
+     "line": 378,
+     "quote": "order: { createdAt: 'DESC' },"
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "local": "Trạng thái đang block không lưu cột riêng mà suy ra từ dòng blocks mới nhất theo cặp (latestAction ORDER BY createdAt DESC); block/unblock chỉ append dòng mới.",
+   "addedByLogicReview": true
+  },
+  {
+   "slug": "db-transaction",
+   "name": "Transaction DB (một đơn vị công việc)",
+   "model": "Transaction",
+   "how": "Gói nhiều thao tác ghi vào một transaction: cùng commit hoặc cùng rollback.",
+   "why": "Tránh trạng thái nửa vời khi lỗi giữa chừng.",
+   "endpoints": [
+    "e1"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/safety/safety.service.ts",
+     "line": 83,
+     "quote": "return this.dataSource.transaction(async (manager) => {"
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "id": "t6",
+   "local": "Báo cáo user bọc trong this.dataSource.transaction(async (manager) => ...) để insert report và cập nhật trust score cùng một giao dịch."
+  },
+  {
+   "slug": "pessimistic-lock",
+   "name": "Khoá bi quan (SELECT … FOR UPDATE)",
+   "model": "Khoá bi quan",
+   "how": "SELECT … FOR UPDATE khoá hàng đang xử lý để giao dịch khác phải chờ.",
+   "why": "Chặn hai request song song cùng đọc rồi cùng ghi (race) trên số dư, ticket, session.",
+   "alternative": "Khoá lạc quan (version) ít chờ hơn nhưng phải retry khi xung đột.",
+   "endpoints": [
+    "e1"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/safety/safety.service.ts",
+     "line": 89,
+     "quote": "lock: { mode: 'pessimistic_write' },"
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "id": "t7",
+   "local": "Trong transaction report, findOne User với lock pessimistic_write trên hàng target để serialize trừ điểm, tránh vượt daily cap khi báo cáo đồng thời."
+  },
+  {
+   "slug": "append-only",
+   "name": "Bảng chỉ thêm (bất biến)",
+   "model": "Bất biến",
+   "how": "Bảng chỉ thêm, không sửa hoặc xoá dòng cũ.",
+   "why": "Giữ bằng chứng bất biến cho kiểm toán và xử lý báo cáo.",
+   "endpoints": [],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/safety/entities/block.entity.ts",
+     "line": 15,
+     "quote": "* Log block/unblock — append-only theo cặp (blocker, blocked). Trạng thái \"đang block\" hiện"
+    },
+    {
+     "file": "apps/core-api/src/modules/safety/entities/report.entity.ts",
+     "line": 35,
+     "quote": "* Log report — append-only (docs/06: hành động nhạy cảm phải log audit riêng, không xoá được)."
+    },
+    {
+     "file": "apps/core-api/src/modules/safety/safety.service.ts",
+     "line": 33,
+     "quote": "* Facade Safety (docs/services/safety-service.md): Report/Block append-only + trust score"
+    }
+   ],
+   "auto": true,
+   "count": 4,
+   "id": "t8",
+   "local": "Block là log append-only theo cặp (blocker, blocked), trạng thái hiện tại là dòng mới nhất; Report cũng append-only và ghi trustPenaltyApplied."
+  },
+  {
+   "slug": "entity-manager-propagation",
+   "name": "Truyền EntityManager giữa module (chung một transaction)",
+   "model": "Chung transaction",
+   "how": "Module sở hữu dữ liệu nhận EntityManager của giao dịch đang chạy để việc của nó nằm trong cùng transaction.",
+   "why": "Nhiều module dùng chung DB nên atomicity xuyên module không cần saga hay 2PC.",
+   "alternative": "Saga/outbox xuyên service: cần khi tách deployable, thừa khi cùng process.",
+   "endpoints": [],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/safety/safety.service.ts",
+     "line": 355,
+     "quote": "manager: EntityManager,"
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "id": "t9",
+   "local": "SafetyService.setReportStatus(manager: EntityManager, ...) nhận manager từ caller như UserService.banUser để cập nhật status chung transaction."
+  },
+  {
+   "slug": "unique-constraint-guard",
+   "name": "Ràng buộc unique ở DB làm chốt chặn cuối",
+   "model": "Ràng buộc DB",
+   "how": "Ràng buộc unique hoặc index duy nhất ở DB là chốt chặn cuối cho trùng lặp.",
+   "why": "Check-rồi-insert ở tầng code vẫn dính race; DB mới bảo đảm tuyệt đối.",
+   "endpoints": [],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/safety/safety.service.ts",
+     "line": 171,
+     "quote": "if (!isUniqueViolation(err)) throw err;"
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "id": "t10",
+   "local": "Khi insert report video trùng, bắt lỗi bằng isUniqueViolation rồi findOneByOrFail báo cáo đã có, thay vì tạo bản trùng."
+  },
+  {
+   "slug": "rate-limit-throttler",
+   "name": "Rate limit (@nestjs/throttler)",
+   "model": "Rate limit",
+   "how": "@Throttle giới hạn số request theo khoảng thời gian cho từng route.",
+   "why": "Chặn spam và dò quét bằng cách giới hạn số request theo thời gian, trước khi request tới logic nghiệp vụ.",
+   "endpoints": [
+    "e1",
+    "e2",
+    "e3",
+    "e4"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/safety/safety.controller.ts",
+     "line": 37,
+     "quote": "@Throttle({ default: { limit: 10, ttl: minutes(60) } })"
+    },
+    {
+     "file": "apps/core-api/src/app/app.module.ts",
+     "line": 116,
+     "quote": "{ provide: APP_GUARD, useClass: ThrottlerGuard },"
+    }
+   ],
+   "auto": true,
+   "count": 5,
+   "id": "t11",
+   "local": "Chỉ POST /safety/reports (e1) có @Throttle limit 10 mỗi 60 phút/tài khoản, bổ sung cho cooldown theo cặp và daily cap; block/unblock/get dùng ThrottlerGuard toàn cục mặc định."
+  },
+  {
+   "id": "t12",
+   "slug": "daily-quota",
+   "name": "Hạn mức theo ngày",
+   "model": "Hạn mức ngày",
+   "how": "Hạn mức theo ngày lưu ở DB.",
+   "why": "Giới hạn lượt dùng miễn phí mỗi ngày để chặn lạm dụng mà vẫn cho thử tính năng; hạn mức lưu ở DB nên bền qua restart.",
+   "endpoints": [
+    "e1"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/safety/safety.service.ts",
+     "line": 111,
+     "quote": "const remainingCap = Math.max(0, dailyCap - appliedToday);"
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "local": "Trần trừ trust score mỗi target theo SAFETY_TRUST_PENALTY_DAILY_CAP: cộng trustPenaltyApplied trong 24h, penalty = min(PER_REPORT, remainingCap); report vượt trần vẫn ghi với penalty 0.",
+   "addedByLogicReview": true
+  },
+  {
+   "slug": "openapi-contract",
+   "name": "Hợp đồng OpenAPI + client sinh tự động",
+   "model": "OpenAPI",
+   "how": "OpenAPI sinh từ code và client TypeScript sinh tự động.",
+   "why": "Client và server không lệch hợp đồng.",
+   "endpoints": [
+    "e1",
+    "e2",
+    "e3",
+    "e4"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/safety/safety.controller.ts",
+     "line": 38,
+     "quote": "@ApiOperation({"
+    }
+   ],
+   "auto": true,
+   "count": 4,
+   "id": "t13",
+   "local": "SafetyController dùng @ApiOperation và @ApiCreatedResponse({ type: ReportDto }) mô tả hợp đồng OpenAPI."
+  },
+  {
+   "slug": "migration-only-schema",
+   "name": "Schema chỉ đổi bằng migration (synchronize tắt)",
+   "model": "Migration",
+   "how": "Schema chỉ đổi bằng migration; synchronize tắt.",
+   "why": "Thay đổi schema có kiểm soát và rollback được.",
+   "endpoints": [],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/safety/entities/block.entity.ts",
+     "line": 23,
+     "quote": "@Index('idx_blocks_blocked_blocker_created', { synchronize: false })"
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "id": "t14",
+   "local": "Index idx_blocks_blocked_blocker_created khai báo { synchronize: false } vì covering INCLUDE(action) chỉ tạo đúng bằng SQL migration."
+  },
+  {
+   "id": "t15",
+   "slug": "data-minimization",
+   "name": "Tối thiểu hoá dữ liệu trả về (ẩn danh, DTO công khai)",
+   "model": "Tối thiểu dữ liệu",
+   "how": "Chỉ trả trường cần thiết (DTO công khai, ẩn danh theo từng người nhận).",
+   "why": "Giảm rò rỉ dữ liệu: chỉ trả đúng các trường cần thiết cho người nhận thay vì cả bản ghi nội bộ.",
+   "endpoints": [
+    "e4"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/safety/safety.service.ts",
+     "line": 224,
+     "quote": "/** Trạng thái hiện tại 1 chiều — dùng bởi Friend Chat (§ 6) và Feed (§ 3). */"
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "local": "GET /safety/blocks/:targetUserId chỉ gọi isBlocked(caller, target) một chiều nên không lộ việc target đã block ngược lại caller.",
+   "addedByLogicReview": true
+  }
+ ]
+}

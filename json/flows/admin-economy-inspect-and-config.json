@@ -1,0 +1,257 @@
+{
+ "id": "admin-economy-inspect-and-config",
+ "title": "Admin xem ví, giao dịch và chỉnh cấu hình kinh tế",
+ "summary": "Admin xem ví, lịch sử giao dịch và catalog kinh tế rồi bật/tắt IAP product hoặc VIP plan; Admin chỉ điều phối và ghi audit, còn dữ liệu do Economy sở hữu nên không sửa ledger trực tiếp.",
+ "caption": "Admin gọi Economy qua DI để đọc ví, sổ cái, catalog; hai thao tác PATCH ghi cấu hình và audit log trong cùng một transaction.",
+ "participants": [
+  {
+   "id": "admin-console",
+   "label": "Admin console",
+   "kind": "client"
+  },
+  {
+   "id": "admin",
+   "label": "Admin",
+   "kind": "service"
+  },
+  {
+   "id": "economy",
+   "label": "Economy",
+   "kind": "service"
+  },
+  {
+   "id": "postgres",
+   "label": "PostgreSQL",
+   "kind": "infra"
+  }
+ ],
+ "steps": [
+  {
+   "from": "admin-console",
+   "to": "admin",
+   "label": "GET /admin/economy/wallet/:userId xem ví user",
+   "kind": "call",
+   "mechanism": "http"
+  },
+  {
+   "from": "admin",
+   "to": "economy",
+   "label": "getWallet(userId) chỉ đọc ví và VIP",
+   "kind": "call",
+   "mechanism": "di-call",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/admin/admin.service.ts",
+     "line": 313,
+     "quote": "return this.economyService.getWallet(userId);"
+    }
+   ]
+  },
+  {
+   "from": "admin",
+   "to": "admin-console",
+   "label": "Trả ví: balance và VIP",
+   "kind": "return",
+   "mechanism": "http"
+  },
+  {
+   "from": "admin-console",
+   "to": "admin",
+   "label": "GET /admin/economy/users/:userId/transactions",
+   "kind": "call",
+   "mechanism": "http"
+  },
+  {
+   "from": "admin",
+   "to": "economy",
+   "label": "listTransactions(userId, limit, cursor) đọc sổ cái",
+   "kind": "call",
+   "mechanism": "di-call",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/admin/admin.service.ts",
+     "line": 326,
+     "quote": "const page = await this.economyService.listTransactions("
+    }
+   ]
+  },
+  {
+   "from": "admin",
+   "to": "admin-console",
+   "label": "Trả trang giao dịch theo cursor",
+   "kind": "return",
+   "mechanism": "http"
+  },
+  {
+   "from": "admin-console",
+   "to": "admin",
+   "label": "GET /admin/config/economy-catalog",
+   "kind": "call",
+   "mechanism": "http"
+  },
+  {
+   "from": "admin",
+   "to": "economy",
+   "label": "listCatalogForAdmin() lấy cả IAP/VIP inactive",
+   "kind": "call",
+   "mechanism": "di-call",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/admin/admin.service.ts",
+     "line": 367,
+     "quote": "return this.economyService.listCatalogForAdmin();"
+    }
+   ]
+  },
+  {
+   "from": "admin",
+   "to": "admin-console",
+   "label": "Trả catalog IAP product và VIP plan",
+   "kind": "return",
+   "mechanism": "http"
+  },
+  {
+   "from": "admin-console",
+   "to": "admin",
+   "label": "PATCH /admin/config/iap-products/:productId bật/tắt",
+   "kind": "call",
+   "mechanism": "http"
+  },
+  {
+   "from": "admin",
+   "to": "postgres",
+   "label": "Mở transaction cho thao tác đổi cấu hình IAP",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/admin/admin.service.ts",
+     "line": 375,
+     "quote": "return this.dataSource.transaction(async (manager) => {"
+    }
+   ]
+  },
+  {
+   "from": "admin",
+   "to": "economy",
+   "label": "setIapProductActive(manager, productId, active)",
+   "kind": "call",
+   "mechanism": "di-call",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/admin/admin.service.ts",
+     "line": 376,
+     "quote": "const product = await this.economyService.setIapProductActive("
+    }
+   ]
+  },
+  {
+   "from": "admin",
+   "to": "postgres",
+   "label": "Ghi audit economy.iap_product.updated cùng manager",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/admin/admin.service.ts",
+     "line": 381,
+     "quote": "await this.auditLogService.record("
+    }
+   ]
+  },
+  {
+   "from": "admin",
+   "to": "admin-console",
+   "label": "Trả IAP product đã cập nhật",
+   "kind": "return",
+   "mechanism": "http"
+  },
+  {
+   "from": "admin-console",
+   "to": "admin",
+   "label": "PATCH /admin/config/vip-plans/:id bật/tắt gói VIP",
+   "kind": "call",
+   "mechanism": "http"
+  },
+  {
+   "from": "admin",
+   "to": "postgres",
+   "label": "Mở transaction cho thao tác đổi cấu hình VIP",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/admin/admin.service.ts",
+     "line": 400,
+     "quote": "return this.dataSource.transaction(async (manager) => {"
+    }
+   ]
+  },
+  {
+   "from": "admin",
+   "to": "economy",
+   "label": "setVipPlanActive(manager, planId, active)",
+   "kind": "call",
+   "mechanism": "di-call",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/admin/admin.service.ts",
+     "line": 401,
+     "quote": "const plan = await this.economyService.setVipPlanActive("
+    }
+   ]
+  },
+  {
+   "from": "admin",
+   "to": "postgres",
+   "label": "Ghi audit economy.vip_plan.updated cùng manager",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/admin/admin.service.ts",
+     "line": 406,
+     "quote": "await this.auditLogService.record("
+    }
+   ]
+  },
+  {
+   "from": "admin",
+   "to": "admin-console",
+   "label": "Trả VIP plan đã cập nhật",
+   "kind": "return",
+   "mechanism": "http"
+  }
+ ],
+ "groups": [
+  {
+   "from": 11,
+   "to": 13,
+   "label": "Transaction: IAP + audit",
+   "kind": "transaction"
+  },
+  {
+   "from": 16,
+   "to": 18,
+   "label": "Transaction: VIP + audit",
+   "kind": "transaction"
+  }
+ ],
+ "invariants": [
+  "Admin chỉ gọi EconomyService (getWallet, listTransactions, listCatalogForAdmin) để đọc; không truy cập bảng ledger/wallet trực tiếp, nên Economy vẫn là chủ dữ liệu kinh tế.",
+  "Các endpoint ví, giao dịch dùng @RequireAdminPermission(AdminPermission.RefundTransaction); endpoint catalog và PATCH dùng AdminPermission.ManageConfig, kiểm trước khi vào service.",
+  "Đổi cấu hình IAP/VIP và audit.record dùng chung một manager trong dataSource.transaction, nên không có thay đổi cấu hình nào mà thiếu audit log."
+ ],
+ "failureModes": [
+  {
+   "when": "audit.record lỗi trong transaction đổi cấu hình IAP hoặc VIP",
+   "effect": "Exception thoát khỏi callback dataSource.transaction nên transaction bị rollback, cấu hình không đổi."
+  },
+  {
+   "when": "Admin không có quyền RefundTransaction hoặc ManageConfig",
+   "effect": "Decorator RequireAdminPermission chặn tại controller, không gọi Economy."
+  }
+ ],
+ "dataIssues": [],
+ "uncertain": []
+}

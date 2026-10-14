@@ -1,0 +1,384 @@
+{
+ "id": "mood",
+ "title": "Mood",
+ "tagline": "Trạng thái tâm trạng preset, hết hạn theo TTL",
+ "deployable": "core-api",
+ "role": "Sở hữu catalog mood_presets và log append-only mood_status_events (set/clear), suy ra mood hiện tại lúc đọc dựa trên dòng mới nhất và expiresAt. Không sở hữu block/report (Safety), không có free-text/moderation, không phát realtime và không có job dọn.",
+ "owns": [
+  "mood_presets (code unique, label, emoji, active, sortOrder)",
+  "mood_status_events (append-only; idempotencyKey unique; kind set|clear)"
+ ],
+ "confidence": "high",
+ "endpoints": [
+  {
+   "id": "e1",
+   "kind": "rest",
+   "method": "GET",
+   "path": "/api/v1/mood/presets",
+   "purpose": "Liệt kê preset mood đang active (sortOrder, code) để client dựng UI chọn; chỉ cần JWT.",
+   "auth": "jwt",
+   "file": "apps/core-api/src/modules/mood/mood.controller.ts",
+   "line": 39,
+   "quote": "@Get('presets')"
+  },
+  {
+   "id": "e2",
+   "kind": "rest",
+   "method": "GET",
+   "path": "/api/v1/mood/status/me",
+   "purpose": "Mood hiện tại của chính mình, suy ra từ dòng event mới nhất; không qua kiểm tra block.",
+   "auth": "jwt",
+   "file": "apps/core-api/src/modules/mood/mood.controller.ts",
+   "line": 47,
+   "quote": "@Get('status/me')"
+  },
+  {
+   "id": "e3",
+   "kind": "rest",
+   "method": "GET",
+   "path": "/api/v1/mood/status/:userId",
+   "purpose": "Mood công khai của userId khác theo góc nhìn người xem; trả rỗng nếu giữa hai người có block active 2 chiều (SafetyService.getBlockedUserIds).",
+   "auth": "jwt",
+   "file": "apps/core-api/src/modules/mood/mood.controller.ts",
+   "line": 58,
+   "quote": "@Get('status/:userId')"
+  },
+  {
+   "id": "e4",
+   "kind": "rest",
+   "method": "POST",
+   "path": "/api/v1/mood/status",
+   "purpose": "Đặt mood theo presetCode đang active, bắt buộc header Idempotency-Key; mỗi lần gọi (kể cả cùng preset) là 1 dòng event mới và refresh TTL MOOD_STATUS_TTL_HOURS.",
+   "auth": "jwt",
+   "file": "apps/core-api/src/modules/mood/mood.controller.ts",
+   "line": 73,
+   "quote": "@Post('status')"
+  },
+  {
+   "id": "e5",
+   "kind": "rest",
+   "method": "DELETE",
+   "path": "/api/v1/mood/status",
+   "purpose": "Tắt mood bằng cách ghi dòng kind='clear' (không xoá dòng cũ), bắt buộc Idempotency-Key, trả 204.",
+   "auth": "jwt",
+   "file": "apps/core-api/src/modules/mood/mood.controller.ts",
+   "line": 93,
+   "quote": "@Delete('status')"
+  }
+ ],
+ "collaborators": [
+  {
+   "id": "c1",
+   "label": "ẩn mood khi bị block",
+   "what": "getPublicMood gọi SafetyService.getBlockedUserIds(viewerId) mỗi lần đọc rồi trả null nếu targetId nằm trong danh sách block active 2 chiều (bỏ qua nếu viewerId === targetId).",
+   "why": "Block là dữ liệu của Safety (bảng blocks append-only, trạng thái mới nhất mỗi cặp quyết định). Người đã block không được thấy mood của nhau, và phải kiểm tra lại mỗi lần đọc (docs/10 § 10.0.C) vì block/unblock có thể xảy ra bất cứ lúc nào; chỉ xét block, không xét report (khác getHiddenUserIds của Discovery).",
+   "ifMissing": "Người đã bị block vẫn xem được mood của người block mình qua GET /mood/status/:userId, vô hiệu hoá tính năng block.",
+   "with": "safety",
+   "withKind": "service",
+   "direction": "out",
+   "mechanism": "di-call",
+   "endpoints": [
+    "e3"
+   ],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/mood/mood.service.ts",
+     "line": 131,
+     "quote": "const blockedIds = await this.safetyService.getBlockedUserIds(viewerId);"
+    }
+   ],
+   "basis": "ast",
+   "logic": {
+    "verdict": "sound"
+   }
+  },
+  {
+   "id": "c2",
+   "label": "preset + event mood",
+   "what": "Đọc mood_presets (find/findOneBy active) và ghi mood_status_events; idempotencyKey (prefix theo kind + userId) có unique ở DB, bắt unique violation để đọc lại dòng cũ.",
+   "why": "Mood hiện tại = dòng event mới nhất nên log phải bền vững và append-only; unique idempotencyKey ở DB là chốt chặn retry/double-click tạo trùng dòng mà không cần lock ở app. Preset nằm ở DB để chỉnh qua seed/migration thay vì hardcode.",
+   "ifMissing": "Retry mạng tạo nhiều dòng set/clear trùng lặp, mất lịch sử hoặc mood nhảy trạng thái; không có catalog thì không validate được presetCode.",
+   "with": "postgres",
+   "withKind": "infra",
+   "direction": "out",
+   "mechanism": "shared-db",
+   "endpoints": [
+    "e1",
+    "e2",
+    "e3",
+    "e4",
+    "e5"
+   ],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/mood/entities/mood-preset.entity.ts",
+     "line": 7,
+     "quote": "@Entity({ name: 'mood_presets' })"
+    },
+    {
+     "file": "apps/core-api/src/modules/mood/entities/mood-status-event.entity.ts",
+     "line": 22,
+     "quote": "@Entity({ name: 'mood_status_events' })"
+    }
+   ],
+   "review": {
+    "verdict": "supported"
+   },
+   "logic": {
+    "verdict": "sound"
+   }
+  }
+ ],
+ "waivedEdges": [],
+ "excludedRoutes": [],
+ "notes": [
+  "Doc nói MoodService.getPublicMood là API composition 'dùng ở friend list, discovery card, profile qua DI': MoodModule có exports [MoodService] nhưng không có module nào khác import/gọi MoodService (dossier: không có caller vào). Hiện chỉ endpoint GET /mood/status/:userId dùng nó.",
+  "Doc yêu cầu không dùng ở card ẩn danh trước-match Soul Match; đúng là không có chỗ nào gọi, nhưng đó là kỷ luật call site, không có cờ nào chặn trong service (doc cũng nói vậy).",
+  "Không tìm thấy client apps/web hay admin gọi /mood/* trong source (grep mood/status không có kết quả), nên không thêm collaborator client.",
+  "Hết hạn mood là derive-khi-đọc (deriveCurrentMood so expiresAt với giờ server lúc đọc), không có cron/job."
+ ],
+ "techniques": [
+  {
+   "slug": "jwt-bearer",
+   "name": "JWT bearer (access token không trạng thái)",
+   "model": "JWT bearer",
+   "how": "Client gửi access token (JWT) trong header Authorization; guard xác minh chữ ký và hạn rồi gắn user vào request, server không giữ phiên.",
+   "why": "Không trạng thái nên scale ngang dễ và không phải tra DB mỗi request; đánh đổi là không thu hồi tức thì trước khi token hết hạn.",
+   "alternative": "Session phía server (cookie + kho phiên) thu hồi được tức thì nhưng cần kho phiên dùng chung.",
+   "endpoints": [
+    "e1",
+    "e2",
+    "e3",
+    "e4",
+    "e5"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/app/app.module.ts",
+     "line": 117,
+     "quote": "{ provide: APP_GUARD, useClass: JwtAuthGuard },"
+    }
+   ],
+   "auto": true,
+   "count": 5,
+   "id": "t1",
+   "local": "Các endpoint /mood/* đi qua JwtAuthGuard là APP_GUARD toàn cục."
+  },
+  {
+   "slug": "idempotency-key",
+   "name": "Idempotency-Key (client sinh, server khử trùng)",
+   "model": "Idempotency-Key",
+   "how": "Client gửi khoá duy nhất cho mỗi thao tác; server lưu khoá (unique) và trả lại kết quả cũ khi gặp lại.",
+   "why": "Retry mạng không tạo bản ghi hoặc trừ tiền hai lần.",
+   "endpoints": [
+    "e4",
+    "e5"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/mood/entities/mood-status-event.entity.ts",
+     "line": 43,
+     "quote": "idempotencyKey!: string;"
+    },
+    {
+     "file": "apps/core-api/src/modules/mood/mood.constants.ts",
+     "line": 6,
+     "quote": "export function moodSetIdempotencyKey(userId: string, key: string): string {"
+    },
+    {
+     "file": "apps/core-api/src/modules/mood/mood.controller.ts",
+     "line": 26,
+     "quote": "ApiIdempotencyKeyHeader,"
+    }
+   ],
+   "auto": true,
+   "count": 21,
+   "id": "t2",
+   "local": "Chỉ POST/DELETE /mood/status (e4,e5) bắt Idempotency-Key: moodSetIdempotencyKey/moodClearIdempotencyKey prefix riêng set/clear, unique ở DB, unique violation thì đọc lại dòng cũ."
+  },
+  {
+   "slug": "unique-constraint-guard",
+   "name": "Ràng buộc unique ở DB làm chốt chặn cuối",
+   "model": "Ràng buộc DB",
+   "how": "Ràng buộc unique hoặc index duy nhất ở DB là chốt chặn cuối cho trùng lặp.",
+   "why": "Check-rồi-insert ở tầng code vẫn dính race; DB mới bảo đảm tuyệt đối.",
+   "endpoints": [
+    "e4",
+    "e5"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/mood/entities/mood-preset.entity.ts",
+     "line": 12,
+     "quote": "@Column({ length: 64, unique: true })"
+    },
+    {
+     "file": "apps/core-api/src/modules/mood/entities/mood-status-event.entity.ts",
+     "line": 42,
+     "quote": "@Column({ length: 128, unique: true })"
+    },
+    {
+     "file": "apps/core-api/src/modules/mood/mood.service.ts",
+     "line": 169,
+     "quote": "if (isUniqueViolation(err)) {"
+    }
+   ],
+   "auto": true,
+   "count": 3,
+   "id": "t3",
+   "local": "MoodStatusEvent.idempotencyKey unique là chốt cuối cho retry set/clear (e4,e5); MoodPreset.code unique chỉ giữ catalog không trùng mã, không chặn request trùng."
+  },
+  {
+   "id": "t4",
+   "slug": "derived-state",
+   "name": "Trạng thái suy ra từ dữ liệu gốc/thời gian (không lưu cờ)",
+   "model": "Trạng thái suy ra",
+   "how": "Trạng thái được tính lại từ dữ liệu gốc và giờ server mỗi lần đọc, không lưu cờ.",
+   "why": "Không cần timer hay job để chuyển trạng thái và không có cờ bị lệch.",
+   "endpoints": [
+    "e2",
+    "e3"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/mood/mood.service.ts",
+     "line": 148,
+     "quote": "if (!latest.expiresAt || latest.expiresAt <= new Date()) return null;"
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "local": "Mood hiện tại không lưu cột: deriveCurrentMood lấy dòng event mới nhất theo createdAt DESC, trả null nếu kind=clear hoặc expiresAt <= now.",
+   "addedByLogicReview": true
+  },
+  {
+   "id": "t5",
+   "slug": "append-only",
+   "name": "Bảng chỉ thêm (bất biến)",
+   "model": "Bất biến",
+   "how": "Bảng chỉ thêm, không sửa hoặc xoá dòng cũ.",
+   "why": "Giữ bằng chứng bất biến cho kiểm toán và xử lý báo cáo.",
+   "endpoints": [
+    "e4",
+    "e5"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/mood/entities/mood-status-event.entity.ts",
+     "line": 15,
+     "quote": "Log APPEND-ONLY set/clear mood"
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "local": "setMood/clearMood chỉ insert dòng mood_status_events mới (set/clear), không update hay xoá dòng cũ; re-set cùng preset vẫn tạo dòng mới để refresh TTL.",
+   "addedByLogicReview": true
+  },
+  {
+   "slug": "append-only",
+   "name": "Bảng chỉ thêm (bất biến)",
+   "model": "Bất biến",
+   "how": "Bảng chỉ thêm, không sửa hoặc xoá dòng cũ.",
+   "why": "Giữ bằng chứng bất biến cho kiểm toán và xử lý báo cáo.",
+   "endpoints": [],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/mood/entities/mood-status-event.entity.ts",
+     "line": 15,
+     "quote": "* Log APPEND-ONLY set/clear mood — không update/xoá dòng cũ. \"Mood hiện tại\" của 1 user ="
+    },
+    {
+     "file": "apps/core-api/src/modules/mood/mood.service.ts",
+     "line": 31,
+     "quote": "* append-only, \"mood hiện tại\" derive khi đọc từ dòng mới nhất; hiển thị public qua composition"
+    }
+   ],
+   "auto": true,
+   "count": 2,
+   "id": "t6",
+   "local": "MoodStatusEvent là log append-only set/clear; mood hiện tại derive khi đọc từ dòng mới nhất (getCurrentMood) không phải clear và chưa quá expiresAt."
+  },
+  {
+   "id": "t7",
+   "slug": "lazy-expiry",
+   "name": "Hết hạn lười (xử lý khi có request)",
+   "model": "Hết hạn lười",
+   "how": "Hết hạn được xử lý khi có request đụng tới, không cần job.",
+   "why": "Đúng đắn không phụ thuộc job; job chỉ để dọn.",
+   "endpoints": [
+    "e2",
+    "e3"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/mood/mood.service.ts",
+     "line": 148,
+     "quote": "if (!latest.expiresAt || latest.expiresAt <= new Date()) return null;"
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "local": "Hết hạn theo MOOD_STATUS_TTL_HOURS được xét lúc đọc bằng so expiresAt với giờ server, không cron dọn nên không cần worker.",
+   "addedByLogicReview": true
+  },
+  {
+   "slug": "rate-limit-throttler",
+   "name": "Rate limit (@nestjs/throttler)",
+   "model": "Rate limit",
+   "how": "@Throttle giới hạn số request theo khoảng thời gian cho từng route.",
+   "why": "Chặn spam và dò quét bằng cách giới hạn số request theo thời gian, trước khi request tới logic nghiệp vụ.",
+   "endpoints": [
+    "e1",
+    "e2",
+    "e3",
+    "e4",
+    "e5"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/app/app.module.ts",
+     "line": 116,
+     "quote": "{ provide: APP_GUARD, useClass: ThrottlerGuard },"
+    }
+   ],
+   "auto": true,
+   "count": 5,
+   "id": "t8",
+   "local": "Các endpoint mood chịu ThrottlerGuard là APP_GUARD toàn cục trong app.module.ts, dùng hạn mức mặc định."
+  },
+  {
+   "slug": "openapi-contract",
+   "name": "Hợp đồng OpenAPI + client sinh tự động",
+   "model": "OpenAPI",
+   "how": "OpenAPI sinh từ code và client TypeScript sinh tự động.",
+   "why": "Client và server không lệch hợp đồng.",
+   "endpoints": [
+    "e1",
+    "e2",
+    "e3",
+    "e4",
+    "e5"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/mood/mood.controller.ts",
+     "line": 40,
+     "quote": "@ApiOperation({ summary: 'Catalog mood preset đang bật' })"
+    }
+   ],
+   "auto": true,
+   "count": 5,
+   "id": "t9",
+   "local": "MoodController khai báo @ApiOperation/@ApiOkResponse({ type: MoodPresetDto, isArray: true }) cho presets và status để sinh OpenAPI."
+  }
+ ]
+}

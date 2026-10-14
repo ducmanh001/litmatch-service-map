@@ -1,0 +1,245 @@
+{
+ "id": "short-video-publish-moderation",
+ "title": "Đăng video ngắn và duyệt bởi admin",
+ "summary": "Người dùng xin URL upload, upload video rồi finalize; tuỳ VIDEO_MODERATION_MODE video sang pending_review hoặc published. Admin duyệt qua AdminModule, nên short-video (sở hữu Video) và admin (audit log) phải cùng một transaction.",
+ "caption": "Vòng đời Video từ upload-intent, finalize đến admin duyệt, và ranh giới transaction giữa admin và short-video.",
+ "participants": [
+  {
+   "id": "web",
+   "label": "Web client",
+   "kind": "client"
+  },
+  {
+   "id": "admin-console",
+   "label": "Admin console",
+   "kind": "client"
+  },
+  {
+   "id": "short-video",
+   "label": "Short-video",
+   "kind": "service"
+  },
+  {
+   "id": "admin",
+   "label": "Admin",
+   "kind": "service"
+  },
+  {
+   "id": "user",
+   "label": "User",
+   "kind": "service"
+  },
+  {
+   "id": "postgres",
+   "label": "PostgreSQL",
+   "kind": "infra"
+  }
+ ],
+ "steps": [
+  {
+   "from": "web",
+   "to": "short-video",
+   "label": "POST /videos/upload-intent kèm Idempotency-Key và caption",
+   "kind": "call",
+   "mechanism": "http"
+  },
+  {
+   "from": "short-video",
+   "to": "postgres",
+   "label": "Lưu Video trạng thái uploading với storageKey đã sinh",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "note": "Nếu unique violation (replay) thì đọc lại video gốc theo idempotencyKey và dùng lại storageKey cũ.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/short-video/short-video.service.ts",
+     "line": 81,
+     "quote": "video = await this.videoRepo.save("
+    }
+   ]
+  },
+  {
+   "from": "short-video",
+   "to": "web",
+   "label": "Trả video và uploadUrl (presigned) để upload thẳng lên storage",
+   "kind": "return",
+   "mechanism": "http",
+   "note": "Presigned uploadUrl được lấy từ VideoStoragePort.issueUploadUrl SAU khi lưu Video (dùng storageKey của video gốc nếu replay); body video không đi qua core-api."
+  },
+  {
+   "from": "web",
+   "to": "short-video",
+   "label": "POST /videos/:id/finalize sau khi upload xong",
+   "kind": "call",
+   "mechanism": "http"
+  },
+  {
+   "from": "short-video",
+   "to": "postgres",
+   "label": "Đọc video và kiểm tra tác giả là chính người gọi",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/short-video/short-video.service.ts",
+     "line": 516,
+     "quote": "const video = await this.videoRepo.findOneBy({ id: videoId });"
+    }
+   ]
+  },
+  {
+   "from": "short-video",
+   "to": "postgres",
+   "label": "UPDATE có điều kiện uploading sang processing (thua race thì 409)",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/short-video/short-video.service.ts",
+     "line": 541,
+     "quote": "const repo = manager ? manager.getRepository(Video) : this.videoRepo;"
+    }
+   ],
+   "note": "transition là UPDATE ... WHERE id AND status=uploading; chỉ khi thắng (affected>0) mới tiếp tục sang transcode."
+  },
+  {
+   "from": "short-video",
+   "to": "postgres",
+   "label": "Sau transcode: cập nhật pending_review (mode pre) hoặc published kèm playbackUrl",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "note": "Gọi VideoTranscodePort.transcode (không vẽ riêng) rồi UPDATE có điều kiện status=processing; VIDEO_MODERATION_MODE='pre' thì pending_review, ngược lại published. Mọi lỗi trong try (transcode hoặc update) làm catch chuyển processing sang failed; kết quả update không được kiểm.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/short-video/short-video.service.ts",
+     "line": 150,
+     "quote": "await this.videoRepo.update("
+    }
+   ]
+  },
+  {
+   "from": "short-video",
+   "to": "user",
+   "label": "Lấy hồ sơ tác giả để dựng PublicProfileDto",
+   "kind": "call",
+   "mechanism": "di-call",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/short-video/short-video.controller.ts",
+     "line": 209,
+     "quote": "return PublicProfileDto.from(await this.userService.getByIdOrThrow(userId));"
+    }
+   ]
+  },
+  {
+   "from": "short-video",
+   "to": "web",
+   "label": "Trả Video với trạng thái mới (pending_review hoặc published)",
+   "kind": "return",
+   "mechanism": "http",
+   "note": "Route yêu cầu quyền AdminPermission.ResolveReports (RequireAdminPermission), ngoài JWT guard toàn cục."
+  },
+  {
+   "from": "admin-console",
+   "to": "admin",
+   "label": "POST /admin/videos/:id/approve",
+   "kind": "call",
+   "mechanism": "http"
+  },
+  {
+   "from": "admin",
+   "to": "postgres",
+   "label": "Mở transaction cho duyệt video",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/admin/admin.service.ts",
+     "line": 161,
+     "quote": "return this.dataSource.transaction(async (manager) => {"
+    }
+   ]
+  },
+  {
+   "from": "admin",
+   "to": "short-video",
+   "label": "adminApprove(videoId, manager): chuyển pending_review sang published",
+   "kind": "call",
+   "mechanism": "di-call",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/admin/admin.service.ts",
+     "line": 162,
+     "quote": "const video = await this.shortVideoService.adminApprove(videoId, manager);"
+    }
+   ]
+  },
+  {
+   "from": "short-video",
+   "to": "postgres",
+   "label": "UPDATE có điều kiện trên manager của admin (cùng transaction)",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/short-video/short-video.service.ts",
+     "line": 541,
+     "quote": "const repo = manager ? manager.getRepository(Video) : this.videoRepo;"
+    }
+   ]
+  },
+  {
+   "from": "admin",
+   "to": "postgres",
+   "label": "Ghi audit log video.approved cùng manager",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/admin/admin.service.ts",
+     "line": 163,
+     "quote": "await this.auditLogService.record("
+    }
+   ]
+  },
+  {
+   "from": "admin",
+   "to": "admin-console",
+   "label": "Trả Video đã duyệt sau khi transaction commit",
+   "kind": "return",
+   "mechanism": "http"
+  }
+ ],
+ "groups": [
+  {
+   "from": 11,
+   "to": 14,
+   "label": "Transaction duyệt: đổi trạng thái Video và ghi audit log",
+   "kind": "transaction"
+  }
+ ],
+ "invariants": [
+  "Chuyển trạng thái Video dùng UPDATE có điều kiện theo status hiện tại (from), nên hai request đua nhau chỉ một bên thắng; bên thua nhận affected = 0 và finalize trả 409.",
+  "AdminModule mở transaction và truyền manager vào short-video.adminApprove, nên đổi trạng thái Video và audit log video.approved cùng commit hoặc cùng rollback; short-video là bên sở hữu dữ liệu Video."
+ ],
+ "failureModes": [
+  {
+   "when": "Transcode ném lỗi trong finalize",
+   "effect": "catch chuyển video từ processing sang failed rồi vẫn trả về video đọc lại từ DB."
+  },
+  {
+   "when": "Finalize khi video không còn ở trạng thái uploading",
+   "effect": "transition trả false, service ném VIDEO_INVALID_TRANSITION (409)."
+  },
+  {
+   "when": "Upload-intent bị replay cùng Idempotency-Key nhưng khác caption",
+   "effect": "ném VIDEO_UPLOAD_IDEMPOTENCY_CONFLICT (409)."
+  },
+  {
+   "when": "Admin duyệt video không còn pending_review",
+   "effect": "adminApprove dùng transitionOrThrow: ném VIDEO_INVALID_TRANSITION (409) hoặc 404 nếu không có video; exception làm transaction rollback nên audit log video.approved không được ghi."
+  }
+ ],
+ "dataIssues": [],
+ "uncertain": []
+}

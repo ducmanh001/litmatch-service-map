@@ -1,0 +1,62 @@
+{
+ "id": "matching-ticket-status-cancel-speedup",
+ "title": "Xem, huỷ và tăng tốc vé ghép đôi",
+ "summary": "Người dùng đọc trạng thái vé và giá tăng tốc theo hạng VIP, huỷ vé đang xếp hàng, hoặc trả DIA để tăng ưu tiên. Matching sở hữu vé và hàng đợi Redis, còn hạng VIP và việc trừ DIA thuộc Economy nên hai service phải phối hợp.",
+ "caption": "Ba thao tác trên vé: đọc (current/:id), huỷ (DELETE), tăng tốc (speedup) và cách Matching gọi Economy, Postgres, Redis.",
+ "participants": [
+  {"id": "web", "label": "Web client", "kind": "client"},
+  {"id": "matching", "label": "Matching", "kind": "service"},
+  {"id": "economy", "label": "Economy", "kind": "service"},
+  {"id": "postgres", "label": "PostgreSQL", "kind": "infra"},
+  {"id": "redis", "label": "Redis", "kind": "infra"}
+ ],
+ "steps": [
+  {"from": "web", "to": "matching", "label": "GET /matching/tickets/current để phục hồi vé sau reload", "kind": "call", "mechanism": "http"},
+  {"from": "matching", "to": "postgres", "label": "Tìm vé queued/matched mới nhất của user", "kind": "call", "mechanism": "shared-db",
+   "evidence": [{"file": "apps/core-api/src/modules/matching/matching.service.ts", "line": 247, "quote": "return this.ticketRepo.findOne({"}]},
+  {"from": "matching", "to": "economy", "label": "Lấy hạng VIP đang hiệu lực để tính giá tăng tốc", "kind": "call", "mechanism": "di-call", "note": "Economy đọc ví (wallets) và trả activeVipTier; Matching chọn giá config theo SVIP/VIP/thường.",
+   "evidence": [{"file": "apps/core-api/src/modules/matching/matching.service.ts", "line": 264, "quote": "const tier = await this.economy.getActiveVipTier(userId);"}]},
+  {"from": "matching", "to": "web", "label": "Trả vé hiện tại kèm giá tăng tốc", "kind": "return", "mechanism": "http"},
+  {"from": "web", "to": "matching", "label": "GET /matching/tickets/:id để poll trạng thái vé", "kind": "call", "mechanism": "http"},
+  {"from": "matching", "to": "postgres", "label": "Đọc vé theo id rồi kiểm tra vé thuộc về người gọi", "kind": "call", "mechanism": "shared-db",
+   "evidence": [{"file": "apps/core-api/src/modules/matching/matching.service.ts", "line": 229, "quote": "const ticket = await this.ticketRepo.findOneBy({ id: ticketId });"}]},
+  {"from": "matching", "to": "economy", "label": "Lấy hạng VIP để tính giá tăng tốc trả về", "kind": "call", "mechanism": "di-call",
+   "evidence": [{"file": "apps/core-api/src/modules/matching/matching.service.ts", "line": 264, "quote": "const tier = await this.economy.getActiveVipTier(userId);"}]},
+  {"from": "matching", "to": "web", "label": "Trả trạng thái vé kèm giá tăng tốc", "kind": "return", "mechanism": "http"},
+  {"from": "web", "to": "matching", "label": "DELETE /matching/tickets/:id để huỷ vé", "kind": "call", "mechanism": "http"},
+  {"from": "matching", "to": "postgres", "label": "Khoá vé, kiểm tra chủ vé và chuyển trạng thái, lưu cancelled", "kind": "call", "mechanism": "shared-db", "note": "Khoá pessimistic_write; assertOwnership và assertTransition chạy trong callback transaction.",
+   "evidence": [{"file": "apps/core-api/src/modules/matching/matching.service.ts", "line": 291, "quote": "const cancelled = await this.dataSource.transaction(async (manager) => {"}]},
+  {"from": "matching", "to": "redis", "label": "ZREM vé khỏi hàng đợi shard sau khi commit", "kind": "call", "mechanism": "redis-state", "note": "Lỗi ZREM sẽ ném ra lỗi (có await); comment trong code nói vé thành zombie Redis và matcher kiểm tra lại lúc ghép.",
+   "evidence": [{"file": "apps/core-api/src/modules/matching/matching.service.ts", "line": 299, "quote": "await this.queue.remove(shardKeyOfTicket(cancelled), cancelled.id);"}, {"file": "apps/core-api/src/modules/matching/redis/redis-matching-queue.adapter.ts", "line": 22, "quote": "await this.redis.zrem(shard, ticketId);"}]},
+  {"from": "matching", "to": "web", "label": "Trả vé cancelled kèm giá tăng tốc (đọc VIP từ Economy)", "kind": "return", "mechanism": "http", "note": "Controller gọi getSpeedupPriceDiamondForUser, tức economy.getActiveVipTier, để dựng TicketDto."},
+  {"from": "web", "to": "matching", "label": "POST /matching/tickets/:id/speedup kèm Idempotency-Key", "kind": "call", "mechanism": "http"},
+  {"from": "matching", "to": "postgres", "label": "Đọc vé, kiểm tra chủ vé và phải đang queued", "kind": "call", "mechanism": "shared-db",
+   "evidence": [{"file": "apps/core-api/src/modules/matching/matching.service.ts", "line": 229, "quote": "const ticket = await this.ticketRepo.findOneBy({ id: ticketId });"}]},
+  {"from": "matching", "to": "economy", "label": "Lấy hạng VIP để xác định giá DIA", "kind": "call", "mechanism": "di-call",
+   "evidence": [{"file": "apps/core-api/src/modules/matching/matching.service.ts", "line": 264, "quote": "const tier = await this.economy.getActiveVipTier(userId);"}]},
+  {"from": "matching", "to": "economy", "label": "spendDiamond MatchingSpeedup với idempotency key có tiền tố", "kind": "call", "mechanism": "di-call", "note": "Economy ghi sổ kép qua ledger.record (nợ ví user, có doanh thu hệ thống); replayed=true nghĩa là đã trừ trước đó.",
+   "evidence": [{"file": "apps/core-api/src/modules/matching/matching.service.ts", "line": 448, "quote": "const spend = await this.economy.spendDiamond("}, {"file": "apps/core-api/src/modules/economy/economy.service.ts", "line": 484, "quote": "const result = await this.ledger.record({"}]},
+  {"from": "matching", "to": "postgres", "label": "Cộng dồn priorityBoostMs nếu chưa replay, rồi đọc lại vé", "kind": "call", "mechanism": "shared-db", "note": "increment chỉ khớp khi vé còn queued.",
+   "evidence": [{"file": "apps/core-api/src/modules/matching/matching.service.ts", "line": 458, "quote": "await this.ticketRepo.increment("}]},
+  {"from": "matching", "to": "redis", "label": "ZADD XX đặt lại score tuyệt đối từ tổng boost trong DB", "kind": "call", "mechanism": "redis-state", "note": "XX: member đã rời hàng đợi thì bỏ qua; replay cùng key chỉ sửa score về đúng tổng đã trả.",
+   "evidence": [{"file": "apps/core-api/src/modules/matching/matching.service.ts", "line": 467, "quote": "await this.queue.enqueue("}, {"file": "apps/core-api/src/modules/matching/redis/redis-matching-queue.adapter.ts", "line": 18, "quote": "await this.redis.zadd(shard, mode, score, ticketId);"}]},
+  {"from": "matching", "to": "web", "label": "Trả transactionId, replayed và vé với giá VIP mới đọc", "kind": "return", "mechanism": "http"}
+ ],
+ "groups": [
+  {"from": 10, "to": 10, "label": "Transaction khoá và huỷ vé", "kind": "transaction"}
+ ],
+ "invariants": [
+  "Giá tăng tốc phụ thuộc hạng VIP nên Matching luôn hỏi Economy mỗi lần trả vé, không tự giữ trạng thái VIP; Economy là nơi duy nhất sở hữu ví.",
+  "Matching không ghi sổ: việc trừ DIA đi qua economy.spendDiamond (ledger.record), Matching chỉ làm hiệu ứng boost vé và hàng đợi.",
+  "Boost được cộng vào DB trước, rồi ZADD XX đặt score tuyệt đối từ tổng DB nên retry cùng key không boost đôi.",
+  "Huỷ vé commit trạng thái trong Postgres trước rồi mới ZREM Redis, vì Postgres là nguồn sự thật của vé."
+ ],
+ "failureModes": [
+  {"when": "ZREM Redis lỗi sau khi vé đã cancelled trong DB", "effect": "Lỗi được ném ra từ cancelTicket; vé thành zombie trong Redis, matcher kiểm tra lại lúc ghép sẽ loại (theo comment trong code)."},
+  {"when": "Vé không còn queued khi speedup", "effect": "Trả lỗi TICKET_INVALID_TRANSITION (409) trước khi trừ DIA."},
+  {"when": "Vé không thuộc user gọi", "effect": "assertOwnership ném TICKET_FORBIDDEN (403)."},
+  {"when": "Vé vừa được ghép giữa lúc trừ DIA và increment", "effect": "DIA vẫn bị trừ, increment không khớp do status không còn queued, không hoàn tiền (theo comment code)."}
+ ],
+ "dataIssues": [],
+ "uncertain": []
+}

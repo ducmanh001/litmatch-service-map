@@ -1,0 +1,390 @@
+{
+ "id": "party-room-lifecycle",
+ "title": "Vòng đời phòng party với LiveKit",
+ "summary": "Phòng party có DB (party-room) là nguồn sự thật về thành viên, còn âm thanh chạy qua LiveKit SFU (media-server). Hai bên chỉ biết nhau qua token, lệnh SDK và webhook, nên core-api phải giữ DB và SFU khớp nhau, rồi báo realtime qua signaling-gateway.",
+ "caption": "Tạo phòng, vào phòng bằng token LiveKit, webhook báo host rớt, rồi job dọn phòng đóng phòng và xoá room trên SFU.",
+ "participants": [
+  {
+   "id": "web",
+   "label": "Web client",
+   "kind": "client"
+  },
+  {
+   "id": "party-room",
+   "label": "party-room (core-api)",
+   "kind": "service"
+  },
+  {
+   "id": "user",
+   "label": "user",
+   "kind": "service"
+  },
+  {
+   "id": "media-server",
+   "label": "LiveKit SFU",
+   "kind": "service"
+  },
+  {
+   "id": "signaling-gateway",
+   "label": "signaling-gateway",
+   "kind": "service"
+  },
+  {
+   "id": "postgres",
+   "label": "PostgreSQL",
+   "kind": "infra"
+  },
+  {
+   "id": "redis",
+   "label": "Redis",
+   "kind": "infra"
+  }
+ ],
+ "steps": [
+  {
+   "from": "web",
+   "to": "party-room",
+   "label": "POST /party/rooms: host tạo phòng",
+   "kind": "call",
+   "mechanism": "http",
+   "note": "Mọi route REST đều qua JwtAuthGuard toàn cục trừ route @Public.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/app/app.module.ts",
+     "line": 154,
+     "quote": "{ provide: APP_GUARD, useClass: JwtAuthGuard },"
+    }
+   ]
+  },
+  {
+   "from": "party-room",
+   "to": "user",
+   "label": "Chỉ khi bật multi-region: lấy hồ sơ host để chọn LiveKit URL",
+   "kind": "call",
+   "mechanism": "di-call",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/party-room/party-room.service.ts",
+     "line": 1155,
+     "quote": "const host = await this.userService.getByIdOrThrow(hostUserId);"
+    }
+   ],
+   "note": "resolveHostLivekitUrl chạy trước transaction; nếu chưa cấu hình LIVEKIT_REGION_URLS thì trả LIVEKIT_URL mặc định mà không gọi User. URL được snapshot vào row phòng."
+  },
+  {
+   "from": "party-room",
+   "to": "postgres",
+   "label": "Lưu phòng và membership của host trong transaction",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/party-room/party-room.service.ts",
+     "line": 162,
+     "quote": "({ room, membership } = await this.dataSource.transaction("
+    }
+   ]
+  },
+  {
+   "from": "party-room",
+   "to": "media-server",
+   "label": "Tạo room tường minh trên SFU trước khi ai join",
+   "kind": "call",
+   "mechanism": "sdk",
+   "note": "createRoom chạy sau transaction lưu phòng. Nếu createRoom throw, PartyRoomService.createRoom gọi closeRoomById(room.id, Error) để bù (đóng phòng vừa tạo) rồi trả 503 MEDIA_ROOM_CREATE_FAILED; đây là nhánh lỗi, không phải đường chạy thường.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/party-room/party-room.service.ts",
+     "line": 216,
+     "quote": "await this.closeRoomById(room.id, PartyRoomCloseReason.Error).catch("
+    }
+   ]
+  },
+  {
+   "from": "web",
+   "to": "party-room",
+   "label": "POST /party/rooms/:id/join: vào phòng",
+   "kind": "call",
+   "mechanism": "http"
+  },
+  {
+   "from": "party-room",
+   "to": "postgres",
+   "label": "Khoá phòng đang hoạt động, ghi membership trong transaction",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/party-room/party-room.service.ts",
+     "line": 243,
+     "quote": "await this.dataSource.transaction(async (manager) => {"
+    }
+   ]
+  },
+  {
+   "from": "party-room",
+   "to": "redis",
+   "label": "Publish PartyMemberJoined tới thành viên còn lại (trừ người vừa vào)",
+   "kind": "async",
+   "mechanism": "redis-pubsub",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/party-room/party-room.service.ts",
+     "line": 1326,
+     "quote": "publishRealtimeEvent(this.redis, this.logger, m.userId, envelope),"
+    },
+    {
+     "file": "apps/core-api/src/common/realtime/redis-realtime-publisher.adapter.ts",
+     "line": 11,
+     "quote": "return this.redis.publish(channel, payload);"
+    },
+    {
+     "file": "apps/core-api/src/modules/party-room/party-room.service.ts",
+     "line": 340,
+     "quote": "event: RealtimeEvents.PartyHostReconnected,"
+    },
+    {
+     "file": "apps/core-api/src/modules/party-room/party-room.service.ts",
+     "line": 346,
+     "quote": "event: RealtimeEvents.PartyMemberReconnected,"
+    }
+   ],
+   "note": "Chỉ publish PartyMemberJoined khi isNewJoin. Join lại thì publish PartyHostReconnected (host quay lại) hoặc PartyMemberReconnected (thành viên quay lại) nếu người đó đang bị đánh dấu rớt; publishToRoomMembers đọc danh sách member rồi publish từng user, loại excludeUserId."
+  },
+  {
+   "from": "redis",
+   "to": "signaling-gateway",
+   "label": "Gateway PSUBSCRIBE realtime:user:* nhận envelope",
+   "kind": "async",
+   "mechanism": "redis-pubsub",
+   "evidence": [
+    {
+     "file": "apps/signaling-gateway/src/app/signaling.gateway.ts",
+     "line": 346,
+     "quote": ".psubscribe(REALTIME_USER_CHANNEL_PATTERN)"
+    }
+   ]
+  },
+  {
+   "from": "signaling-gateway",
+   "to": "web",
+   "label": "Relay envelope xuống socket của từng user",
+   "kind": "async",
+   "mechanism": "socket",
+   "evidence": [
+    {
+     "file": "apps/signaling-gateway/src/app/signaling.gateway.ts",
+     "line": 332,
+     "quote": "this.server.local.to(userRoom(userId)).emit(envelope.event, envelope.data);"
+    }
+   ]
+  },
+  {
+   "from": "party-room",
+   "to": "web",
+   "label": "Trả livekitUrl và token join do server cấp",
+   "kind": "return",
+   "mechanism": "http",
+   "note": "Token do PartyLivekitRoomPort.mintJoinToken ký, identity do server đặt, canPublish theo role trong DB.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/party-room/ports/livekit-party-room.ts",
+     "line": 30,
+     "quote": "abstract mintJoinToken("
+    }
+   ]
+  },
+  {
+   "from": "media-server",
+   "to": "party-room",
+   "label": "Webhook LiveKit báo participant rời, party-room verify chữ ký",
+   "kind": "async",
+   "mechanism": "webhook",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/party-room/ports/livekit-party-room.ts",
+     "line": 57,
+     "quote": "abstract receiveWebhook("
+    }
+   ]
+  },
+  {
+   "from": "party-room",
+   "to": "postgres",
+   "label": "Đánh dấu host rớt và bắt đầu grace trong transaction",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "note": "Sau commit, chỉ khi vừa đánh dấu mới publish PartyHostDisconnected tới thành viên, cùng đường Redis như bước 7-9. Với thành viên thường, webhook mở transaction riêng khoá phòng và đặt disconnectedAt rồi publish PartyMemberDisconnected; webhook retry không dời mốc và không bắn event đôi.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/party-room/party-room.service.ts",
+     "line": 1282,
+     "quote": "const marked = await this.dataSource.transaction(async (manager) => {"
+    },
+    {
+     "file": "apps/core-api/src/modules/party-room/party-room.service.ts",
+     "line": 1295,
+     "quote": "event: RealtimeEvents.PartyHostDisconnected,"
+    },
+    {
+     "file": "apps/core-api/src/modules/party-room/party-room.service.ts",
+     "line": 1231,
+     "quote": "event: RealtimeEvents.PartyMemberDisconnected,"
+    }
+   ]
+  },
+  {
+   "from": "party-room",
+   "to": "postgres",
+   "label": "Job host-grace: quét phòng quá grace, closeRoomById đóng phòng trong transaction",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "note": "PartyRoomSweeperService.sweepExpiredHostGrace tìm phòng Active có hostDisconnectedAt quá PARTY_HOST_DISCONNECT_GRACE_SECONDS rồi gọi closeRoomById(HostLeft) với guard re-check trên row đã lock; transaction khoá phòng, set Closed, cập nhật leftAt của member.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/party-room/party-room.service.ts",
+     "line": 1014,
+     "quote": "const result = await this.dataSource.transaction(async (manager) => {"
+    },
+    {
+     "file": "apps/core-api/src/modules/party-room/jobs/party-room-sweeper.service.ts",
+     "line": 128,
+     "quote": "await this.partyRoomService.closeRoomById("
+    }
+   ]
+  },
+  {
+   "from": "party-room",
+   "to": "media-server",
+   "label": "Sau khi DB đóng: deleteRoom trên SFU (lỗi bị nuốt, chỉ log debug)",
+   "kind": "call",
+   "mechanism": "sdk",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/party-room/ports/livekit-party-room.ts",
+     "line": 51,
+     "quote": "abstract deleteRoom(roomName: string): Promise<void>;"
+    },
+    {
+     "file": "apps/core-api/src/modules/party-room/jobs/party-room-sweeper.service.ts",
+     "line": 75,
+     "quote": "task: () => this.runHostGraceCheckOnce(),"
+    }
+   ],
+   "note": "PartyRoomSweeperService chạy runHostGraceCheckOnce theo ManagedInterval (PARTY_HOST_GRACE_CHECK_INTERVAL_MS); closeRoomById chỉ gọi deleteRoom khi transaction thực sự chuyển phòng sang Closed."
+  },
+  {
+   "from": "party-room",
+   "to": "redis",
+   "label": "Publish sự kiện phòng đã đóng tới thành viên",
+   "kind": "async",
+   "mechanism": "redis-pubsub",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/party-room/party-room.service.ts",
+     "line": 1058,
+     "quote": "publishRealtimeEvent(this.redis, this.logger, uid, envelope),"
+    }
+   ]
+  }
+ ],
+ "groups": [
+  {
+   "from": 3,
+   "to": 3,
+   "label": "Transaction tạo phòng",
+   "kind": "transaction"
+  },
+  {
+   "from": 4,
+   "to": 4,
+   "label": "Gọi SFU qua SDK",
+   "kind": "external"
+  },
+  {
+   "from": 6,
+   "to": 6,
+   "label": "Transaction vào phòng",
+   "kind": "transaction"
+  },
+  {
+   "from": 7,
+   "to": 8,
+   "label": "Publish realtime sau khi ghi DB",
+   "kind": "besteffort"
+  },
+  {
+   "from": 12,
+   "to": 12,
+   "label": "Transaction đánh dấu host rớt",
+   "kind": "transaction"
+  },
+  {
+   "from": 13,
+   "to": 13,
+   "label": "Transaction đóng phòng",
+   "kind": "transaction"
+  },
+  {
+   "from": 14,
+   "to": 15,
+   "label": "Dọn SFU và báo realtime sau khi đóng",
+   "kind": "besteffort"
+  }
+ ],
+ "invariants": [
+  "Phòng được lưu trong transaction rồi mới tạo room trên SFU, và token join do server mint (identity do server đặt), nên DB là nguồn sự thật về ai là thành viên và role.",
+  "closeRoomById đóng phòng trong transaction DB trước, rồi mới xoá room trên SFU và publish realtime, nên thành viên không thấy phòng đã đóng khi DB chưa ghi.",
+  "hostDisconnectedAt chỉ được set bởi webhook participant_left của host (markHostDisconnected), nên job host-grace chỉ đóng được phòng mà webhook đã đánh dấu; phòng không có webhook thì chỉ sweepStaleRooms (PARTY_STALE_ROOM_SECONDS, không còn member hoặc SFU roomExists=false) mới dọn."
+ ],
+ "failureModes": [
+  {
+   "when": "Webhook LiveKit không tới hoặc sai chữ ký",
+   "effect": "Sai chữ ký hoặc thiếu header thì controller trả 401 WEBHOOK_INVALID. Nếu webhook host rớt không tới thì hostDisconnectedAt không được set, job host-grace không thấy phòng; chỉ sweepStaleRooms (phòng quá PARTY_STALE_ROOM_SECONDS không có member hoặc SFU đã đóng), webhook room_finished hoặc host gọi leave mới đóng được."
+  },
+  {
+   "when": "Publish Redis realtime thất bại sau khi DB đã ghi",
+   "effect": "publishRealtimeEvent bắt lỗi và chỉ logger.warn (không throw); DB vẫn đúng, client không nhận push và đọc lại trạng thái qua REST/polling."
+  },
+  {
+   "when": "Xoá room trên SFU thất bại khi đóng phòng",
+   "effect": "deleteRoom lỗi bị .catch nuốt và chỉ log debug; DB đã đóng nên phòng không còn hoạt động. Suy luận: room SFU còn sót tự hết nhờ emptyTimeout cấu hình lúc createRoom; sweeper chỉ quét phòng Active nên không dọn lại."
+  },
+  {
+   "when": "Tạo room trên SFU thất bại khi host tạo phòng",
+   "effect": "Service bù bằng closeRoomById(Error) (đóng phòng trong DB) rồi trả 503 MEDIA_ROOM_CREATE_FAILED để client thử lại."
+  }
+ ],
+ "dataIssues": [],
+ "uncertain": [
+  "Steps 7-9: the gateway-to-web socket hop cites the same psubscribe fact as the Redis-to-gateway hop."
+ ],
+ "resolved": [
+  {
+   "id": "party-room-lifecycle#2",
+   "status": "confirmed",
+   "finding": "Webhook POST party/webhooks/livekit verify chữ ký rồi handleWebhookEvent; participant_left của host đánh dấu hostDisconnectedAt, sweeper theo interval đóng phòng quá grace. Bước client là HTTP/socket chuẩn."
+  },
+  {
+   "id": "party-room-lifecycle#4",
+   "status": "corrected",
+   "finding": "closeRoomById sau createRoom là nhánh bù lỗi: SFU createRoom throw thì đóng phòng (reason Error) và trả 503. Đã sửa note step 4 và thêm failureMode."
+  },
+  {
+   "id": "party-room-lifecycle#5",
+   "status": "confirmed",
+   "finding": "Publish realtime sau markHostDisconnected chỉ khi marked true, qua publishToRoomMembers cùng đường Redis; để ở note step 12 là đủ, đã làm rõ note và thêm evidence."
+  },
+  {
+   "id": "party-room-lifecycle#6",
+   "status": "corrected",
+   "finding": "Redis publish lỗi bị publishRealtimeEvent nuốt (warn) - đúng. Xoá SFU lỗi bị .catch nuốt, nhưng sweeper chỉ quét phòng Active nên KHÔNG dọn room SFU sót (roomExists dùng cho chiều ngược lại); đã sửa failureMode."
+  },
+  {
+   "id": "party-room-lifecycle#7",
+   "status": "corrected",
+   "finding": "Sweeper chạy theo timer: ManagedInterval với PARTY_HOST_GRACE_CHECK_INTERVAL_MS gọi runHostGraceCheckOnce (và PARTY_SWEEPER_INTERVAL_MS cho runOnce). Đã sửa label/note step 13 và invariant."
+  }
+ ],
+ "resolutionApplied": true
+}

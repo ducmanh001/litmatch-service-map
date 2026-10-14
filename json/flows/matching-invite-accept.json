@@ -1,0 +1,301 @@
+{
+ "id": "matching-invite-accept",
+ "title": "Chấp nhận lời mời và tạo phiên ghép",
+ "summary": "Invitee chấp nhận lời mời ghép: matching phải khoá invite, nhờ safety kiểm tra block/báo cáo, đọc trạng thái user, tạo 2 ticket cùng MatchSession đã confirmed trong một transaction rồi báo realtime cho cả hai bên qua Redis và signaling-gateway.",
+ "caption": "Accept lời mời: transaction precheck, transaction tạo ticket/session, rồi publish MatchConfirmed tới hai user.",
+ "participants": [
+  {
+   "id": "web",
+   "label": "Web client",
+   "kind": "client"
+  },
+  {
+   "id": "matching",
+   "label": "Matching",
+   "kind": "service"
+  },
+  {
+   "id": "safety",
+   "label": "Safety",
+   "kind": "service"
+  },
+  {
+   "id": "user",
+   "label": "User",
+   "kind": "service"
+  },
+  {
+   "id": "postgres",
+   "label": "PostgreSQL",
+   "kind": "infra"
+  },
+  {
+   "id": "redis",
+   "label": "Redis",
+   "kind": "infra"
+  },
+  {
+   "id": "signaling-gateway",
+   "label": "Signaling gateway",
+   "kind": "service"
+  }
+ ],
+ "steps": [
+  {
+   "from": "web",
+   "to": "matching",
+   "label": "POST /matching/invites/:id/accept (JWT)",
+   "kind": "call",
+   "mechanism": "http",
+   "note": "Mọi route REST đều qua JwtAuthGuard toàn cục trừ khi @Public.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/matching/controllers/invite.controller.ts",
+     "line": 93,
+     "quote": "@Post(':id/accept')"
+    },
+    {
+     "file": "apps/core-api/src/app/app.module.ts",
+     "line": 154,
+     "quote": "{ provide: APP_GUARD, useClass: JwtAuthGuard },"
+    }
+   ]
+  },
+  {
+   "from": "matching",
+   "to": "postgres",
+   "label": "Transaction precheck: khoá invite, kiểm tra chủ lời mời, hết hạn, transition hợp lệ",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "note": "Nếu invite đã Accepted thì trả lại session cũ (idempotent) và dừng ở đây.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/matching/services/invite.service.ts",
+     "line": 447,
+     "quote": "return this.dataSource.transaction(async (manager) => {"
+    },
+    {
+     "file": "apps/core-api/src/modules/matching/services/invite.service.ts",
+     "line": 448,
+     "quote": "const invite = await this.lockInvite(manager, inviteId);"
+    }
+   ]
+  },
+  {
+   "from": "matching",
+   "to": "safety",
+   "label": "canPair: kiểm tra block và báo cáo gần đây giữa hai user",
+   "kind": "call",
+   "mechanism": "di-call",
+   "note": "MATCH_INTERACTION_POLICY được provide bằng useExisting: SafetyService. canPair dùng repository của Safety (không dùng manager của transaction) nên chạy trên kết nối riêng, trong lúc transaction precheck còn mở.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/matching/services/invite.service.ts",
+     "line": 475,
+     "quote": "await this.interactionPolicy.canPair("
+    },
+    {
+     "file": "apps/core-api/src/modules/matching/matching.module.ts",
+     "line": 70,
+     "quote": "{ provide: MATCH_INTERACTION_POLICY, useExisting: SafetyService }"
+    }
+   ]
+  },
+  {
+   "from": "matching",
+   "to": "postgres",
+   "label": "Nếu không ghép được: lưu invite Declined và COMMIT rồi mới báo lỗi 403",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "note": "Throw nằm ngoài transaction để phần Declined không bị rollback.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/matching/services/invite.service.ts",
+     "line": 482,
+     "quote": "await manager.save(invite);"
+    }
+   ]
+  },
+  {
+   "from": "matching",
+   "to": "postgres",
+   "label": "Transaction chính: khoá lại invite, kiểm tra chủ lời mời, hết hạn, transition",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/matching/services/invite.service.ts",
+     "line": 312,
+     "quote": "const result = await this.dataSource.transaction(async (manager) => {"
+    },
+    {
+     "file": "apps/core-api/src/modules/matching/services/invite.service.ts",
+     "line": 313,
+     "quote": "const invite = await this.lockInvite(manager, inviteId);"
+    }
+   ]
+  },
+  {
+   "from": "matching",
+   "to": "user",
+   "label": "Đọc 2 User và yêu cầu cả hai ở trạng thái Active",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "note": "Matching đọc entity User trực tiếp qua manager của transaction; không Active thì lỗi USER_BANNED (409).",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/matching/services/invite.service.ts",
+     "line": 336,
+     "quote": "const users = await manager.find(User, {"
+    }
+   ]
+  },
+  {
+   "from": "matching",
+   "to": "postgres",
+   "label": "Insert 2 MatchTicket Matched (lỗi unique uq_match_tickets_active_user: 409)",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/matching/services/invite.service.ts",
+     "line": 511,
+     "quote": "const [ticketInviter, ticketInvitee] = await manager.save(["
+    }
+   ]
+  },
+  {
+   "from": "matching",
+   "to": "postgres",
+   "label": "Lưu MatchSession Confirmed, ticket Confirmed và invite Accepted",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/matching/services/invite.service.ts",
+     "line": 363,
+     "quote": "const session = await manager.save("
+    },
+    {
+     "file": "apps/core-api/src/modules/matching/services/invite.service.ts",
+     "line": 384,
+     "quote": "await manager.save(invite);"
+    }
+   ]
+  },
+  {
+   "from": "matching",
+   "to": "redis",
+   "label": "Sau commit: publish MatchConfirmed {ticketId, sessionId} cho từng user",
+   "kind": "async",
+   "mechanism": "redis-pubsub",
+   "note": "publishRealtimeEvent bắt lỗi publish và chỉ ghi log warn, nên lỗi không làm hỏng accept.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/matching/services/invite.service.ts",
+     "line": 414,
+     "quote": "return publishRealtimeEvent("
+    },
+    {
+     "file": "apps/core-api/src/common/realtime/redis-realtime-publisher.adapter.ts",
+     "line": 11,
+     "quote": "return this.redis.publish(channel, payload);"
+    }
+   ]
+  },
+  {
+   "from": "redis",
+   "to": "signaling-gateway",
+   "label": "Gateway PSUBSCRIBE realtime:user:* nhận envelope",
+   "kind": "async",
+   "mechanism": "redis-pubsub",
+   "evidence": [
+    {
+     "file": "apps/signaling-gateway/src/app/signaling.gateway.ts",
+     "line": 346,
+     "quote": ".psubscribe(REALTIME_USER_CHANNEL_PATTERN)"
+    }
+   ]
+  },
+  {
+   "from": "signaling-gateway",
+   "to": "web",
+   "label": "Emit MatchConfirmed tới room user:{userId} của hai bên",
+   "kind": "async",
+   "mechanism": "socket",
+   "evidence": [
+    {
+     "file": "apps/signaling-gateway/src/app/signaling.gateway.ts",
+     "line": 332,
+     "quote": "this.server.local.to(userRoom(userId)).emit(envelope.event, envelope.data);"
+    }
+   ]
+  },
+  {
+   "from": "matching",
+   "to": "user",
+   "label": "Controller lấy hồ sơ inviter để dựng response",
+   "kind": "call",
+   "mechanism": "di-call",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/matching/controllers/invite.controller.ts",
+     "line": 107,
+     "quote": "await this.userService.getByIdOrThrow(result.invite.inviterUserId),"
+    }
+   ]
+  },
+  {
+   "from": "matching",
+   "to": "web",
+   "label": "200 OK: invite, session, inviteeTicketId và hồ sơ inviter",
+   "kind": "return",
+   "mechanism": "http"
+  }
+ ],
+ "groups": [
+  {
+   "from": 2,
+   "to": 4,
+   "label": "Transaction precheck (commit riêng)",
+   "kind": "transaction"
+  },
+  {
+   "from": 5,
+   "to": 8,
+   "label": "Transaction tạo ticket + session",
+   "kind": "transaction"
+  },
+  {
+   "from": 9,
+   "to": 11,
+   "label": "Realtime sau commit, best-effort",
+   "kind": "besteffort"
+  }
+ ],
+ "invariants": [
+  "Precheck chạy trong transaction riêng và commit trước khi throw, vì nếu throw trong cùng transaction thì trạng thái Declined vừa ghi sẽ bị rollback.",
+  "Hai ticket, MatchSession và invite Accepted được ghi trong cùng một transaction nên hoặc có đủ hoặc không có gì; invite giữ Pending nếu một bên đang bận.",
+  "Publish MatchConfirmed đặt sau khi transaction commit để client không nhận event về session chưa tồn tại trong DB."
+ ],
+ "failureModes": [
+  {
+   "when": "canPair trả false (có block hoặc báo cáo gần đây)",
+   "effect": "Invite được lưu Declined và commit, request trả 403 INVITE_TARGET_UNAVAILABLE."
+  },
+  {
+   "when": "Một trong hai user đang ở queue hoặc phiên ghép khác (unique uq_match_tickets_active_user)",
+   "effect": "Transaction rollback, trả 409 INVITE_ACCEPT_USER_BUSY, invite vẫn Pending."
+  },
+  {
+   "when": "Publish Redis thất bại",
+   "effect": "Lỗi chỉ được log warn, accept vẫn thành công; client còn polling fallback theo comment trong helper."
+  },
+  {
+   "when": "Người gọi không phải invitee",
+   "effect": "Trả 403 INVITE_FORBIDDEN, không ghi gì."
+  }
+ ],
+ "dataIssues": [],
+ "uncertain": []
+}

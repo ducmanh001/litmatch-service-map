@@ -1,0 +1,56 @@
+{
+ "id": "avatar-buy-item",
+ "title": "Mua vật phẩm avatar bằng kim cương",
+ "summary": "Người dùng nhận item miễn phí, mua item trả phí bằng DIA với Idempotency-Key rồi trang bị. Avatar sở hữu catalog và quyền sở hữu nhưng không được tự trừ tiền, nên phải gọi Economy (sổ cái duy nhất) trước khi ghi quyền sở hữu.",
+ "caption": "Ba endpoint claim, buy, equip của Avatar và chỗ Avatar gọi Economy.spendDiamond trước khi ghi sở hữu item.",
+ "participants": [
+  {"id": "web", "label": "Web client", "kind": "client"},
+  {"id": "avatar", "label": "Avatar", "kind": "service"},
+  {"id": "economy", "label": "Economy", "kind": "service"},
+  {"id": "postgres", "label": "PostgreSQL", "kind": "infra"}
+ ],
+ "steps": [
+  {"from": "web", "to": "avatar", "label": "POST /avatar/items/:assetId/claim (nhận item miễn phí)", "kind": "call", "mechanism": "http", "note": "Mọi route REST đều qua JwtAuthGuard.", "evidence": []},
+  {"from": "avatar", "to": "postgres", "label": "Đọc asset active, kiểm giá = 0, ghi user_avatar_items (bỏ qua nếu đã có)", "kind": "call", "mechanism": "shared-db", "evidence": [
+   {"file": "apps/core-api/src/modules/avatar/avatar.service.ts", "line": 160, "quote": "const asset = await this.assetRepo.findOneBy({ id: assetId, active: true });"},
+   {"file": "apps/core-api/src/modules/avatar/avatar.service.ts", "line": 176, "quote": "await manager"}]},
+  {"from": "avatar", "to": "web", "label": "204 No Content, claim idempotent", "kind": "return", "mechanism": "http", "evidence": []},
+  {"from": "web", "to": "avatar", "label": "POST /avatar/items/:assetId/buy kèm header Idempotency-Key", "kind": "call", "mechanism": "http", "evidence": []},
+  {"from": "avatar", "to": "postgres", "label": "Đọc asset active và giá priceDiamond (giá = 0 thì báo dùng claim)", "kind": "call", "mechanism": "shared-db", "evidence": [
+   {"file": "apps/core-api/src/modules/avatar/avatar.service.ts", "line": 160, "quote": "const asset = await this.assetRepo.findOneBy({ id: assetId, active: true });"}]},
+  {"from": "avatar", "to": "economy", "label": "spendDiamond(AvatarPurchase, giá, key avatarBuyIdempotencyKey)", "kind": "call", "mechanism": "di-call", "evidence": [
+   {"file": "apps/core-api/src/modules/avatar/avatar.service.ts", "line": 85, "quote": "const { replayed } = await this.economy.spendDiamond("}]},
+  {"from": "economy", "to": "postgres", "label": "ledger.record: trừ ví user, cộng SystemRevenue, replay nếu key đã có", "kind": "call", "mechanism": "shared-db", "note": "record() tra idempotencyKey trước; nếu chưa có thì mở transaction recordInManager; nếu thua unique key thì đọc lại giao dịch thắng.", "evidence": [
+   {"file": "apps/core-api/src/modules/economy/services/ledger.service.ts", "line": 74, "quote": "const result = await this.dataSource.transaction((manager) =>"}]},
+  {"from": "economy", "to": "avatar", "label": "Trả { transactionId, replayed }", "kind": "return", "mechanism": "di-call", "evidence": []},
+  {"from": "avatar", "to": "postgres", "label": "Ghi user_avatar_items idempotent (ON CONFLICT DO NOTHING)", "kind": "call", "mechanism": "shared-db", "evidence": [
+   {"file": "apps/core-api/src/modules/avatar/avatar.service.ts", "line": 181, "quote": ".orIgnore()"}]},
+  {"from": "avatar", "to": "web", "label": "200 { replayed }", "kind": "return", "mechanism": "http", "evidence": []},
+  {"from": "web", "to": "avatar", "label": "PUT /avatar/me/equip { slot, avatarAssetId }", "kind": "call", "mechanism": "http", "evidence": []},
+  {"from": "avatar", "to": "postgres", "label": "Đọc asset, kiểm đúng slot và đã sở hữu (exists user_avatar_items)", "kind": "call", "mechanism": "shared-db", "evidence": [
+   {"file": "apps/core-api/src/modules/avatar/avatar.service.ts", "line": 110, "quote": "const owned = await this.itemRepo.exists({"}]},
+  {"from": "avatar", "to": "postgres", "label": "Nếu chưa có config: tạo mặc định (cấp item free + ghi config) trong transaction", "kind": "call", "mechanism": "shared-db", "evidence": [
+   {"file": "apps/core-api/src/modules/avatar/avatar.service.ts", "line": 234, "quote": "return await this.dataSource.transaction(async (manager) => {"}]},
+  {"from": "avatar", "to": "postgres", "label": "Cập nhật cột slot trong user_avatar_configs", "kind": "call", "mechanism": "shared-db", "evidence": [
+   {"file": "apps/core-api/src/modules/avatar/avatar.service.ts", "line": 123, "quote": "await this.configRepo.update("}]},
+  {"from": "avatar", "to": "postgres", "label": "getMyAvatar: đọc config và các layer avatar_assets theo zIndex", "kind": "call", "mechanism": "shared-db", "evidence": [
+   {"file": "apps/core-api/src/modules/avatar/avatar.service.ts", "line": 214, "quote": "const assets = await this.assetRepo.find({ where: { id: In(ids) } });"}]},
+  {"from": "avatar", "to": "web", "label": "Trả config và layers đang trang bị", "kind": "return", "mechanism": "http", "evidence": []}
+ ],
+ "groups": [
+  {"from": 7, "to": 7, "label": "Giao dịch sổ cái Economy", "kind": "transaction"},
+  {"from": 13, "to": 13, "label": "Khởi tạo config mặc định", "kind": "transaction"}
+ ],
+ "invariants": [
+  "Economy.spendDiamond không có hook withinTransaction, nên Avatar bắt buộc trừ tiền trước rồi mới ghi sở hữu; cả hai nhánh đều idempotent nên retry cùng Idempotency-Key an toàn.",
+  "Chỉ Economy ghi ledger/wallet; Avatar chỉ gọi spendDiamond và không tự trừ diamond, giá lấy từ asset.priceDiamond trong catalog.",
+  "equip kiểm item đã sở hữu và đúng slot trước khi cập nhật config, tránh trang bị item của người khác (IDOR)."
+ ],
+ "failureModes": [
+  {"when": "Trừ tiền thành công nhưng ghi user_avatar_items lỗi", "effect": "Item chưa được cấp; client retry cùng Idempotency-Key sẽ replay phần trừ tiền và ghi lại sở hữu, không trừ hai lần."},
+  {"when": "Gọi buy cho item miễn phí hoặc claim cho item trả phí", "effect": "Trả 400 (ASSET_IS_FREE / ASSET_REQUIRES_PURCHASE), không đụng Economy."},
+  {"when": "equip item chưa sở hữu", "effect": "Trả 403 ITEM_NOT_OWNED, config không đổi."}
+ ],
+ "dataIssues": [],
+ "uncertain": []
+}

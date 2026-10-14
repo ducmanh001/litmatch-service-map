@@ -1,8 +1,121 @@
 # Litmatch Service Map
 
-> Interactive map of how the 25 services/modules of Litmatch coordinate and why (72 audited cross-service flows). The page is large; for machine reading use the context pack below (many small markdown files with stable ids).
+> How the 25 services/modules of Litmatch coordinate and why: collaborators with "why" and "if missing", technique cards, 72 audited cross-service flows covering every entrypoint, cross-cutting Q&A and findings with status. Static analysis of ducmanh001/litmatch @ d3cb28c.
 
-- [Context pack index](https://ducmanh001.github.io/litmatch-atlas-demo/llms.txt): start here
-- [Service map data per service](https://ducmanh001.github.io/litmatch-atlas-demo/pack/service-map/index.md): collaborators with why / if missing, techniques, Q&A, findings
-- [Flows](https://ducmanh001.github.io/litmatch-atlas-demo/pack/flows/index.md): the 72 sequence flows, one file each
-- [Feature slices](https://ducmanh001.github.io/litmatch-atlas-demo/pack/slices/index.md): follow one feature from screen to database
+## Start here
+
+- [roadmap.md](https://ducmanh001.github.io/litmatch-service-map/roadmap.md): reading roadmap, findings with status, coverage
+- [service-map/index.md](https://ducmanh001.github.io/litmatch-service-map/service-map/index.md): index of service datasheets, techniques, Q&A
+- [flows/index.md](https://ducmanh001.github.io/litmatch-service-map/flows/index.md): index of the 72 flows
+- [service-map/findings.md](https://ducmanh001.github.io/litmatch-service-map/service-map/findings.md): observations with status (fixed / confirmed)
+- [lookup/entrypoint-to-flow.md](https://ducmanh001.github.io/litmatch-service-map/lookup/entrypoint-to-flow.md): which flow covers which endpoint or job
+- [lookup/index.md](https://ducmanh001.github.io/litmatch-service-map/lookup/index.md): other lookups
+- [search-index.json](https://ducmanh001.github.io/litmatch-service-map/search-index.json): machine search over all entities
+- [sitemap.xml](https://ducmanh001.github.io/litmatch-service-map/sitemap.xml): all URLs
+- [llms-full.txt](https://ducmanh001.github.io/litmatch-service-map/llms-full.txt): indexes, findings and Q&A concatenated
+
+## Cross-cutting Q&A
+
+- [service-map/qa-api-contract.md](https://ducmanh001.github.io/litmatch-service-map/service-map/qa-api-contract.md): Hợp đồng API và dữ liệu: OpenAPI, validate, phân trang, schema?
+- [service-map/qa-authn-model.md](https://ducmanh001.github.io/litmatch-service-map/service-map/qa-authn-model.md): Xác thực người dùng bằng mô hình nào?
+- [service-map/qa-authz-model.md](https://ducmanh001.github.io/litmatch-service-map/service-map/qa-authz-model.md): Phân quyền dùng RBAC, ABAC hay kết hợp?
+- [service-map/qa-consistency-concurrency.md](https://ducmanh001.github.io/litmatch-service-map/service-map/qa-consistency-concurrency.md): Nhất quán và đồng thời: transaction, khoá, sổ cái?
+- [service-map/qa-idempotency.md](https://ducmanh001.github.io/litmatch-service-map/service-map/qa-idempotency.md): Chống xử lý trùng (idempotency) làm thế nào?
+- [service-map/qa-media-access.md](https://ducmanh001.github.io/litmatch-service-map/service-map/qa-media-access.md): Kiểm soát truy cập media: LiveKit và upload file?
+- [service-map/qa-observability.md](https://ducmanh001.github.io/litmatch-service-map/service-map/qa-observability.md): Quan sát và vận hành: metrics, log, trace, health, audit?
+- [service-map/qa-queues-and-workers.md](https://ducmanh001.github.io/litmatch-service-map/service-map/qa-queues-and-workers.md): Hàng đợi và worker nền: dùng gì, ở đâu?
+- [service-map/qa-rate-limit-abuse.md](https://ducmanh001.github.io/litmatch-service-map/service-map/qa-rate-limit-abuse.md): Giới hạn tốc độ và chống lạm dụng?
+- [service-map/qa-realtime-delivery.md](https://ducmanh001.github.io/litmatch-service-map/service-map/qa-realtime-delivery.md): Realtime dùng Redis Streams, queue hay pub/sub?
+- [service-map/qa-token-lifecycle.md](https://ducmanh001.github.io/litmatch-service-map/service-map/qa-token-lifecycle.md): Vòng đời token và phiên: access, refresh, CSRF, cookie?
+- [service-map/qa-webhook-security.md](https://ducmanh001.github.io/litmatch-service-map/service-map/qa-webhook-security.md): Bảo mật webhook từ bên ngoài (thanh toán, LiveKit)?
+
+## Flows
+
+- [flows/admin-ban-and-refund.md](https://ducmanh001.github.io/litmatch-service-map/flows/admin-ban-and-refund.md): Admin khoá tài khoản và hoàn giao dịch
+- [flows/admin-broadcast-notification.md](https://ducmanh001.github.io/litmatch-service-map/flows/admin-broadcast-notification.md): Admin gửi thông báo hàng loạt
+- [flows/admin-dashboard.md](https://ducmanh001.github.io/litmatch-service-map/flows/admin-dashboard.md): Bảng điều khiển admin
+- [flows/admin-economy-inspect-and-config.md](https://ducmanh001.github.io/litmatch-service-map/flows/admin-economy-inspect-and-config.md): Admin xem ví, giao dịch và chỉnh cấu hình kinh tế
+- [flows/admin-gift-catalog.md](https://ducmanh001.github.io/litmatch-service-map/flows/admin-gift-catalog.md): Admin quản lý danh mục quà
+- [flows/admin-report-resolution.md](https://ducmanh001.github.io/litmatch-service-map/flows/admin-report-resolution.md): Admin xử lý báo cáo vi phạm
+- [flows/admin-room-management.md](https://ducmanh001.github.io/litmatch-service-map/flows/admin-room-management.md): Admin xem và đóng phòng party
+- [flows/admin-staff-and-permissions.md](https://ducmanh001.github.io/litmatch-service-map/flows/admin-staff-and-permissions.md): Admin quản lý nhân sự và ma trận quyền
+- [flows/admin-support-tickets.md](https://ducmanh001.github.io/litmatch-service-map/flows/admin-support-tickets.md): Người dùng gửi ticket hỗ trợ, admin xử lý
+- [flows/admin-user-lookup-and-unban.md](https://ducmanh001.github.io/litmatch-service-map/flows/admin-user-lookup-and-unban.md): Admin tra cứu người dùng và mở khoá
+- [flows/admin-video-moderation-queue.md](https://ducmanh001.github.io/litmatch-service-map/flows/admin-video-moderation-queue.md): Admin duyệt hàng chờ video
+- [flows/app-shell-health-and-readiness.md](https://ducmanh001.github.io/litmatch-service-map/flows/app-shell-health-and-readiness.md): Kiểm tra sẵn sàng của core-api (readiness)
+- [flows/auth-guest-login-and-socket.md](https://ducmanh001.github.io/litmatch-service-map/flows/auth-guest-login-and-socket.md): Đăng nhập khách rồi mở kết nối realtime
+- [flows/auth-guest-upgrade.md](https://ducmanh001.github.io/litmatch-service-map/flows/auth-guest-upgrade.md): Nâng cấp tài khoản khách thành tài khoản thật
+- [flows/auth-otp-login.md](https://ducmanh001.github.io/litmatch-service-map/flows/auth-otp-login.md): Đăng nhập bằng OTP điện thoại
+- [flows/auth-refresh-and-logout.md](https://ducmanh001.github.io/litmatch-service-map/flows/auth-refresh-and-logout.md): Làm mới phiên và đăng xuất (cookie httpOnly + CSRF)
+- [flows/auth-search-by-phone.md](https://ducmanh001.github.io/litmatch-service-map/flows/auth-search-by-phone.md): Tìm người theo số điện thoại
+- [flows/auth-social-login.md](https://ducmanh001.github.io/litmatch-service-map/flows/auth-social-login.md): Đăng nhập bằng Apple, Google hoặc Facebook
+- [flows/avatar-buy-item.md](https://ducmanh001.github.io/litmatch-service-map/flows/avatar-buy-item.md): Mua vật phẩm avatar bằng kim cương
+- [flows/calling-end-and-ticker.md](https://ducmanh001.github.io/litmatch-service-map/flows/calling-end-and-ticker.md): Kết thúc cuộc gọi và đồng hồ cuộc gọi
+- [flows/calling-like-after-call.md](https://ducmanh001.github.io/litmatch-service-map/flows/calling-like-after-call.md): Like sau cuộc gọi để thành bạn
+- [flows/discovery-browse-and-nearby.md](https://ducmanh001.github.io/litmatch-service-map/flows/discovery-browse-and-nearby.md): Khám phá người dùng và gần đây
+- [flows/economy-outbox-relay.md](https://ducmanh001.github.io/litmatch-service-map/flows/economy-outbox-relay.md): Relay outbox của Economy ra Kafka
+- [flows/economy-reconciliation-and-startup-guards.md](https://ducmanh001.github.io/litmatch-service-map/flows/economy-reconciliation-and-startup-guards.md): Đối soát sổ cái và guard khởi động của verifier
+- [flows/feed-comment-with-notification.md](https://ducmanh001.github.io/litmatch-service-map/flows/feed-comment-with-notification.md): Bình luận bài kèm thông báo
+- [flows/feed-delete-post.md](https://ducmanh001.github.io/litmatch-service-map/flows/feed-delete-post.md): Xoá bài và bình luận
+- [flows/feed-post-with-image.md](https://ducmanh001.github.io/litmatch-service-map/flows/feed-post-with-image.md): Đăng bài kèm ảnh: upload presigned rồi gắn asset
+- [flows/feed-reaction-with-notification.md](https://ducmanh001.github.io/litmatch-service-map/flows/feed-reaction-with-notification.md): Reaction bài kèm thông báo
+- [flows/feed-read-posts.md](https://ducmanh001.github.io/litmatch-service-map/flows/feed-read-posts.md): Đọc feed và bài đăng
+- [flows/friend-direct-call.md](https://ducmanh001.github.io/litmatch-service-map/flows/friend-direct-call.md): Gọi trực tiếp cho bạn bè
+- [flows/friend-follow-lists-and-connections.md](https://ducmanh001.github.io/litmatch-service-map/flows/friend-follow-lists-and-connections.md): Danh sách follower/following và danh sách bạn bè
+- [flows/friend-list-and-conversation-reads.md](https://ducmanh001.github.io/litmatch-service-map/flows/friend-list-and-conversation-reads.md): Danh sách bạn, đọc tin và streak
+- [flows/friend-open-conversation-from-profile.md](https://ducmanh001.github.io/litmatch-service-map/flows/friend-open-conversation-from-profile.md): Mở chat từ hồ sơ trước khi là bạn
+- [flows/friend-profile-follow-and-actions.md](https://ducmanh001.github.io/litmatch-service-map/flows/friend-profile-follow-and-actions.md): Theo dõi và xem hành động khả dụng trên hồ sơ
+- [flows/friend-streak-warning-job.md](https://ducmanh001.github.io/litmatch-service-map/flows/friend-streak-warning-job.md): Job cảnh báo streak sắp mất
+- [flows/gift-in-party-room.md](https://ducmanh001.github.io/litmatch-service-map/flows/gift-in-party-room.md): Tặng quà trong phòng party
+- [flows/gift-on-video.md](https://ducmanh001.github.io/litmatch-service-map/flows/gift-on-video.md): Tặng quà cho tác giả video
+- [flows/gift-to-profile-chat-gate.md](https://ducmanh001.github.io/litmatch-service-map/flows/gift-to-profile-chat-gate.md): Tặng quà từ hồ sơ để mở chat (cổng quà)
+- [flows/iap-store-notifications-and-refund-poll.md](https://ducmanh001.github.io/litmatch-service-map/flows/iap-store-notifications-and-refund-poll.md): Hoàn tiền IAP: webhook Apple/Google và job quét refund
+- [flows/matching-invite-accept.md](https://ducmanh001.github.io/litmatch-service-map/flows/matching-invite-accept.md): Chấp nhận lời mời và tạo phiên ghép
+- [flows/matching-invite-create.md](https://ducmanh001.github.io/litmatch-service-map/flows/matching-invite-create.md): Mời chơi có chủ đích: tạo và xem lời mời
+- [flows/matching-invite-decline-cancel.md](https://ducmanh001.github.io/litmatch-service-map/flows/matching-invite-decline-cancel.md): Từ chối hoặc huỷ lời mời
+- [flows/matching-sweeper-jobs.md](https://ducmanh001.github.io/litmatch-service-map/flows/matching-sweeper-jobs.md): Job dọn lời mời và vé ghép đôi hết hạn
+- [flows/matching-ticket-status-cancel-speedup.md](https://ducmanh001.github.io/litmatch-service-map/flows/matching-ticket-status-cancel-speedup.md): Xem, huỷ và tăng tốc vé ghép đôi
+- [flows/matching-to-call.md](https://ducmanh001.github.io/litmatch-service-map/flows/matching-to-call.md): Từ hàng đợi ghép đôi đến cuộc gọi thoại
+- [flows/message-push-notification.md](https://ducmanh001.github.io/litmatch-service-map/flows/message-push-notification.md): Tin nhắn bạn bè: realtime và Web Push
+- [flows/mini-game-session.md](https://ducmanh001.github.io/litmatch-service-map/flows/mini-game-session.md): Mini game giữa hai bạn bè
+- [flows/mood-status-visibility.md](https://ducmanh001.github.io/litmatch-service-map/flows/mood-status-visibility.md): Trạng thái tâm trạng và quyền xem
+- [flows/movie-match-anon-chat-finish-reactions.md](https://ducmanh001.github.io/litmatch-service-map/flows/movie-match-anon-chat-finish-reactions.md): Xem phim ẩn danh: chat, reaction và kết thúc
+- [flows/movie-match-anonymous.md](https://ducmanh001.github.io/litmatch-service-map/flows/movie-match-anonymous.md): Xem phim chung ẩn danh: hàng đợi, đồng bộ playback, rating
+- [flows/movie-match-friend-session.md](https://ducmanh001.github.io/litmatch-service-map/flows/movie-match-friend-session.md): Xem phim chung giữa bạn bè
+- [flows/palm-match-queue-and-rating.md](https://ducmanh001.github.io/litmatch-service-map/flows/palm-match-queue-and-rating.md): Palm Match: vào hàng, lật và đánh giá
+- [flows/party-room-detail-and-comments.md](https://ducmanh001.github.io/litmatch-service-map/flows/party-room-detail-and-comments.md): Xem phòng party và bình luận trong phòng
+- [flows/party-room-leave-and-role-change.md](https://ducmanh001.github.io/litmatch-service-map/flows/party-room-leave-and-role-change.md): Rời phòng và đổi vai trò thành viên
+- [flows/party-room-lifecycle.md](https://ducmanh001.github.io/litmatch-service-map/flows/party-room-lifecycle.md): Vòng đời phòng party với LiveKit
+- [flows/party-room-speaker-invite.md](https://ducmanh001.github.io/litmatch-service-map/flows/party-room-speaker-invite.md): Mời lên nói và phản hồi lời mời
+- [flows/payos-topup-webhook.md](https://ducmanh001.github.io/litmatch-service-map/flows/payos-topup-webhook.md): Nạp kim cương qua PayOS và webhook
+- [flows/safety-block-and-unblock.md](https://ducmanh001.github.io/litmatch-service-map/flows/safety-block-and-unblock.md): Chặn và bỏ chặn người dùng
+- [flows/safety-report-and-trust-score.md](https://ducmanh001.github.io/litmatch-service-map/flows/safety-report-and-trust-score.md): Báo cáo người dùng và trừ điểm tin cậy
+- [flows/short-video-browse-and-detail.md](https://ducmanh001.github.io/litmatch-service-map/flows/short-video-browse-and-detail.md): Duyệt video ngắn, xem chi tiết, view và reaction
+- [flows/short-video-comments.md](https://ducmanh001.github.io/litmatch-service-map/flows/short-video-comments.md): Bình luận video ngắn
+- [flows/short-video-publish-moderation.md](https://ducmanh001.github.io/litmatch-service-map/flows/short-video-publish-moderation.md): Đăng video ngắn và duyệt bởi admin
+- [flows/short-video-ranking-and-sweeper-jobs.md](https://ducmanh001.github.io/litmatch-service-map/flows/short-video-ranking-and-sweeper-jobs.md): Job tính điểm xếp hạng và dọn video lỗi
+- [flows/short-video-report.md](https://ducmanh001.github.io/litmatch-service-map/flows/short-video-report.md): Báo cáo video vi phạm
+- [flows/soul-match-room-reads-and-reveal.md](https://ducmanh001.github.io/litmatch-service-map/flows/soul-match-room-reads-and-reveal.md): Đọc phòng Soul Match và lộ hồ sơ sau mutual-like
+- [flows/soul-match-send-message.md](https://ducmanh001.github.io/litmatch-service-map/flows/soul-match-send-message.md): Gửi tin nhắn ẩn danh trong phòng Soul Match
+- [flows/soul-match-session.md](https://ducmanh001.github.io/litmatch-service-map/flows/soul-match-session.md): Phòng chat ẩn danh Soul Match và mutual-like
+- [flows/story-create-with-image.md](https://ducmanh001.github.io/litmatch-service-map/flows/story-create-with-image.md): Đăng story kèm ảnh và dọn story hết hạn
+- [flows/story-reply-to-dm.md](https://ducmanh001.github.io/litmatch-service-map/flows/story-reply-to-dm.md): Trả lời story thành tin nhắn
+- [flows/story-ring-view-and-viewers.md](https://ducmanh001.github.io/litmatch-service-map/flows/story-ring-view-and-viewers.md): Vòng story, xem story và người đã xem
+- [flows/user-presence-read.md](https://ducmanh001.github.io/litmatch-service-map/flows/user-presence-read.md): Xem trạng thái online của người dùng
+- [flows/vip-purchase-iap.md](https://ducmanh001.github.io/litmatch-service-map/flows/vip-purchase-iap.md): Mua VIP và xác minh biên nhận IAP
+
+## Data
+
+- [json/flows.json](https://ducmanh001.github.io/litmatch-service-map/json/flows.json): flow index
+- [json/coverage.json](https://ducmanh001.github.io/litmatch-service-map/json/coverage.json): entrypoint coverage
+- [json/findings.json](https://ducmanh001.github.io/litmatch-service-map/json/findings.json): findings
+- json/map/<service>.json and json/flows/<flow>.json: structured datasheets and sequence flows (see sitemap.xml)
+
+## Related sites
+
+- [System Atlas](https://ducmanh001.github.io/litmatch-atlas-demo/llms.txt): database, API, config, frontend, feature slices, project roadmap
+- [Error History](https://ducmanh001.github.io/litmatch-error-history/llms.txt): problems met, causes, fixes, open work
+
+## Optional
+
+- [Service Map page](https://ducmanh001.github.io/litmatch-service-map/index.html): large interactive page (not for crawling)

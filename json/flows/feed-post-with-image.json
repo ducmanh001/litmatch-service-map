@@ -1,0 +1,265 @@
+{
+ "id": "feed-post-with-image",
+ "title": "Đăng bài kèm ảnh: upload presigned rồi gắn asset",
+ "summary": "Client không gửi file qua API: xin presigned URL từ media, upload thẳng lên object storage, rồi đăng bài chỉ với assetId. Feed không tự tin asset nên phải hỏi media xác thực trước khi lưu imageUrl, và hỏi user để dựng thông tin tác giả cho phản hồi.",
+ "caption": "Ba pha: media cấp presigned URL, client upload thẳng lên storage, rồi feed nhờ media xác thực asset trước khi lưu bài.",
+ "participants": [
+  {
+   "id": "web",
+   "label": "Web client",
+   "kind": "client"
+  },
+  {
+   "id": "media",
+   "label": "Media",
+   "kind": "service"
+  },
+  {
+   "id": "feed",
+   "label": "Feed",
+   "kind": "service"
+  },
+  {
+   "id": "user",
+   "label": "User",
+   "kind": "service"
+  },
+  {
+   "id": "external:object-storage",
+   "label": "Object storage",
+   "kind": "infra"
+  },
+  {
+   "id": "postgres",
+   "label": "PostgreSQL",
+   "kind": "infra"
+  }
+ ],
+ "steps": [
+  {
+   "from": "web",
+   "to": "media",
+   "label": "POST /media/images/upload-intent xin presigned URL",
+   "kind": "call",
+   "mechanism": "http",
+   "note": "Route REST đi qua JwtAuthGuard toàn cục.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/app/app.module.ts",
+     "line": 154,
+     "quote": "{ provide: APP_GUARD, useClass: JwtAuthGuard },"
+    }
+   ]
+  },
+  {
+   "from": "media",
+   "to": "external:object-storage",
+   "label": "Cấp presigned PUT URL cho storageKey mới",
+   "kind": "call",
+   "mechanism": "sdk",
+   "note": "Gọi qua ImageStoragePort.issueUploadUrl; provider s3 ký URL cục bộ bằng s3-request-presigner (không có round-trip mạng tới storage), việc này chạy TRƯỚC khi lưu asset. Guest, contentType và size không hợp lệ bị từ chối trước đó.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/media/media.service.ts",
+     "line": 64,
+     "quote": "const upload = await this.storage.issueUploadUrl("
+    }
+   ]
+  },
+  {
+   "from": "media",
+   "to": "postgres",
+   "label": "Lưu ImageAsset trạng thái Pending (owner, purpose, size)",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/media/media.service.ts",
+     "line": 68,
+     "quote": "await this.assetRepo.save(asset);"
+    }
+   ]
+  },
+  {
+   "from": "media",
+   "to": "web",
+   "label": "Trả assetId, uploadUrl, expiresAt",
+   "kind": "return",
+   "mechanism": "http"
+  },
+  {
+   "from": "web",
+   "to": "external:object-storage",
+   "label": "PUT ảnh thẳng lên uploadUrl, không qua core-api",
+   "kind": "call",
+   "mechanism": "http"
+  },
+  {
+   "from": "web",
+   "to": "feed",
+   "label": "POST /feed/posts với content, imageAssetId và Idempotency-Key",
+   "kind": "call",
+   "mechanism": "http",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/feed/feed.controller.ts",
+     "line": 66,
+     "quote": "? await this.mediaService.resolveImageUrl("
+    }
+   ]
+  },
+  {
+   "from": "feed",
+   "to": "media",
+   "label": "Nếu có imageAssetId (và không phải guest): resolveImageUrl(purpose Post)",
+   "kind": "call",
+   "mechanism": "di-call",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/feed/feed.controller.ts",
+     "line": 66,
+     "quote": "? await this.mediaService.resolveImageUrl("
+    }
+   ],
+   "note": "Controller chỉ gọi media khi user không phải guest và body có imageAssetId; không có ảnh thì bỏ qua cả pha media (các bước 7-11)."
+  },
+  {
+   "from": "media",
+   "to": "postgres",
+   "label": "Tìm asset theo id và ownerUserId",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "note": "Không thấy hoặc sai purpose đều trả ASSET_NOT_FOUND.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/media/media.service.ts",
+     "line": 85,
+     "quote": "const asset = await this.assetRepo.findOne({"
+    }
+   ]
+  },
+  {
+   "from": "media",
+   "to": "external:object-storage",
+   "label": "Provider khác dev: head, kiểm size/MIME/magic bytes, promote sang key cuối",
+   "kind": "call",
+   "mechanism": "sdk",
+   "note": "Chỉ khi asset chưa Ready và MEDIA_STORAGE_PROVIDER khác dev: head key cuối; chưa có thì assertUploadedImage (head + readPrefix) rồi promote. Sai thì xóa object và ném ASSET_NOT_READY. Provider dev bỏ qua toàn bộ kiểm tra này và chỉ đổi storageKey.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/media/media.service.ts",
+     "line": 113,
+     "quote": "await this.assertUploadedImage(asset);"
+    },
+    {
+     "file": "apps/core-api/src/modules/media/media.service.ts",
+     "line": 114,
+     "quote": "await this.storage.promote(asset.storageKey, finalStorageKey);"
+    }
+   ]
+  },
+  {
+   "from": "media",
+   "to": "postgres",
+   "label": "Đánh dấu asset Ready với storageKey cuối",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/media/media.service.ts",
+     "line": 126,
+     "quote": "await this.assetRepo.save(asset);"
+    }
+   ],
+   "note": "Với provider dev, asset được đánh dấu Ready mà không kiểm tra object đã upload; asset đã Ready thì bỏ qua cả bước kiểm và lưu."
+  },
+  {
+   "from": "media",
+   "to": "feed",
+   "label": "Trả imageUrl công khai đã xác thực",
+   "kind": "return",
+   "mechanism": "di-call"
+  },
+  {
+   "from": "feed",
+   "to": "postgres",
+   "label": "Lưu Post với imageUrl và idempotencyKey",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "note": "Trùng idempotencyKey (unique violation): trả lại bài cũ nếu content và imageUrl giống hệt, khác thì ném 409 POST_IDEMPOTENCY_CONFLICT. Post save không chung transaction với asset Ready ở media.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/feed/feed.service.ts",
+     "line": 66,
+     "quote": "return await this.postRepo.save("
+    }
+   ]
+  },
+  {
+   "from": "feed",
+   "to": "user",
+   "label": "getByIdOrThrow để dựng PublicProfileDto tác giả",
+   "kind": "call",
+   "mechanism": "di-call",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/feed/feed.controller.ts",
+     "line": 208,
+     "quote": "return PublicProfileDto.from(await this.userService.getByIdOrThrow(userId));"
+    }
+   ]
+  },
+  {
+   "from": "feed",
+   "to": "web",
+   "label": "Trả PostDto kèm thông tin tác giả",
+   "kind": "return",
+   "mechanism": "http"
+  }
+ ],
+ "groups": [
+  {
+   "from": 9,
+   "to": 9,
+   "label": "Gọi storage bên ngoài để xác thực và promote ảnh",
+   "kind": "external"
+  }
+ ],
+ "invariants": [
+  "Feed chỉ lưu imageUrl do media.resolveImageUrl trả về, nên client không thể tự gửi URL tùy ý; media xác nhận asset đúng chủ và đúng purpose, còn kiểm tra đã upload/size/MIME/magic bytes chỉ chạy khi MEDIA_STORAGE_PROVIDER khác dev.",
+  "Upload đi thẳng từ client lên object storage bằng presigned URL nên core-api không nhận body nhị phân; việc xác thực phải làm ở bước đăng bài, trước khi ghi Post.",
+  "resolveImageUrl chạy ở controller trước FeedService.createPost, nên asset hỏng làm bài không được ghi vào DB."
+ ],
+ "failureModes": [
+  {
+   "when": "Asset không tồn tại, sai chủ hoặc sai purpose",
+   "effect": "media ném ASSET_NOT_FOUND (404), bài không được tạo"
+  },
+  {
+   "when": "Ảnh chưa upload xong, size/contentType lệch hoặc magic bytes không khớp",
+   "effect": "media xóa object (nếu có) và ném ASSET_NOT_READY (422), bài không được tạo"
+  },
+  {
+   "when": "Đăng bài lặp với cùng idempotencyKey",
+   "effect": "unique violation được bắt và feed đọc lại bài đã tạo thay vì tạo bản sao"
+  },
+  {
+   "when": "Body không có content lẫn imageUrl",
+   "effect": "feed ném POST_CONTENT_REQUIRED (422)"
+  },
+  {
+   "when": "Lưu Post lỗi sau khi media đã promote ảnh",
+   "effect": "Asset đã được lưu trạng thái Ready (và object đã promote) nhưng Post không được tạo; hai thao tác không chung transaction. Suy luận: asset mồ côi này không có job dọn trong module media."
+  }
+ ],
+ "dataIssues": [],
+ "uncertain": [],
+ "resolved": [
+  {
+   "id": "feed-post-with-image#V14",
+   "status": "confirmed",
+   "finding": "Đúng thứ tự: resolveImageUrl promote và lưu asset Ready (media.service.ts) trước khi feedService.createPost lưu Post, không chung transaction; Post lỗi thì asset vẫn Ready. Module media không có sweeper/TTL dọn asset mồ côi.",
+   "original": "Việc promote và lưu asset Ready xảy ra trước khi Post được lưu, không nằm trong một transaction chung; nếu lưu Post lỗi, asset vẫn ở trạng thái Ready. Đây là hệ quả quan sát từ code, nhưng cách provider storage thật (không phải dev) hoạt động phụ thuộc cấu hình runtime MEDIA_STORAGE_PROVIDER."
+  }
+ ]
+}

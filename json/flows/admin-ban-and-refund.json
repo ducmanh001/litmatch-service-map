@@ -1,0 +1,231 @@
+{
+  "id": "admin-ban-and-refund",
+  "title": "Admin khoá tài khoản và hoàn giao dịch",
+  "summary": "Admin khoá một người dùng và hoàn một giao dịch diamond. AdminModule chỉ điều phối: dữ liệu users do user sở hữu, sổ cái và ví do economy sở hữu, nên mọi thay đổi phải đi qua service chủ dữ liệu và audit log phải ghi cùng transaction với hành động.",
+  "caption": "Hai luồng back-office: ban user và refund giao dịch, mỗi luồng ghi audit log cùng một DB transaction với thay đổi dữ liệu.",
+  "participants": [
+    {
+      "id": "admin-console",
+      "label": "Admin console",
+      "kind": "client"
+    },
+    {
+      "id": "admin",
+      "label": "Admin",
+      "kind": "service"
+    },
+    {
+      "id": "user",
+      "label": "User",
+      "kind": "service"
+    },
+    {
+      "id": "economy",
+      "label": "Economy",
+      "kind": "service"
+    },
+    {
+      "id": "postgres",
+      "label": "PostgreSQL",
+      "kind": "infra"
+    }
+  ],
+  "steps": [
+    {
+      "from": "admin-console",
+      "to": "admin",
+      "label": "POST /admin/users/:id/ban",
+      "kind": "call",
+      "mechanism": "http",
+      "note": "Route yêu cầu quyền AdminPermission.BanUsers (RequireAdminPermission), ngoài JWT guard toàn cục."
+    },
+    {
+      "from": "admin",
+      "to": "user",
+      "label": "Mở transaction rồi gọi UserService.banUser(manager, targetUserId)",
+      "kind": "call",
+      "mechanism": "di-call",
+      "note": "AdminService chặn tự ban chính mình trước khi mở transaction (actorUserId === targetUserId thì trả 403).",
+      "evidence": [
+        {
+          "file": "apps/core-api/src/modules/admin/admin.service.ts",
+          "line": 77,
+          "quote": "const user = await this.userService.banUser(manager, targetUserId);"
+        }
+      ]
+    },
+    {
+      "from": "user",
+      "to": "postgres",
+      "label": "Đọc user và lưu status = Banned bằng manager của admin",
+      "kind": "call",
+      "mechanism": "shared-db",
+      "evidence": [
+        {
+          "file": "apps/core-api/src/modules/admin/admin.service.ts",
+          "line": 76,
+          "quote": "return this.dataSource.transaction(async (manager) => {"
+        }
+      ]
+    },
+    {
+      "from": "admin",
+      "to": "postgres",
+      "label": "Ghi audit log user.banned cùng manager",
+      "kind": "call",
+      "mechanism": "shared-db",
+      "evidence": [
+        {
+          "file": "apps/core-api/src/modules/admin/admin.service.ts",
+          "line": 78,
+          "quote": "await this.auditLogService.record("
+        }
+      ]
+    },
+    {
+      "from": "admin",
+      "to": "admin-console",
+      "label": "Trả về user đã bị khoá",
+      "kind": "return",
+      "mechanism": "http"
+    },
+    {
+      "from": "admin-console",
+      "to": "admin",
+      "label": "POST /admin/economy/transactions/:id/refund kèm lý do",
+      "kind": "call",
+      "mechanism": "http",
+      "note": "Route yêu cầu quyền AdminPermission.RefundTransaction (RequireAdminPermission)."
+    },
+    {
+      "from": "admin",
+      "to": "economy",
+      "label": "Gọi adminRefundTransaction kèm callback ghi audit",
+      "kind": "call",
+      "mechanism": "di-call",
+      "note": "AdminService không mở transaction riêng; economy giữ vai trò writer duy nhất của ledger. EconomyService.adminRefundTransaction gọi ledger.reverse với key admin-refund:<transactionId> và outbox override economy.diamond.refunded.",
+      "evidence": [
+        {
+          "file": "apps/core-api/src/modules/admin/admin.service.ts",
+          "line": 344,
+          "quote": "return this.economyService.adminRefundTransaction("
+        }
+      ]
+    },
+    {
+      "from": "economy",
+      "to": "postgres",
+      "label": "ledger.record: transaction mở bút toán đảo, cập nhật ví, ghi outbox refunded",
+      "kind": "call",
+      "mechanism": "shared-db",
+      "note": "ledger.reverse đọc giao dịch gốc và kiểm Reversed (409 TRANSACTION_ALREADY_REVERSED) TRƯỚC khi mở transaction; trong transaction ghi entry đảo chiều, khoá và cập nhật ví, ghi outbox (chỉ khi balanceDelta khác 0) rồi chạy withinTransaction. Reversal được phép đẩy balance âm.",
+      "evidence": [
+        {
+          "file": "apps/core-api/src/modules/economy/services/ledger.service.ts",
+          "line": 179,
+          "quote": "await input.withinTransaction?.(manager, txn);"
+        }
+      ]
+    },
+    {
+      "from": "economy",
+      "to": "postgres",
+      "label": "Đánh dấu giao dịch gốc là Reversed (UPDATE có điều kiện status)",
+      "kind": "call",
+      "mechanism": "shared-db",
+      "evidence": [
+        {
+          "file": "apps/core-api/src/modules/economy/services/ledger.service.ts",
+          "line": 258,
+          "quote": "const marked = await manager.update("
+        }
+      ]
+    },
+    {
+      "from": "economy",
+      "to": "admin",
+      "label": "Gọi lại callback withinTransaction(manager) của admin",
+      "kind": "call",
+      "mechanism": "di-call",
+      "evidence": [
+        {
+          "file": "apps/core-api/src/modules/admin/admin.service.ts",
+          "line": 348,
+          "quote": "async (manager) => {"
+        }
+      ]
+    },
+    {
+      "from": "admin",
+      "to": "postgres",
+      "label": "Ghi audit log economy.transaction.refunded kèm reason cùng manager",
+      "kind": "call",
+      "mechanism": "shared-db",
+      "evidence": [
+        {
+          "file": "apps/core-api/src/modules/admin/admin.service.ts",
+          "line": 349,
+          "quote": "await this.auditLogService.record("
+        }
+      ]
+    },
+    {
+      "from": "economy",
+      "to": "admin",
+      "label": "Trả transactionId và reversalTransactionId",
+      "kind": "return",
+      "mechanism": "di-call"
+    },
+    {
+      "from": "admin",
+      "to": "admin-console",
+      "label": "Phản hồi kết quả hoàn tiền",
+      "kind": "return",
+      "mechanism": "http"
+    }
+  ],
+  "groups": [
+    {
+      "from": 2,
+      "to": 4,
+      "label": "Transaction của AdminService: đổi status user + audit log",
+      "kind": "transaction"
+    },
+    {
+      "from": 8,
+      "to": 11,
+      "label": "Transaction của ledger: bút toán đảo + audit log của admin",
+      "kind": "transaction"
+    }
+  ],
+  "invariants": [
+    "Ban và audit log nằm trong cùng một dataSource.transaction, nên không thể đổi status mà thiếu audit hoặc ngược lại.",
+    "UserService.banUser nhận manager từ AdminService thay vì tự mở transaction, để dữ liệu của user vẫn do user ghi nhưng cùng ranh giới atomic với audit.",
+    "Refund đi qua EconomyService, và audit được truyền xuống thành callback chạy trong transaction của ledger.reverse; economy là writer duy nhất vào ledger và ví.",
+    "Idempotency key tất định theo transactionId và UPDATE có điều kiện status chặn hoàn kép; nếu mất race thì ném lỗi và toàn bộ bút toán đảo rollback."
+  ],
+  "failureModes": [
+    {
+      "when": "Tự ban chính mình (actorUserId bằng targetUserId)",
+      "effect": "Ném CANNOT_BAN_SELF 403 trước khi mở transaction, không có thay đổi nào."
+    },
+    {
+      "when": "Không tìm thấy user cần ban",
+      "effect": "setStatus ném PROFILE_NOT_FOUND 404, transaction rollback, không có audit log."
+    },
+    {
+      "when": "Ghi audit log lỗi trong lúc ban hoặc refund",
+      "effect": "Lỗi lan ra khỏi callback trong transaction, nên thay đổi status hoặc bút toán đảo cùng rollback."
+    },
+    {
+      "when": "Giao dịch gốc đã được hoàn",
+      "effect": "ledger.reverse trả 409 TRANSACTION_ALREADY_REVERSED; nếu thua race lúc đánh dấu thì rollback bút toán đảo của request đó."
+    },
+    {
+      "when": "Hoàn tiền làm điểm earnings của user âm",
+      "effect": "applyWalletDeltas ném WALLET_INSUFFICIENT_BALANCE (422) vì newEarnings < 0 (chỉ balance mới được phép âm với Reversal), transaction rollback, không có audit log."
+    }
+  ],
+  "dataIssues": [],
+  "uncertain": []
+}

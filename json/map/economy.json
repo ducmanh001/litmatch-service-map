@@ -1,0 +1,1491 @@
+{
+ "id": "economy",
+ "title": "Economy",
+ "tagline": "Sổ cái kép, ví diamond, VIP, nạp tiền",
+ "deployable": "core-api",
+ "role": "Sở hữu sổ cái double-entry append-only (ledger_entries), snapshot ví wallets, catalog IAP/VIP/payOS, receipt và order nạp tiền; LedgerService là writer duy nhất vào ledger/wallet cho cả hệ thống. Không sở hữu hiệu ứng nghiệp vụ của nơi tiêu diamond (boost hàng đợi, ghi GiftEvent, cấp item avatar) và không phát realtime; các module khác chỉ gọi qua EconomyService trong index.ts.",
+ "owns": [
+  "bảng ledger_accounts, transactions (idempotency_key unique), ledger_entries (trigger chặn UPDATE/DELETE), wallets (snapshot balance/earnings/VIP)",
+  "bảng iap_products, iap_receipts, vip_plans, payos_packages, payos_payment_orders",
+  "bảng outbox_events (relay -> Kafka topic litmatch.economy.events)",
+  "advisory lock Postgres cho job đối soát (clusterSingleton)"
+ ],
+ "confidence": "high",
+ "endpoints": [
+  {
+   "id": "e1",
+   "kind": "rest",
+   "method": "GET",
+   "path": "/api/v1/economy/wallet",
+   "purpose": "Đọc ví của chính user: balance, earnings, tier VIP đã derive hết hạn khi đọc; chưa có ví thì trả 0.",
+   "auth": "jwt",
+   "file": "apps/core-api/src/modules/economy/economy.controller.ts",
+   "line": 55,
+   "quote": "@Get('wallet')"
+  },
+  {
+   "id": "e2",
+   "kind": "rest",
+   "method": "GET",
+   "path": "/api/v1/economy/iap/products",
+   "purpose": "Catalog gói diamond IAP đang bán (active=true) sắp theo diamonds tăng dần để client chọn productId trước khi verify.",
+   "auth": "jwt",
+   "file": "apps/core-api/src/modules/economy/economy.controller.ts",
+   "line": 62,
+   "quote": "@Get('iap/products')"
+  },
+  {
+   "id": "e3",
+   "kind": "rest",
+   "method": "GET",
+   "path": "/api/v1/economy/payos/packages",
+   "purpose": "Catalog gói nạp payOS (packageId, amountVnd, diamonds) đang bán; client chỉ gửi packageId, giá luôn do server đọc.",
+   "auth": "jwt",
+   "file": "apps/core-api/src/modules/economy/economy.controller.ts",
+   "line": 69,
+   "quote": "@Get('payos/packages')"
+  },
+  {
+   "id": "e4",
+   "kind": "rest",
+   "method": "POST",
+   "path": "/api/v1/economy/payos/orders",
+   "purpose": "Tạo đơn nạp payOS idempotent (header Idempotency-Key, @Throttle 10/phút, guest bị 403): snapshot giá/diamond vào payos_payment_orders rồi gọi payOS lấy checkoutUrl/QR.",
+   "auth": "jwt",
+   "file": "apps/core-api/src/modules/economy/economy.controller.ts",
+   "line": 76,
+   "quote": "@Post('payos/orders')"
+  },
+  {
+   "id": "e5",
+   "kind": "rest",
+   "method": "GET",
+   "path": "/api/v1/economy/payos/orders/:orderId",
+   "purpose": "Trạng thái đơn payOS của chính user, nguồn sự thật phía server (returnUrl của browser không phải bằng chứng); đơn pending quá hạn bị chuyển expired khi đọc.",
+   "auth": "jwt",
+   "file": "apps/core-api/src/modules/economy/economy.controller.ts",
+   "line": 98,
+   "quote": "@Get('payos/orders/:orderId')"
+  },
+  {
+   "id": "e6",
+   "kind": "rest",
+   "method": "GET",
+   "path": "/api/v1/economy/vip/plans",
+   "purpose": "Catalog gói VIP đang bán (planId, tier, số ngày, giá diamond) sắp theo giá tăng dần; client không hardcode bảng giá.",
+   "auth": "jwt",
+   "file": "apps/core-api/src/modules/economy/economy.controller.ts",
+   "line": 111,
+   "quote": "@Get('vip/plans')"
+  },
+  {
+   "id": "e7",
+   "kind": "rest",
+   "method": "POST",
+   "path": "/api/v1/economy/iap/verify",
+   "purpose": "Verify receipt IAP Apple/Google ở server rồi credit diamond; idempotency tự sinh iap:{provider}:{providerTransactionId}, @Throttle 10/phút, lưu iap_receipts cùng transaction.",
+   "auth": "jwt",
+   "file": "apps/core-api/src/modules/economy/economy.controller.ts",
+   "line": 118,
+   "quote": "@Post('iap/verify')"
+  },
+  {
+   "id": "e8",
+   "kind": "rest",
+   "method": "POST",
+   "path": "/api/v1/economy/vip/purchase",
+   "purpose": "Mua VIP bằng diamond (header Idempotency-Key): Nợ user_wallet / Có system_revenue và cập nhật vip_tier/vip_expires_at cộng dồn trong cùng DB transaction, kèm outbox economy.vip.purchased.",
+   "auth": "jwt",
+   "file": "apps/core-api/src/modules/economy/economy.controller.ts",
+   "line": 134,
+   "quote": "@Post('vip/purchase')"
+  },
+  {
+   "id": "e9",
+   "kind": "rest",
+   "method": "GET",
+   "path": "/api/v1/economy/transactions",
+   "purpose": "Lịch sử giao dịch của chính user, cursor pagination (chưa gồm giao dịch chỉ là người nhận).",
+   "auth": "jwt",
+   "file": "apps/core-api/src/modules/economy/economy.controller.ts",
+   "line": 153,
+   "quote": "@Get('transactions')"
+  },
+  {
+   "id": "e10",
+   "kind": "webhook",
+   "method": "POST",
+   "path": "/api/v1/economy/webhooks/apple",
+   "purpose": "Webhook App Store Server Notifications V2: verify JWS x5c lên Apple Root CA, đối chiếu bundleId, nếu REFUND/REVOKE thì reverse giao dịch credit; luôn ACK 200 sau khi verify.",
+   "auth": "webhook-signature",
+   "file": "apps/core-api/src/modules/economy/webhooks/economy-webhooks.controller.ts",
+   "line": 56,
+   "quote": "@Post('apple')"
+  },
+  {
+   "id": "e11",
+   "kind": "webhook",
+   "method": "POST",
+   "path": "/api/v1/economy/webhooks/google/rtdn",
+   "purpose": "Webhook Google RTDN (Pub/Sub push): verify OIDC bearer token rồi chỉ log CANCELED làm tín hiệu phụ, KHÔNG refund (refund Google do job Voided Purchases đảm nhiệm).",
+   "auth": "webhook-signature",
+   "file": "apps/core-api/src/modules/economy/webhooks/economy-webhooks.controller.ts",
+   "line": 93,
+   "quote": "@Post('google/rtdn')"
+  },
+  {
+   "id": "e12",
+   "kind": "webhook",
+   "method": "POST",
+   "path": "/api/v1/economy/webhooks/payos",
+   "purpose": "Webhook payOS: kiểm HMAC-SHA256 trước mọi query, đối chiếu orderCode/amount/currency/paymentLinkId với snapshot đơn rồi credit diamond và đánh dấu đơn paid trong một transaction.",
+   "auth": "webhook-signature",
+   "file": "apps/core-api/src/modules/economy/webhooks/economy-webhooks.controller.ts",
+   "line": 121,
+   "quote": "@Post('payos')"
+  },
+  {
+   "id": "e13",
+   "kind": "job",
+   "method": "WORKER",
+   "path": "IapRefundPollService.onApplicationBootstrap",
+   "purpose": "Job quét refund (ECONOMY_REFUND_POLL_ENABLED): claim lô iap_receipts credited bằng FOR UPDATE SKIP LOCKED, hỏi Apple refund lookup / Google voided purchases rồi gọi RefundService; backstop cho webhook bị miss.",
+   "auth": "internal",
+   "file": "apps/core-api/src/modules/economy/jobs/iap-refund-poll.service.ts",
+   "line": 63,
+   "quote": "onApplicationBootstrap(): void {"
+  },
+  {
+   "id": "e14",
+   "kind": "job",
+   "method": "WORKER",
+   "path": "OutboxRelayService.onApplicationBootstrap",
+   "purpose": "Outbox relay (ECONOMY_OUTBOX_RELAY_ENABLED): đọc outbox_events chưa publish theo lô FOR UPDATE SKIP LOCKED, publish Kafka, quá số lần thử thì đẩy dead-letter topic.",
+   "auth": "internal",
+   "file": "apps/core-api/src/modules/economy/jobs/outbox-relay.service.ts",
+   "line": 42,
+   "quote": "async onApplicationBootstrap(): Promise<void> {"
+  },
+  {
+   "id": "e15",
+   "kind": "job",
+   "method": "WORKER",
+   "path": "ReconciliationService.onApplicationBootstrap",
+   "purpose": "Job đối soát hai tầng: fast kiểm tổng Nợ = tổng Có theo currency và receipt mồ côi, deep lấy mẫu ví so snapshot với ledger; read-only, chạy một replica nhờ advisory lock, lệch thì bắn metric.",
+   "auth": "internal",
+   "file": "apps/core-api/src/modules/economy/jobs/reconciliation.service.ts",
+   "line": 79,
+   "quote": "onApplicationBootstrap(): void {"
+  },
+  {
+   "id": "e16",
+   "kind": "job",
+   "method": "WORKER",
+   "path": "DevIapVerifier.onApplicationBootstrap",
+   "purpose": "Guard khi khởi động: ném lỗi nếu production vẫn cấu hình ECONOMY_IAP_VERIFIER=dev (verifier nhận receipt giả).",
+   "auth": "internal",
+   "file": "apps/core-api/src/modules/economy/ports/iap-verifier.ts",
+   "line": 62,
+   "quote": "onApplicationBootstrap(): void {"
+  },
+  {
+   "id": "e17",
+   "kind": "job",
+   "method": "WORKER",
+   "path": "DevAppleNotificationVerifier.onApplicationBootstrap",
+   "purpose": "Guard khi khởi động: ném lỗi nếu production vẫn dùng ECONOMY_APPLE_WEBHOOK_VERIFIER=dev (không verify chữ ký).",
+   "auth": "internal",
+   "file": "apps/core-api/src/modules/economy/ports/notification-verifier.ts",
+   "line": 66,
+   "quote": "onApplicationBootstrap(): void {"
+  },
+  {
+   "id": "e18",
+   "kind": "job",
+   "method": "WORKER",
+   "path": "DevGoogleRtdnVerifier.onApplicationBootstrap",
+   "purpose": "Guard khi khởi động: ném lỗi nếu production vẫn dùng ECONOMY_GOOGLE_RTDN_VERIFIER=dev (không verify OIDC).",
+   "auth": "internal",
+   "file": "apps/core-api/src/modules/economy/ports/notification-verifier.ts",
+   "line": 195,
+   "quote": "onApplicationBootstrap(): void {"
+  }
+ ],
+ "collaborators": [
+  {
+   "id": "c1",
+   "label": "outbox -> Kafka economy",
+   "what": "Relay publish outbox_events (economy.diamond.credited/debited/refunded, economy.vip.purchased, economy.gift.sent do sendGift ghi trong withinTransaction, economy.service.ts:645-660) lên topic litmatch.economy.events qua EventBusPort.publish; lỗi quá ECONOMY_OUTBOX_MAX_ATTEMPTS thì publishDeadLetter sang topic .DLQ.",
+   "why": "Sự kiện ví phải được ghi cùng DB transaction với bút toán (không mất, không phát khi rollback) nhưng Kafka không tham gia transaction Postgres, nên cần outbox + relay riêng để phản ứng phụ về sau không đọc thẳng bảng Economy. Hiện chưa có consumer nào của topic trong apps/ và relay mặc định tắt (env.validation.ts:349), nên đây là hợp đồng chuẩn bị sẵn.",
+   "ifMissing": "Nếu publish thẳng Kafka trong request thì rollback vẫn có event ma, hoặc commit xong mà Kafka lỗi thì mất event. Khi relay tắt (hosted profile) outbox chỉ tích lũy.",
+   "with": "kafka",
+   "withKind": "infra",
+   "direction": "out",
+   "mechanism": "kafka",
+   "endpoints": [
+    "e14"
+   ],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/economy/jobs/outbox-relay.service.ts",
+     "line": 82,
+     "quote": "await this.eventBus.publish(toEventEnvelope(event));"
+    },
+    {
+     "file": "apps/core-api/src/modules/economy/jobs/outbox-relay.service.ts",
+     "line": 117,
+     "quote": "await this.eventBus.publishDeadLetter("
+    }
+   ],
+   "review": {
+    "verdict": "supported"
+   },
+   "logic": {
+    "verdict": "sound",
+    "note": "Topic litmatch.economy.events, hậu tố .DLQ, economy.gift.sent (economy.service:650) và relay mặc định false đều đúng; không có consumer trong apps/."
+   }
+  },
+  {
+   "id": "c2",
+   "label": "ledger/wallet trong Postgres",
+   "what": "Ghi ledger_entries, transactions, wallets, iap_receipts, payos_payment_orders, outbox_events trong một DB transaction; SELECT ... FOR UPDATE trên wallets; trigger DB chặn UPDATE/DELETE ledger_entries; job đối soát dùng pg advisory lock và SQL aggregate.",
+   "why": "Ledger là nguồn sự thật của tiền nên bất biến (Nợ = Có, idempotency_key unique, append-only) phải được DB cưỡng chế chứ không chỉ do code; snapshot wallets chỉ đúng khi cập nhật trong cùng transaction với entries và khóa dòng ví để tuần tự hóa per-user.",
+   "ifMissing": "Hai request song song cùng trừ tiền có thể làm âm ví hoặc credit hai lần một receipt; không có DB làm chốt chặn thì không đối soát và không audit được.",
+   "with": "postgres",
+   "withKind": "infra",
+   "direction": "out",
+   "mechanism": "shared-db",
+   "endpoints": [
+    "e1",
+    "e2",
+    "e3",
+    "e4",
+    "e5",
+    "e6",
+    "e7",
+    "e8",
+    "e9",
+    "e10",
+    "e12",
+    "e13",
+    "e14",
+    "e15"
+   ],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/economy/entities/iap.entities.ts",
+     "line": 16,
+     "quote": "@Entity({ name: 'iap_products' })"
+    },
+    {
+     "file": "apps/core-api/src/modules/economy/entities/iap.entities.ts",
+     "line": 40,
+     "quote": "@Entity({ name: 'iap_receipts' })"
+    },
+    {
+     "file": "apps/core-api/src/modules/economy/entities/ledger-account.entity.ts",
+     "line": 24,
+     "quote": "@Entity({ name: 'ledger_accounts' })"
+    }
+   ],
+   "review": {
+    "verdict": "supported"
+   },
+   "logic": {
+    "verdict": "sound",
+    "note": "lockWallet dùng pessimistic_write theo userId đã sort, trigger append-only ledger, unique receipt và advisory lock đối soát đều có trong code."
+   }
+  },
+  {
+   "id": "c3",
+   "label": "refund/tra cứu ví cho admin",
+   "what": "AdminService gọi EconomyService.getWallet, listTransactions, adminRefundTransaction(transactionId, reason, actorUserId, withinTransaction), listCatalogForAdmin, setIapProductActive/setVipPlanActive, listActiveVipUserIds, getAdminAnalytics.",
+   "why": "Hoàn tiền thủ công phải là bút toán đảo qua ledger.reverse của chính Economy (writer duy nhất), và audit log của admin phải commit cùng transaction với reversal qua callback withinTransaction, nếu không có thể hoàn tiền mà không có dấu vết hoặc ngược lại.",
+   "ifMissing": "Admin phải tự sửa bảng ledger/wallet (bị trigger chặn và vi phạm quy tắc writer duy nhất) hoặc refund và audit tách transaction nên có thể lệch nhau.",
+   "with": "admin",
+   "withKind": "service",
+   "direction": "in",
+   "mechanism": "di-call",
+   "endpoints": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/admin/admin.service.ts",
+     "line": 313,
+     "quote": "return this.economyService.getWallet(userId);"
+    },
+    {
+     "file": "apps/core-api/src/modules/admin/admin.service.ts",
+     "line": 326,
+     "quote": "const page = await this.economyService.listTransactions("
+    },
+    {
+     "file": "apps/core-api/src/modules/admin/admin.service.ts",
+     "line": 344,
+     "quote": "return this.economyService.adminRefundTransaction("
+    }
+   ],
+   "basis": "ast",
+   "logic": {
+    "verdict": "sound",
+    "note": "Trùng cơ chế admin.c1: reverse với key admin-refund:{id}, callback withinTransaction chạy cùng manager sau khi đánh dấu giao dịch gốc Reversed."
+   }
+  },
+  {
+   "id": "c4",
+   "label": "trừ diamond mua item avatar",
+   "what": "AvatarService.buy gọi EconomyService.spendDiamond(userId, AvatarPurchase, priceDiamond, idempotencyKey, metadata) rồi mới ghi quyền sở hữu item.",
+   "why": "Giá item lấy từ catalog avatar nhưng việc trừ ví phải qua writer duy nhất của ledger để có khóa ví, kiểm số dư tại thời điểm trừ và idempotency; spendDiamond không có hook transaction nên Avatar phải spend trước rồi grant idempotent (retry cùng key an toàn).",
+   "ifMissing": "Avatar phải tự ghi ví (cấm) hoặc item được cấp mà không trừ diamond; mua lặp do retry sẽ trừ hai lần nếu thiếu idempotency key.",
+   "with": "avatar",
+   "withKind": "service",
+   "direction": "in",
+   "mechanism": "di-call",
+   "endpoints": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/avatar/avatar.service.ts",
+     "line": 85,
+     "quote": "const { replayed } = await this.economy.spendDiamond("
+    }
+   ],
+   "basis": "ast",
+   "logic": {
+    "verdict": "sound",
+    "note": "spendDiamond không có hook transaction (comment avatar.service:68-70); replay trả replayed rồi grantOwnership ON CONFLICT DO NOTHING."
+   }
+  },
+  {
+   "id": "c5",
+   "label": "sendGift hai chân DIA/PTS",
+   "what": "GiftService.sendGift (3 điểm gọi: quà phòng, video, profile) gọi EconomyService.sendGift({senderUserId, receiverUserId, priceDiamond, pointsAwarded, idempotencyKey, metadata, withinTransaction}); callback ghi GiftEvent và Notification (và Conversation ở profile) bằng manager của ledger, Economy tự ghi thêm outbox economy.gift.sent trong cùng transaction.",
+   "why": "Quà là một transaction hai chân độc lập theo currency (người tặng mất DIA, người nhận được PTS theo GIFT_POINTS_RATE_PERCENT, 0 nếu guest). Callback chạy sau khi entries và wallet delta đã ghi, trong cùng EntityManager (ledger.service.ts:179) nên trừ/cộng, GiftEvent, Notification cùng commit hoặc cùng rollback; replay cùng key trả sớm và không chạy lại callback nên không ghi đôi.",
+   "ifMissing": "Hỏng một bước sẽ để lại ví đã trừ mà người nhận không có điểm/event, hoặc điểm PTS được mint mà người tặng không mất DIA.",
+   "with": "gift",
+   "withKind": "service",
+   "direction": "in",
+   "mechanism": "di-call",
+   "endpoints": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/gift/gift.service.ts",
+     "line": 210,
+     "quote": "const result = await this.economy.sendGift({"
+    },
+    {
+     "file": "apps/core-api/src/modules/gift/gift.service.ts",
+     "line": 308,
+     "quote": "const result = await this.economy.sendGift({"
+    },
+    {
+     "file": "apps/core-api/src/modules/gift/gift.service.ts",
+     "line": 401,
+     "quote": "const result = await this.economy.sendGift({"
+    }
+   ],
+   "basis": "ast",
+   "logic": {
+    "verdict": "sound",
+    "note": "recordInManager gọi withinTransaction sau entries và applyWalletDeltas (ledger.service:179), replay trả sớm trước callback; chân PTS chỉ có khi points>0."
+   }
+  },
+  {
+   "id": "c6",
+   "label": "trừ diamond match, đọc VIP",
+   "what": "MatchingService gọi spendDiamondInTransaction(manager, ...) cho lượt match mua thêm, spendDiamond cho speed-up, và getActiveVipTier(userId) để chọn giá speed-up VIP/SVIP.",
+   "why": "Extra match trả phí trừ diamond trong CÙNG transaction với MatchTicket nhờ spendDiamondInTransaction nhận manager của Matching (matching.service.ts:139) nên rollback cùng nhau. Speed-up thì KHÔNG: spendDiamond commit riêng rồi mới tăng priorityBoostMs, và boost chỉ chạy khi !spend.replayed (matching.service.ts:448-466), nên crash giữa hai bước làm retry cùng key thấy replayed=true và bỏ qua boost. Tier VIP chỉ Economy biết (getActiveVipTier) nên giá VIP/SVIP phải hỏi tại lúc hành động.",
+   "ifMissing": "Extra match: ticket tạo mà không bị trừ tiền (hoặc ngược lại). Speed-up: có cửa sổ trừ tiền mà không có boost; giá VIP phải dựa vào bản sao tier cũ ở Matching.",
+   "with": "matching",
+   "withKind": "service",
+   "direction": "in",
+   "mechanism": "di-call",
+   "endpoints": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/matching/matching.service.ts",
+     "line": 139,
+     "quote": "await this.economy.spendDiamondInTransaction("
+    },
+    {
+     "file": "apps/core-api/src/modules/matching/matching.service.ts",
+     "line": 264,
+     "quote": "const tier = await this.economy.getActiveVipTier(userId);"
+    },
+    {
+     "file": "apps/core-api/src/modules/matching/matching.service.ts",
+     "line": 448,
+     "quote": "const spend = await this.economy.spendDiamond("
+    }
+   ],
+   "basis": "ast",
+   "logic": {
+    "verdict": "sound",
+    "note": "Extra match dùng recordInManager cùng manager; speed-up spendDiamond commit riêng, increment boost chỉ khi !spend.replayed (matching.service:448-466)."
+   }
+  },
+  {
+   "id": "c7",
+   "with": "external:apple",
+   "withKind": "external",
+   "direction": "out",
+   "mechanism": "http",
+   "endpoints": [
+    "e7",
+    "e13"
+   ],
+   "label": "verify receipt, tra refund",
+   "what": "Gọi Apple verifyReceipt (production rồi sandbox) để xác minh receipt khi nạp, và App Store Server API /inApps/v2/refund/lookup/{transactionId} (JWT ES256) để job quét kiểm refund từng giao dịch.",
+   "why": "Chỉ Apple biết receipt có thật và đã bị hoàn hay chưa; client không đáng tin nên diamond chỉ được credit sau khi server tự hỏi Apple, và refund phải được dò chủ động vì webhook không đảm bảo 100%.",
+   "ifMissing": "Client có thể gửi receipt giả để nhận diamond; refund Apple bị miss webhook sẽ giữ diamond đã hoàn tiền mà không ai thu hồi.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/economy/clients/apple-receipt-api.adapter.ts",
+     "line": 100,
+     "quote": "response = await fetch(url, {"
+    },
+    {
+     "file": "apps/core-api/src/modules/economy/clients/apple-refund-api.adapter.ts",
+     "line": 29,
+     "quote": "/inApps/v2/refund/lookup/${encodeURIComponent(transactionId)}"
+    }
+   ],
+   "review": {
+    "verdict": "supported"
+   },
+   "logic": {
+    "verdict": "sound",
+    "note": "Production rồi sandbox đúng, nhưng sandbox chỉ gọi khi status là sandbox-receipt; refund lookup dùng JWT ES256 (apple-server-api.ts)."
+   }
+  },
+  {
+   "id": "c8",
+   "with": "external:apple",
+   "withKind": "external",
+   "direction": "in",
+   "mechanism": "webhook",
+   "endpoints": [
+    "e10"
+   ],
+   "label": "Server Notification REFUND",
+   "what": "Apple POST signedPayload (JWS) tới /economy/webhooks/apple; server verify chain x5c lên Apple Root CA (ECONOMY_APPLE_ROOT_CA_PEM), đối chiếu bundleId với ECONOMY_APPLE_BUNDLE_ID (bỏ qua nếu biến rỗng, mặc định rỗng), rồi RefundService.refundIapPurchase khi REFUND/REVOKE.",
+   "why": "Apple cho user hoàn tiền sau khi đã nạp và có thể đã tiêu diamond; chỉ tín hiệu server-to-server đã verify chữ ký mới được kích hoạt bút toán đảo, và endpoint @Public nên chữ ký là lớp xác thực duy nhất.",
+   "ifMissing": "Không biết refund kịp thời nên user giữ diamond free; hoặc nếu không verify chữ ký thì kẻ ngoài giả notification để đảo giao dịch hợp lệ của người khác.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/economy/ports/notification-verifier.ts",
+     "line": 107,
+     "quote": "const header = decodeProtectedHeader(signedPayload) as { x5c?: string[] };"
+    }
+   ],
+   "review": {
+    "verdict": "supported"
+   },
+   "logic": {
+    "verdict": "corrected",
+    "note": "Đối chiếu bundleId chỉ chạy khi ECONOMY_APPLE_BUNDLE_ID khác rỗng (mặc định rỗng); không phải luôn luôn."
+   }
+  },
+  {
+   "id": "c9",
+   "with": "external:google-play",
+   "withKind": "external",
+   "direction": "out",
+   "mechanism": "http",
+   "endpoints": [
+    "e7",
+    "e13"
+   ],
+   "label": "purchase token + voided",
+   "what": "Gọi Android Publisher API (OAuth service account) purchases/products/.../tokens/{purchaseToken} để verify purchase khi nạp và purchases/voidedpurchases để liệt kê giao dịch bị void cho job quét.",
+   "why": "Google không có refund webhook đáng tin cho one-time product (CANCELED không đồng nghĩa voided), nên Voided Purchases API là nguồn refund chính thức duy nhất; verify purchase token cũng chỉ Google xác nhận được.",
+   "ifMissing": "Purchase token giả được credit, và refund Google one-time không bao giờ bị thu hồi diamond.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/economy/clients/google-play-receipt-api.adapter.ts",
+     "line": 45,
+     "quote": "/purchases/products/${encodeURIComponent(productId)}/tokens/${encodeURIComponent(purchaseToken)}"
+    },
+    {
+     "file": "apps/core-api/src/modules/economy/clients/google-refund-api.adapter.ts",
+     "line": 37,
+     "quote": "/purchases/voidedpurchases?startTime=${since.getTime()}"
+    }
+   ],
+   "review": {
+    "verdict": "supported"
+   },
+   "logic": {
+    "verdict": "sound",
+    "note": "Doc economy-service § 5 nêu Voided Purchases là nguồn refund chính thức cho one-time; RTDN chỉ log CANCELED, không refund."
+   }
+  },
+  {
+   "id": "c10",
+   "with": "external:google-play",
+   "withKind": "external",
+   "direction": "in",
+   "mechanism": "webhook",
+   "endpoints": [
+    "e11"
+   ],
+   "label": "RTDN Pub/Sub push",
+   "what": "Google Pub/Sub push RTDN tới /economy/webhooks/google/rtdn kèm Bearer OIDC token; server verify issuer, audience, email service account (ECONOMY_GOOGLE_RTDN_*) rồi chỉ log notificationType=2 (CANCELED).",
+   "why": "Endpoint @Public nên OIDC token là cách duy nhất chứng minh push đến từ subscription đã cấu hình; không refund tại đây vì CANCELED không đảm bảo nghĩa voided với one-time product (doc § 5).",
+   "ifMissing": "Không verify thì ai cũng POST được vào endpoint; nếu refund theo CANCELED thì đảo nhầm giao dịch hợp lệ.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/economy/ports/notification-verifier.ts",
+     "line": 251,
+     "quote": "const { payload } = await jwtVerify(token, GOOGLE_JWKS, {"
+    }
+   ],
+   "review": {
+    "verdict": "supported"
+   },
+   "logic": {
+    "verdict": "sound",
+    "note": "jwtVerify kiểm issuer, audience, email và email_verified; controller chỉ log notificationType 2 (CANCELED), không refund."
+   }
+  },
+  {
+   "id": "c11",
+   "with": "external:payos",
+   "withKind": "external",
+   "direction": "out",
+   "mechanism": "http",
+   "endpoints": [
+    "e4"
+   ],
+   "label": "tạo payment link VietQR",
+   "what": "PayosClient.createPaymentLink POST {PAYOS_API_BASE_URL}/v2/payment-requests (header x-client-id/x-api-key, HMAC-SHA256 trong JSON body); khi timeout, lỗi mạng hoặc phản hồi không hợp lệ thì GET /v2/payment-requests/{orderCode} lấy paymentLinkId, checkoutUrl dựng lại từ id (qrCode null).",
+   "why": "Checkout URL/QR chỉ payOS cấp được; vì POST có thể đã tạo link nhưng response mất, phải tra lại theo orderCode (unique trong DB) để retry không sinh checkout thứ hai cho cùng intent.",
+   "ifMissing": "Web không có link/QR VietQR để user thanh toán VND; retry sau timeout tạo nhiều link cho cùng đơn.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/economy/ports/payos-client.ts",
+     "line": 80,
+     "quote": "response = await fetch(`${baseUrl}/v2/payment-requests`, {"
+    }
+   ],
+   "review": {
+    "verdict": "supported"
+   },
+   "logic": {
+    "verdict": "corrected",
+    "note": "GET khôi phục cũng chạy khi phản hồi không hợp lệ, không chỉ timeout; link dựng lại từ id, qrCode null."
+   }
+  },
+  {
+   "id": "c12",
+   "with": "external:payos",
+   "withKind": "external",
+   "direction": "in",
+   "mechanism": "webhook",
+   "endpoints": [
+    "e12"
+   ],
+   "label": "webhook thanh toán payOS",
+   "what": "payOS POST /economy/webhooks/payos {code, success, data, signature}; PayosClient.verifyWebhook tính lại HMAC-SHA256 bằng PAYOS_CHECKSUM_KEY rồi PayosService.creditVerifiedWebhook ghi ledger (Nợ system_iap / Có user_wallet) và đặt đơn paid cùng transaction.",
+   "why": "Chỉ webhook có HMAC hợp lệ mới là bằng chứng đã trả tiền (returnUrl của browser thì không); endpoint @Public nên chữ ký là lớp xác thực duy nhất, và idempotency key payos-credit:{orderCode} chặn cộng diamond lần hai khi payOS retry.",
+   "ifMissing": "Không có webhook thì diamond không bao giờ được cộng sau khi trả tiền; không kiểm HMAC thì ai cũng giả được thanh toán để nhận diamond free.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/economy/webhooks/economy-webhooks.controller.ts",
+     "line": 125,
+     "quote": "const event = this.payosClient.verifyWebhook({"
+    },
+    {
+     "file": "apps/core-api/src/modules/economy/ports/payos-client.ts",
+     "line": 295,
+     "quote": "return createHmac('sha256', checksumKey).update(canonical).digest('hex');"
+    }
+   ],
+   "review": {
+    "verdict": "supported"
+   },
+   "logic": {
+    "verdict": "sound",
+    "note": "creditVerifiedWebhook ghi Nợ system_iap/Có user_wallet, key payos-credit:{orderCode}, lockOrder và đặt Paid trong withinTransaction; so chữ ký bằng timingSafeEqual."
+   }
+  },
+  {
+   "id": "c13",
+   "with": "web",
+   "withKind": "client",
+   "direction": "both",
+   "mechanism": "http",
+   "endpoints": [
+    "e1",
+    "e2",
+    "e3",
+    "e4",
+    "e5",
+    "e6",
+    "e7",
+    "e8",
+    "e9"
+   ],
+   "label": "Idempotency-Key, hỏi đơn",
+   "what": "Web gửi header Idempotency-Key cho POST /economy/payos/orders và /economy/vip/purchase, chuyển user sang checkoutUrl của payOS, quay về với ?paymentOrder=<orderId> rồi GET /economy/payos/orders/:orderId (nút 'Kiểm tra lại') và invalidate ví khi paid.",
+   "why": "Idempotency-Key do client sinh là cách duy nhất để retry mạng không tạo đơn/mua VIP thứ hai; trạng thái paid chỉ biết sau khi webhook ghi ledger nên web phải hỏi lại server thay vì tin redirect.",
+   "ifMissing": "Bấm đúp hoặc retry tạo hai đơn/trừ diamond hai lần; web tin returnUrl sẽ hiện 'thành công' khi chưa có webhook.",
+   "evidence": [
+    {
+     "file": "apps/web/src/features/wallet/api.ts",
+     "line": 76,
+     "quote": "header: { 'Idempotency-Key': input.idempotencyKey },"
+    },
+    {
+     "file": "apps/web/src/features/wallet/components/payos-payment-status.tsx",
+     "line": 12,
+     "quote": "const orderId = searchParams.get('paymentOrder');"
+    }
+   ],
+   "review": {
+    "verdict": "supported"
+   },
+   "logic": {
+    "verdict": "sound",
+    "note": "Web gửi Idempotency-Key cho payos/orders và vip/purchase, có nút 'Kiểm tra lại', invalidate ví khi status paid."
+   }
+  }
+ ],
+ "waivedEdges": [],
+ "excludedRoutes": [],
+ "notes": [
+  "Doc economy-service.md § 3 mô tả idempotency đồng thời bằng 'retry đọc ngắn có backoff'; code (ledger.service.ts recordInManager) dùng INSERT ... ON CONFLICT DO NOTHING rồi đọc lại row thắng trong cùng transaction, và record() bắt unique violation rồi đọc winner. Không có vòng backoff.",
+  "Doc § 4 nói payload event là {version, transactionId, userId, amount, transactionType}; riêng economy.vip.purchased thực tế là {version, userId, planId, tier, vipExpiresAt} (economy.service.ts purchaseVip), không có transactionId/amount.",
+  "Doc § 2 nói có rate-limit verify theo user; code chỉ có @Throttle 10 request/phút trên /iap/verify và /payos/orders qua ThrottlerGuard, app.module.ts không cấu hình storage nên là bộ đếm in-memory mặc định theo từng instance (tracker mặc định của Nest là IP), không phải theo user và không chia sẻ giữa các replica.",
+  "Doc § 7 nhắc StoreKit 2 / App Store Server API, nhưng xác minh receipt Apple khi nạp dùng endpoint legacy verifyReceipt (economy.constants.ts APPLE_VERIFY_RECEIPT_URL); App Store Server API chỉ dùng cho refund lookup của job quét.",
+  "Job đối soát deep chỉ so snapshot với ledger cho account user_wallet (DIA); wallets.earnings (PTS) không được kiểm, dù doc § 1.2 nói cả hai rebuild được.",
+  "ECONOMY_OUTBOX_RELAY_ENABLED và ECONOMY_REFUND_POLL_ENABLED mặc định false (env.validation.ts) và hosted profile (deploy/hosted/core-api.env.example) cũng tắt: outbox_events vẫn được ghi nhưng published_at giữ null, và không còn backstop refund ngoài webhook Apple. Không tìm thấy consumer nào của topic litmatch.economy.events trong apps/ — event hiện là hợp đồng tương lai.",
+  "Webhook Google RTDN chỉ log tín hiệu CANCELED, không refund (đúng doc); refund Google one-time chỉ xảy ra qua IapRefundPollService, nên khi ECONOMY_REFUND_POLL_ENABLED=false thì refund Google không bao giờ được xử lý.",
+  "GET /economy/payos/orders/:orderId có side effect ghi: đơn pending quá hạn bị UPDATE sang expired ngay khi đọc (payos.service.ts getOrderStatus); webhook paid đến trễ vẫn thắng vì creditVerifiedWebhook ghi đè status về paid.",
+  "avatar.buy gọi spendDiamond rồi mới grantOwnership ở transaction khác (avatar.service.ts:85-92); không atomic, an toàn nhờ retry idempotent cùng key. Khác Gift/Matching extra match dùng cùng DB transaction.",
+  "Các webhook payOS có orderCode lạ hoặc sai số tiền/paymentLinkId vẫn được ACK 200 và không ghi sổ (creditVerifiedWebhook trả false); chỉ log, không alert.",
+  "ledger.recordInManager trả sớm với replayed=true khi idempotencyKey đã tồn tại (ledger.service.ts:106-114) nên withinTransaction (GiftEvent, outbox, VIP) KHÔNG chạy lại ở replay; caller phải đọc lại kết quả theo transactionId (Gift đọc GiftEvent qua transaction_id).",
+  "Matching speed-up có cửa sổ mất boost: spendDiamond commit riêng rồi ticketRepo.increment chỉ chạy khi !spend.replayed (matching.service.ts:448-466); crash giữa hai bước thì retry cùng key thấy replayed=true và bỏ qua boost (tiền đã trừ, boost mất). Khác Avatar, nơi grantOwnership chạy vô điều kiện sau spend (avatar.service.ts:85-92). Đã gửi yêu cầu sang matching."
+ ],
+ "techniques": [
+  {
+   "slug": "jwt-bearer",
+   "name": "JWT bearer (access token không trạng thái)",
+   "model": "JWT bearer",
+   "how": "Client gửi access token (JWT) trong header Authorization; guard xác minh chữ ký và hạn rồi gắn user vào request, server không giữ phiên.",
+   "why": "Không trạng thái nên scale ngang dễ và không phải tra DB mỗi request; đánh đổi là không thu hồi tức thì trước khi token hết hạn.",
+   "alternative": "Session phía server (cookie + kho phiên) thu hồi được tức thì nhưng cần kho phiên dùng chung.",
+   "endpoints": [
+    "e1",
+    "e2",
+    "e3",
+    "e4",
+    "e5",
+    "e6",
+    "e7",
+    "e8",
+    "e9"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/app/app.module.ts",
+     "line": 117,
+     "quote": "{ provide: APP_GUARD, useClass: JwtAuthGuard },"
+    }
+   ],
+   "auto": true,
+   "count": 9,
+   "id": "t1",
+   "local": "JwtAuthGuard toàn cục bảo vệ các route ví, IAP, payOS, VIP; riêng webhook mở bằng @Public()."
+  },
+  {
+   "slug": "webhook-signature",
+   "name": "Xác thực chữ ký/token của webhook",
+   "model": "Chữ ký webhook",
+   "how": "Webhook phải được xác minh chữ ký/token của nhà cung cấp trên body gốc trước khi xử lý.",
+   "why": "Endpoint webhook công khai nên chữ ký là cách duy nhất chứng minh nguồn gửi.",
+   "endpoints": [
+    "e12",
+    "e10",
+    "e11"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/economy/dto/payos-webhook.dto.ts",
+     "line": 11,
+     "quote": "@ApiProperty() @IsString() signature!: string;"
+    },
+    {
+     "file": "apps/core-api/src/modules/economy/dto/webhook.dtos.ts",
+     "line": 5,
+     "quote": "@ApiProperty({ description: 'JWS — App Store Server Notifications V2' })"
+    },
+    {
+     "file": "apps/core-api/src/modules/economy/ports/payos-client.ts",
+     "line": 58,
+     "quote": "const { clientId, apiKey, checksumKey } = this.credentials();"
+    }
+   ],
+   "auto": true,
+   "count": 28,
+   "id": "t2",
+   "local": "Webhook payOS có trường signature kiểm HMAC checksum, Apple nhận signedPayload JWS, Google RTDN kiểm OIDC qua các verifier thay thế được bằng env."
+  },
+  {
+   "slug": "abac-attribute-policy",
+   "name": "ABAC theo thuộc tính (guest, ban, VIP, giới tính, tuổi…)",
+   "model": "ABAC",
+   "how": "Quyết định dựa trên thuộc tính của người dùng hoặc tài nguyên như guest, bị ban, hạng VIP, giới tính, tuổi.",
+   "why": "Nghiệp vụ có quy tắc theo ngữ cảnh mà vai trò đơn thuần không diễn đạt được.",
+   "alternative": "Policy engine (OPA/Casbin/CASL) tách chính sách khỏi mã nhưng thêm thành phần vận hành.",
+   "endpoints": [
+    "e4",
+    "e1",
+    "e2",
+    "e3",
+    "e5",
+    "e6",
+    "e7",
+    "e8",
+    "e9"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/economy/dto/economy.dtos.ts",
+     "line": 96,
+     "quote": "@ApiProperty({ enum: VipTier })"
+    },
+    {
+     "file": "apps/core-api/src/modules/economy/economy.controller.ts",
+     "line": 168,
+     "quote": "if (user.isGuest) {"
+    },
+    {
+     "file": "apps/core-api/src/modules/economy/economy.service.ts",
+     "line": 33,
+     "quote": "vipTier: VipTier | null;"
+    }
+   ],
+   "auto": true,
+   "count": 21,
+   "id": "t3",
+   "local": "assertNotGuestForPayos chặn user.isGuest nạp Diamond (PAYOS_GUEST_FORBIDDEN); gói VIP có thuộc tính tier (VipTier)."
+  },
+  {
+   "slug": "global-guard-public-optout",
+   "name": "Guard toàn cục + @Public() để mở",
+   "model": "Mặc định đóng",
+   "how": "Guard JWT đăng ký toàn cục; route nào muốn mở phải gắn @Public() tường minh.",
+   "why": "An toàn theo mặc định: quên cấu hình thì bị chặn chứ không bị mở.",
+   "alternative": "Gắn guard từng controller: dễ sót route.",
+   "endpoints": [
+    "e10",
+    "e11",
+    "e12"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/economy/webhooks/economy-webhooks.controller.ts",
+     "line": 42,
+     "quote": "@Public()"
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "id": "t4",
+   "local": "EconomyWebhooksController gắn @Public() ở cấp class vì webhook store-to-store không có JWT, xác thực bằng chữ ký."
+  },
+  {
+   "slug": "idempotency-key",
+   "name": "Idempotency-Key (client sinh, server khử trùng)",
+   "model": "Idempotency-Key",
+   "how": "Client gửi khoá duy nhất cho mỗi thao tác; server lưu khoá (unique) và trả lại kết quả cũ khi gặp lại.",
+   "why": "Retry mạng không tạo bản ghi hoặc trừ tiền hai lần.",
+   "endpoints": [
+    "e4",
+    "e7",
+    "e8",
+    "e10",
+    "e13",
+    "e12"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/economy/economy.constants.ts",
+     "line": 15,
+     "quote": "'uq_transactions_idempotency_key';"
+    },
+    {
+     "file": "apps/core-api/src/modules/economy/economy.controller.ts",
+     "line": 39,
+     "quote": "ApiIdempotencyKeyHeader,"
+    },
+    {
+     "file": "apps/core-api/src/modules/economy/economy.service.ts",
+     "line": 322,
+     "quote": "idempotencyKey: `iap:${provider}:${verified.providerTransactionId}`,"
+    }
+   ],
+   "auto": true,
+   "count": 37,
+   "id": "t5",
+   "local": "Unique constraint uq_transactions_idempotency_key và UQ_PAYOS_ORDER_IDEMPOTENCY_KEY cùng header ApiIdempotencyKeyHeader chặn replay mua/nạp."
+  },
+  {
+   "slug": "entity-manager-propagation",
+   "name": "Truyền EntityManager giữa module (chung một transaction)",
+   "model": "Chung transaction",
+   "how": "Module sở hữu dữ liệu nhận EntityManager của giao dịch đang chạy để việc của nó nằm trong cùng transaction.",
+   "why": "Nhiều module dùng chung DB nên atomicity xuyên module không cần saga hay 2PC.",
+   "alternative": "Saga/outbox xuyên service: cần khi tách deployable, thừa khi cùng process.",
+   "endpoints": [
+    "e10",
+    "e13",
+    "e12"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/economy/economy.service.ts",
+     "line": 173,
+     "quote": "manager: EntityManager,"
+    },
+    {
+     "file": "apps/core-api/src/modules/economy/ports/ledger-persistence.port.ts",
+     "line": 36,
+     "quote": "manager: EntityManager,"
+    },
+    {
+     "file": "apps/core-api/src/modules/economy/services/ledger.service.ts",
+     "line": 75,
+     "quote": "this.recordInManager(manager, input),"
+    }
+   ],
+   "auto": true,
+   "count": 21,
+   "id": "t6",
+   "local": "EconomyService và LedgerPersistencePort truyền EntityManager (withinTransaction) để các bước ví, ledger, outbox chung một transaction."
+  },
+  {
+   "slug": "pessimistic-lock",
+   "name": "Khoá bi quan (SELECT … FOR UPDATE)",
+   "model": "Khoá bi quan",
+   "how": "SELECT … FOR UPDATE khoá hàng đang xử lý để giao dịch khác phải chờ.",
+   "why": "Chặn hai request song song cùng đọc rồi cùng ghi (race) trên số dư, ticket, session.",
+   "alternative": "Khoá lạc quan (version) ít chờ hơn nhưng phải retry khi xung đột.",
+   "endpoints": [
+    "e13",
+    "e14",
+    "e12"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/economy/economy.service.ts",
+     "line": 104,
+     "quote": "lock: { mode: 'pessimistic_write' },"
+    },
+    {
+     "file": "apps/core-api/src/modules/economy/jobs/iap-refund-poll.service.ts",
+     "line": 96,
+     "quote": ".setLock('pessimistic_write')"
+    },
+    {
+     "file": "apps/core-api/src/modules/economy/jobs/outbox-relay.service.ts",
+     "line": 71,
+     "quote": ".setLock('pessimistic_write')"
+    }
+   ],
+   "auto": true,
+   "count": 5,
+   "id": "t7",
+   "local": "Đọc Wallet với lock pessimistic_write, và job iap-refund-poll khoá receipt bằng setLock('pessimistic_write')."
+  },
+  {
+   "slug": "transactional-outbox",
+   "name": "Transactional outbox",
+   "model": "Outbox",
+   "how": "Sự kiện ghi vào bảng outbox trong cùng transaction nghiệp vụ; tiến trình relay đẩy ra broker rồi đánh dấu đã gửi.",
+   "why": "Tránh dual-write: không có chuyện DB commit mà event mất hoặc ngược lại.",
+   "alternative": "Publish trực tiếp sau commit: nhanh nhưng mất event khi crash giữa hai bước.",
+   "endpoints": [
+    "e8",
+    "e14"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/economy/economy.module.ts",
+     "line": 65,
+     "quote": "OutboxEvent,"
+    },
+    {
+     "file": "apps/core-api/src/modules/economy/economy.service.ts",
+     "line": 429,
+     "quote": "manager.create(OutboxEvent, {"
+    },
+    {
+     "file": "apps/core-api/src/modules/economy/entities/outbox-event.entity.ts",
+     "line": 10,
+     "quote": "@Entity({ name: 'outbox_events' })"
+    }
+   ],
+   "auto": true,
+   "count": 11,
+   "id": "t8",
+   "local": "ledger.applyWalletDeltas ghi OutboxEvent cho mỗi thay đổi số dư cùng transaction; mua VIP thêm economy.vip.purchased, sendGift thêm economy.gift.sent; OutboxRelayService đẩy sang bus sau."
+  },
+  {
+   "slug": "db-transaction",
+   "name": "Transaction DB (một đơn vị công việc)",
+   "model": "Transaction",
+   "how": "Gói nhiều thao tác ghi vào một transaction: cùng commit hoặc cùng rollback.",
+   "why": "Tránh trạng thái nửa vời khi lỗi giữa chừng.",
+   "endpoints": [
+    "e13",
+    "e14"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/economy/jobs/iap-refund-poll.service.ts",
+     "line": 92,
+     "quote": "const candidates = await this.dataSource.transaction(async (manager) => {"
+    },
+    {
+     "file": "apps/core-api/src/modules/economy/jobs/outbox-relay.service.ts",
+     "line": 67,
+     "quote": "return await this.dataSource.transaction(async (manager) => {"
+    },
+    {
+     "file": "apps/core-api/src/modules/economy/services/ledger.service.ts",
+     "line": 74,
+     "quote": "const result = await this.dataSource.transaction((manager) =>"
+    }
+   ],
+   "auto": true,
+   "count": 4,
+   "id": "t9",
+   "local": "OutboxRelayService.flushOnce giữ transaction mở suốt lúc publish; iap-refund-poll claim lô rồi commit ngay trước khi gọi API store/refund để tránh deadlock với transaction của RefundService."
+  },
+  {
+   "slug": "skip-locked",
+   "name": "FOR UPDATE SKIP LOCKED (nhiều worker không dẫm chân)",
+   "model": "SKIP LOCKED",
+   "how": "FOR UPDATE SKIP LOCKED lấy các hàng chưa bị worker khác khoá.",
+   "why": "Nhiều worker xử lý hàng đợi trong DB mà không dẫm chân nhau.",
+   "endpoints": [
+    "e13",
+    "e14"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/economy/jobs/iap-refund-poll.service.ts",
+     "line": 97,
+     "quote": ".setOnLocked('skip_locked')"
+    },
+    {
+     "file": "apps/core-api/src/modules/economy/jobs/outbox-relay.service.ts",
+     "line": 72,
+     "quote": ".setOnLocked('skip_locked')"
+    }
+   ],
+   "auto": true,
+   "count": 2,
+   "id": "t10",
+   "local": "Cả iap-refund-poll và outbox-relay dùng setOnLocked('skip_locked') để nhiều replica lấy lô khác nhau, không dẫm chân."
+  },
+  {
+   "slug": "unique-constraint-guard",
+   "name": "Ràng buộc unique ở DB làm chốt chặn cuối",
+   "model": "Ràng buộc DB",
+   "how": "Ràng buộc unique hoặc index duy nhất ở DB là chốt chặn cuối cho trùng lặp.",
+   "why": "Check-rồi-insert ở tầng code vẫn dính race; DB mới bảo đảm tuyệt đối.",
+   "endpoints": [
+    "e4"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/economy/entities/iap.entities.ts",
+     "line": 41,
+     "quote": "@Unique('uq_iap_receipts_provider_txn', ['provider', 'providerTransactionId'])"
+    },
+    {
+     "file": "apps/core-api/src/modules/economy/entities/payos.entities.ts",
+     "line": 65,
+     "quote": "unique: true,"
+    },
+    {
+     "file": "apps/core-api/src/modules/economy/entities/transaction.entity.ts",
+     "line": 47,
+     "quote": "@Column({ length: 255, unique: true })"
+    }
+   ],
+   "auto": true,
+   "count": 13,
+   "id": "t11",
+   "local": "@Unique('uq_iap_receipts_provider_txn') chặn double-credit receipt, orderCode payOS có unique: true với sequence payos_order_code_seq."
+  },
+  {
+   "id": "t12",
+   "slug": "advisory-lock",
+   "name": "Advisory lock (pg_advisory) để serialize / singleton",
+   "model": "Advisory lock",
+   "how": "pg_advisory_xact_lock khoá theo khoá logic, không cần có hàng cụ thể, giữ đến hết transaction.",
+   "why": "Tuần tự hoá việc không gắn với một hàng (ghép đôi, worker singleton).",
+   "endpoints": [
+    "e15"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/common/scheduling/managed-interval.ts",
+     "line": 128,
+     "quote": "pg_try_advisory_xact_lock("
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "local": "ManagedInterval với clusterSingleton lấy pg_try_advisory_xact_lock trước mỗi lượt fast/deep của ReconciliationService nên chỉ một replica đối soát tại một thời điểm.",
+   "addedByLogicReview": true
+  },
+  {
+   "id": "t13",
+   "slug": "derived-state",
+   "name": "Trạng thái suy ra từ dữ liệu gốc/thời gian (không lưu cờ)",
+   "model": "Trạng thái suy ra",
+   "how": "Trạng thái được tính lại từ dữ liệu gốc và giờ server mỗi lần đọc, không lưu cờ.",
+   "why": "Không cần timer hay job để chuyển trạng thái và không có cờ bị lệch.",
+   "endpoints": [
+    "e1"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/economy/entities/wallet.entity.ts",
+     "line": 38,
+     "quote": "this.vipTier && this.vipExpiresAt && this.vipExpiresAt > new Date()"
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "local": "Wallet.activeVipTier là getter suy ra tier từ vipTier và vipExpiresAt > now, nên VIP hết hạn tự hạ về null khi đọc ví mà không cần job cập nhật.",
+   "addedByLogicReview": true
+  },
+  {
+   "slug": "double-entry-ledger",
+   "name": "Sổ cái kép append-only",
+   "model": "Sổ cái kép",
+   "how": "Mỗi biến động tiền ghi ít nhất hai bút toán nợ/có append-only; số dư là snapshot dẫn xuất.",
+   "why": "Tổng nợ luôn bằng tổng có nên phát hiện và đối soát được sai lệch.",
+   "endpoints": [],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/economy/economy.module.ts",
+     "line": 58,
+     "quote": "LedgerEntry,"
+    },
+    {
+     "file": "apps/core-api/src/modules/economy/entities/ledger-entry.entity.ts",
+     "line": 22,
+     "quote": "export class LedgerEntry {"
+    },
+    {
+     "file": "apps/core-api/src/modules/economy/ports/ledger-persistence.port.ts",
+     "line": 14,
+     "quote": "export interface LedgerEntryInput {"
+    }
+   ],
+   "auto": true,
+   "count": 11,
+   "id": "t14",
+   "local": "LedgerService là writer duy nhất ghi LedgerTransaction, LedgerEntry (Nợ/Có) và LedgerAccount; số dư ví suy ra từ bút toán."
+  },
+  {
+   "slug": "reversal-compensation",
+   "name": "Sửa sai bằng bút toán đảo (reversal), không sửa lịch sử",
+   "model": "Bút toán đảo",
+   "how": "Sửa sai bằng bút toán đảo mới thay vì sửa hoặc xoá lịch sử.",
+   "why": "Lịch sử luôn đầy đủ và truy vết được.",
+   "endpoints": [],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/economy/entities/transaction.entity.ts",
+     "line": 23,
+     "quote": "Reversal = 'reversal',"
+    },
+    {
+     "file": "apps/core-api/src/modules/economy/services/ledger.service.ts",
+     "line": 231,
+     "quote": "type: TransactionType.Reversal,"
+    }
+   ],
+   "auto": true,
+   "count": 3,
+   "id": "t15",
+   "local": "TransactionType.Reversal cho phép LedgerService ghi giao dịch đảo (kèm idempotencyKey) khi hoàn tiền thay vì sửa lịch sử."
+  },
+  {
+   "slug": "append-only",
+   "name": "Bảng chỉ thêm (bất biến)",
+   "model": "Bất biến",
+   "how": "Bảng chỉ thêm, không sửa hoặc xoá dòng cũ.",
+   "why": "Giữ bằng chứng bất biến cho kiểm toán và xử lý báo cáo.",
+   "endpoints": [],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/economy/entities/ledger-entry.entity.ts",
+     "line": 18,
+     "quote": "* Append-only tuyệt đối: DB trigger chặn UPDATE/DELETE (migration 1752000000000)."
+    },
+    {
+     "file": "apps/core-api/src/modules/economy/services/ledger.service.ts",
+     "line": 44,
+     "quote": "* Mọi bất biến tiền bạc sống ở đây + các chốt chặn DB (unique key, CHECK, trigger append-only)."
+    }
+   ],
+   "auto": true,
+   "count": 2,
+   "id": "t16",
+   "local": "ledger_entries append-only tuyệt đối, DB trigger chặn UPDATE/DELETE (migration 1752000000000); LedgerService là writer duy nhất."
+  },
+  {
+   "slug": "kafka-event-bus",
+   "name": "Kafka event bus (kèm DLQ)",
+   "model": "Kafka",
+   "how": "Event bus bền: producer ghi theo topic, consumer group đọc, lỗi lặp đưa vào DLQ.",
+   "why": "Sự kiện nghiệp vụ quan trọng cần bền và đọc lại được.",
+   "endpoints": [
+    "e14"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/economy/jobs/outbox-relay.service.ts",
+     "line": 39,
+     "quote": "private readonly eventBus: EventBusPort,"
+    }
+   ],
+   "auto": true,
+   "count": 2,
+   "id": "t17",
+   "local": "OutboxRelayService inject EventBusPort để phát sự kiện economy ra bus (Kafka) và chuyển sang topic .DLQ khi quá giới hạn."
+  },
+  {
+   "slug": "interval-worker",
+   "name": "Worker lặp (interval / ManagedInterval)",
+   "model": "Worker lặp",
+   "how": "Vòng lặp theo chu kỳ trong process (ManagedInterval).",
+   "why": "Worker nền đơn giản, không cần hạ tầng queue riêng.",
+   "endpoints": [
+    "e15"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/economy/jobs/iap-refund-poll.service.ts",
+     "line": 52,
+     "quote": "private readonly job = new ManagedInterval();"
+    },
+    {
+     "file": "apps/core-api/src/modules/economy/jobs/outbox-relay.service.ts",
+     "line": 33,
+     "quote": "private readonly job = new ManagedInterval();"
+    },
+    {
+     "file": "apps/core-api/src/modules/economy/jobs/reconciliation.service.ts",
+     "line": 69,
+     "quote": "private readonly fastJob = new ManagedInterval();"
+    }
+   ],
+   "auto": true,
+   "count": 4,
+   "id": "t18",
+   "local": "IapRefundPollService và OutboxRelayService dùng new ManagedInterval() chạy vòng lặp định kỳ từ onApplicationBootstrap."
+  },
+  {
+   "id": "t19",
+   "slug": "singleton-worker-lock",
+   "name": "Worker singleton nhờ advisory lock",
+   "model": "Singleton",
+   "how": "Advisory lock bảo đảm chỉ một replica chạy worker tại một thời điểm.",
+   "why": "Tránh chạy trùng khi scale nhiều pod.",
+   "endpoints": [
+    "e15"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/economy/jobs/reconciliation.service.ts",
+     "line": 94,
+     "quote": "clusterSingleton: { dataSource: this.dataSource }"
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "local": "ReconciliationService chạy fastJob với clusterSingleton: { dataSource } để chỉ một replica thực hiện đối soát tại một thời điểm."
+  },
+  {
+   "id": "t20",
+   "slug": "lazy-expiry",
+   "name": "Hết hạn lười (xử lý khi có request)",
+   "model": "Hết hạn lười",
+   "how": "Hết hạn được xử lý khi có request đụng tới, không cần job.",
+   "why": "Đúng đắn không phụ thuộc job; job chỉ để dọn.",
+   "endpoints": [
+    "e5"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/economy/services/payos.service.ts",
+     "line": 149,
+     "quote": "order.expiresAt <= new Date()"
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "local": "PayosService.getOrderStatus chuyển đơn Pending có expiresAt đã qua sang Expired khi đọc bằng UPDATE có điều kiện status Pending, không cần job quét; webhook đến trễ vẫn đặt Paid.",
+   "addedByLogicReview": true
+  },
+  {
+   "slug": "rate-limit-throttler",
+   "name": "Rate limit (@nestjs/throttler)",
+   "model": "Rate limit",
+   "how": "@Throttle giới hạn số request theo khoảng thời gian cho từng route.",
+   "why": "Chặn spam và dò quét bằng cách giới hạn số request theo thời gian, trước khi request tới logic nghiệp vụ.",
+   "endpoints": [
+    "e4",
+    "e7",
+    "e10",
+    "e11",
+    "e12",
+    "e1",
+    "e2",
+    "e3",
+    "e5",
+    "e6",
+    "e8",
+    "e9"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/economy/economy.controller.ts",
+     "line": 78,
+     "quote": "@Throttle({ default: { limit: 10, ttl: minutes(1) } })"
+    },
+    {
+     "file": "apps/core-api/src/modules/economy/webhooks/economy-webhooks.controller.ts",
+     "line": 58,
+     "quote": "@Throttle({ default: { limit: 60, ttl: minutes(1) } })"
+    },
+    {
+     "file": "apps/core-api/src/app/app.module.ts",
+     "line": 116,
+     "quote": "{ provide: APP_GUARD, useClass: ThrottlerGuard },"
+    }
+   ],
+   "auto": true,
+   "count": 17,
+   "id": "t21",
+   "local": "Route nạp payOS 10 lần/phút và webhook apple 60 lần/phút dùng @Throttle riêng bên cạnh ThrottlerGuard toàn cục."
+  },
+  {
+   "slug": "fail-closed",
+   "name": "Lỗi thì chặn (fail closed)",
+   "model": "Fail closed",
+   "how": "Khi thành phần kiểm tra lỗi thì từ chối thay vì cho qua.",
+   "why": "An toàn hơn khi mất Redis hoặc quota.",
+   "endpoints": [
+    "e16",
+    "e17",
+    "e18"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/economy/ports/iap-verifier.ts",
+     "line": 21,
+     "quote": "* production đủ credential) | 'disabled' (production subset, fail-closed)."
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "id": "t22",
+   "local": "IapVerifier có chế độ disabled fail-closed ở production; DevIapVerifier, DevAppleNotificationVerifier, DevGoogleRtdnVerifier ném lỗi onApplicationBootstrap nếu production còn dùng dev nên app không khởi động."
+  },
+  {
+   "slug": "dead-letter",
+   "name": "Dead-letter queue",
+   "model": "DLQ",
+   "how": "Tin lỗi lặp lại được chuyển sang dead-letter queue để xử lý sau.",
+   "why": "Không chặn hàng đợi vì một tin hỏng.",
+   "endpoints": [
+    "e14"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/economy/jobs/outbox-relay.service.ts",
+     "line": 127,
+     "quote": "deadLetterTopic: `${event.topic}.DLQ`,"
+    }
+   ],
+   "auto": true,
+   "count": 3,
+   "id": "t23",
+   "local": "Quá ECONOMY_OUTBOX_MAX_ATTEMPTS, deadLetter() gọi eventBus.publishDeadLetter sang {topic}.DLQ và luôn đặt dead_lettered_at trong finally, kể cả khi publish DLQ lỗi, để thoát vòng retry."
+  },
+  {
+   "slug": "best-effort-degrade",
+   "name": "Best-effort: lỗi phụ không phá nghiệp vụ chính",
+   "model": "Best-effort",
+   "how": "Việc phụ (push, realtime) lỗi chỉ ghi log, không phá nghiệp vụ chính.",
+   "why": "Nghiệp vụ đã commit không nên hỏng vì kênh phụ.",
+   "endpoints": [],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/economy/economy.metrics.ts",
+     "line": 21,
+     "quote": "* Các method vẫn best-effort: lỗi metrics không được làm thay đổi kết quả giao dịch tiền."
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "id": "t24",
+   "local": "EconomyMetrics dùng OTel instruments và các method best-effort: lỗi metrics không thay đổi kết quả giao dịch tiền."
+  },
+  {
+   "slug": "openapi-contract",
+   "name": "Hợp đồng OpenAPI + client sinh tự động",
+   "model": "OpenAPI",
+   "how": "OpenAPI sinh từ code và client TypeScript sinh tự động.",
+   "why": "Client và server không lệch hợp đồng.",
+   "endpoints": [
+    "e1",
+    "e2",
+    "e3",
+    "e4",
+    "e5",
+    "e6",
+    "e7",
+    "e8",
+    "e9"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/economy/economy.controller.ts",
+     "line": 56,
+     "quote": "@ApiOperation({ summary: 'Ví của tôi — balance + VIP (đã derive hết hạn)' })"
+    }
+   ],
+   "auto": true,
+   "count": 9,
+   "id": "t25",
+   "local": "EconomyController gắn @ApiOperation và @ApiOkResponse (ví dụ WalletDto) cho các route ví, IAP, payOS, VIP."
+  },
+  {
+   "slug": "cursor-pagination",
+   "name": "Phân trang cursor (keyset)",
+   "model": "Keyset",
+   "how": "Phân trang theo cursor thay vì offset.",
+   "why": "Ổn định khi dữ liệu thay đổi và nhanh ở trang sâu.",
+   "endpoints": [
+    "e9"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/economy/economy.controller.ts",
+     "line": 158,
+     "quote": "@Query() query: CursorPageQueryDto,"
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "id": "t26",
+   "local": "GET /economy/transactions nhận CursorPageQueryDto với @ApiCursorPageQuery và phân trang theo cursor."
+  },
+  {
+   "slug": "jsonb-columns",
+   "name": "Cột JSONB",
+   "model": "JSONB",
+   "how": "Cột JSONB lưu dữ liệu linh hoạt.",
+   "why": "Cấu trúc thay đổi thường xuyên.",
+   "endpoints": [],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/economy/entities/iap.entities.ts",
+     "line": 72,
+     "quote": "@Column({ type: 'jsonb', default: {} })"
+    },
+    {
+     "file": "apps/core-api/src/modules/economy/entities/outbox-event.entity.ts",
+     "line": 24,
+     "quote": "@Column({ type: 'jsonb' })"
+    },
+    {
+     "file": "apps/core-api/src/modules/economy/entities/transaction.entity.ts",
+     "line": 61,
+     "quote": "@Column({ type: 'jsonb', default: {} })"
+    }
+   ],
+   "auto": true,
+   "count": 3,
+   "id": "t27",
+   "local": "IapReceipt.rawPayload và OutboxEvent.payload là cột jsonb lưu payload thô từ store và nội dung sự kiện."
+  },
+  {
+   "slug": "constant-time-compare",
+   "name": "So sánh hằng thời gian",
+   "model": "Hằng thời gian",
+   "how": "So sánh hằng thời gian (timingSafeEqual).",
+   "why": "Chống tấn công đo thời gian.",
+   "endpoints": [],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/economy/ports/payos-client.ts",
+     "line": 286,
+     "quote": "return left.length === right.length && timingSafeEqual(left, right);"
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "id": "t28",
+   "local": "PayosClient so chữ ký webhook bằng timingSafeEqual sau khi kiểm độ dài buffer hex."
+  },
+  {
+   "slug": "hmac-hashing",
+   "name": "Băm HMAC có khoá",
+   "model": "HMAC",
+   "how": "Băm HMAC với khoá bí mật.",
+   "why": "Không dò ngược được bằng bảng băm.",
+   "endpoints": [],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/economy/ports/payos-client.ts",
+     "line": 295,
+     "quote": "return createHmac('sha256', checksumKey).update(canonical).digest('hex');"
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "id": "t29",
+   "local": "PayosClient.sign dựng canonical key=value đã sort rồi createHmac('sha256', checksumKey) để ký/kiểm payload payOS."
+  }
+ ]
+}

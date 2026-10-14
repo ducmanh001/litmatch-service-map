@@ -1,0 +1,273 @@
+{
+ "id": "story-reply-to-dm",
+ "title": "Trả lời story thành tin nhắn",
+ "summary": "Người xem trả lời một story: Feed không có chat riêng nên phải hỏi Safety/Friend/User xem có được xem story không, rồi nhờ Friend tạo DM thật kèm attachment snapshot mediaUrl, vì story hết hạn còn message thì sống mãi.",
+ "caption": "Feed kiểm tra quyền xem story rồi giao việc gửi DM cho Friend, Friend lưu message và đẩy realtime tới hai bên qua Redis và gateway.",
+ "participants": [
+  {
+   "id": "web",
+   "label": "Web client",
+   "kind": "client"
+  },
+  {
+   "id": "feed",
+   "label": "Feed",
+   "kind": "service"
+  },
+  {
+   "id": "safety",
+   "label": "Safety",
+   "kind": "service"
+  },
+  {
+   "id": "user",
+   "label": "User",
+   "kind": "service"
+  },
+  {
+   "id": "friend",
+   "label": "Friend",
+   "kind": "service"
+  },
+  {
+   "id": "postgres",
+   "label": "PostgreSQL",
+   "kind": "infra"
+  },
+  {
+   "id": "redis",
+   "label": "Redis",
+   "kind": "infra"
+  },
+  {
+   "id": "signaling-gateway",
+   "label": "Signaling gateway",
+   "kind": "service"
+  }
+ ],
+ "steps": [
+  {
+   "from": "web",
+   "to": "feed",
+   "label": "POST /stories/:storyId/reply kèm nội dung và Idempotency-Key",
+   "kind": "call",
+   "mechanism": "http",
+   "note": "Mọi route REST đều qua JwtAuthGuard toàn cục trừ @Public.",
+   "evidence": []
+  },
+  {
+   "from": "feed",
+   "to": "postgres",
+   "label": "Đọc Story, kiểm tra tồn tại và chưa hết hạn",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/feed/services/story.service.ts",
+     "line": 119,
+     "quote": "const story = await this.storyRepo.findOneBy({ id: storyId });"
+    }
+   ]
+  },
+  {
+   "from": "feed",
+   "to": "safety",
+   "label": "isBlocked hai chiều giữa người xem và tác giả story",
+   "kind": "call",
+   "mechanism": "di-call",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/feed/services/story.service.ts",
+     "line": 129,
+     "quote": "(await this.safetyService.isBlocked(user.userId, story.authorUserId)) ||"
+    }
+   ]
+  },
+  {
+   "from": "feed",
+   "to": "friend",
+   "label": "areFriends khi story không public (audience)",
+   "kind": "call",
+   "mechanism": "di-call",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/feed/services/story.service.ts",
+     "line": 133,
+     "quote": "(await this.friendService.areFriends(user.userId, story.authorUserId));"
+    }
+   ]
+  },
+  {
+   "from": "feed",
+   "to": "user",
+   "label": "isHidden: tác giả có đang ẩn hồ sơ không",
+   "kind": "call",
+   "mechanism": "di-call",
+   "note": "Vi phạm block, hidden hoặc audience đều trả cùng lỗi STORY_NOT_FOUND (oracle-safe).",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/feed/services/story.service.ts",
+     "line": 134,
+     "quote": "const hidden = await this.privacySettings.isHidden(story.authorUserId);"
+    }
+   ]
+  },
+  {
+   "from": "feed",
+   "to": "friend",
+   "label": "getConversationWithFriend: cần Conversation thật với tác giả",
+   "kind": "call",
+   "mechanism": "di-call",
+   "note": "Lỗi bất kỳ được dịch thành STORY_REPLY_REQUIRES_FRIENDSHIP (403), ví dụ story public của người lạ.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/feed/services/story.service.ts",
+     "line": 203,
+     "quote": "const conversation = await this.friendService"
+    }
+   ]
+  },
+  {
+   "from": "feed",
+   "to": "friend",
+   "label": "sendMessage kèm attachment story_reply snapshot mediaUrl",
+   "kind": "call",
+   "mechanism": "di-call",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/feed/services/story.service.ts",
+     "line": 212,
+     "quote": "return this.friendService.sendMessage("
+    },
+    {
+     "file": "apps/core-api/src/modules/feed/services/story.service.ts",
+     "line": 217,
+     "quote": "{ kind: 'story_reply', payload: { storyId, mediaUrl: story.mediaUrl } },"
+    }
+   ]
+  },
+  {
+   "from": "friend",
+   "to": "safety",
+   "label": "isBlocked hai chiều giữa người gửi và đối tác chat",
+   "kind": "call",
+   "mechanism": "di-call",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/friend/friend.service.ts",
+     "line": 346,
+     "quote": "(await this.safetyService.isBlocked(userId, partnerId)) ||"
+    }
+   ]
+  },
+  {
+   "from": "friend",
+   "to": "postgres",
+   "label": "Lưu Message với idempotencyKey, attachment; cập nhật lastMessageAt",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "note": "Message được save trước; lastMessageAt cập nhật bằng câu UPDATE riêng (không cùng transaction, chỉ để sort danh sách). Trùng Idempotency-Key cùng nội dung thì trả message cũ và bỏ qua UPDATE; khác nội dung thì lỗi 409.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/friend/services/conversation.service.ts",
+     "line": 162,
+     "quote": "message = await this.messageRepo.save("
+    }
+   ]
+  },
+  {
+   "from": "friend",
+   "to": "redis",
+   "label": "Publish friend.message tới kênh realtime của cả hai user",
+   "kind": "async",
+   "mechanism": "redis-pubsub",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/friend/friend.service.ts",
+     "line": 425,
+     "quote": "publishRealtimeEvent(this.redis, this.logger, uid, envelope),"
+    },
+    {
+     "file": "apps/core-api/src/common/realtime/redis-realtime-publisher.adapter.ts",
+     "line": 11,
+     "quote": "return this.redis.publish(channel, payload);"
+    }
+   ]
+  },
+  {
+   "from": "redis",
+   "to": "signaling-gateway",
+   "label": "Gateway PSUBSCRIBE realtime:user:* nhận envelope",
+   "kind": "async",
+   "mechanism": "redis-pubsub",
+   "evidence": [
+    {
+     "file": "apps/signaling-gateway/src/app/signaling.gateway.ts",
+     "line": 346,
+     "quote": ".psubscribe(REALTIME_USER_CHANNEL_PATTERN)"
+    }
+   ]
+  },
+  {
+   "from": "signaling-gateway",
+   "to": "web",
+   "label": "Emit friend.message tới socket room của người dùng",
+   "kind": "async",
+   "mechanism": "socket",
+   "evidence": [
+    {
+     "file": "apps/signaling-gateway/src/app/signaling.gateway.ts",
+     "line": 332,
+     "quote": "this.server.local.to(userRoom(userId)).emit(envelope.event, envelope.data);"
+    }
+   ]
+  },
+  {
+   "from": "feed",
+   "to": "web",
+   "label": "Trả Message vừa tạo (201) cho người trả lời",
+   "kind": "return",
+   "mechanism": "http",
+   "evidence": []
+  }
+ ],
+ "groups": [
+  {
+   "from": 2,
+   "to": 5,
+   "label": "Kiểm tra quyền xem story",
+   "kind": "external"
+  },
+  {
+   "from": 10,
+   "to": 12,
+   "label": "Publish realtime sau khi lưu",
+   "kind": "besteffort"
+  }
+ ],
+ "invariants": [
+  "Feed không sở hữu Conversation/Message nên phải đi qua FriendService.sendMessage để tái dùng idempotency, block hai chiều, realtime và notification của chat.",
+  "Attachment snapshot mediaUrl được copy vào message vì story hết hạn sau TTL còn message sống mãi; attachment chỉ gắn được qua DI nội bộ, HTTP không tự gắn kind tuỳ ý.",
+  "Publish realtime chạy sau khi Message đã lưu (sau cả bước tính streak) và lỗi publish chỉ bị log warn nên không làm hỏng việc gửi; khi replay Idempotency-Key, friend.service vẫn publish lại envelope."
+ ],
+ "failureModes": [
+  {
+   "when": "Story hết hạn, bị block, tác giả ẩn hồ sơ hoặc sai audience",
+   "effect": "Trả STORY_NOT_FOUND (404) cùng mã lỗi cho mọi trường hợp, không lộ lý do."
+  },
+  {
+   "when": "Chưa có Conversation với tác giả (ví dụ story public của người lạ)",
+   "effect": "Feed dịch thành STORY_REPLY_REQUIRES_FRIENDSHIP (403)."
+  },
+  {
+   "when": "Publish Redis thất bại",
+   "effect": "publishRealtimeEvent bắt lỗi và log warn; message đã lưu, client còn polling fallback."
+  },
+  {
+   "when": "Lỗi tạo notification hoặc tính streak sau khi lưu message",
+   "effect": "friend.service bắt lỗi và log, message vẫn gửi thành công."
+  }
+ ],
+ "dataIssues": [],
+ "uncertain": []
+}

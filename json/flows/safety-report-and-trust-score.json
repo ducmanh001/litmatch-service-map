@@ -1,0 +1,183 @@
+{
+ "id": "safety-report-and-trust-score",
+ "title": "Báo cáo người dùng và trừ điểm tin cậy",
+ "summary": "Khi một người dùng báo cáo người khác, safety phải ghi Report append-only và trừ trust score của người bị báo cáo atomic, có trần theo cặp và theo ngày; vì vậy safety phối hợp với user (sở hữu bảng users) và PostgreSQL trong cùng một transaction.",
+ "caption": "Luồng POST /safety/reports: kiểm tra đích, khoá dòng user, tính mức phạt, ghi Report và trừ trust score trong một transaction.",
+ "participants": [
+  {
+   "id": "web",
+   "label": "Web client",
+   "kind": "client"
+  },
+  {
+   "id": "safety",
+   "label": "Safety",
+   "kind": "service"
+  },
+  {
+   "id": "user",
+   "label": "User",
+   "kind": "service"
+  },
+  {
+   "id": "postgres",
+   "label": "PostgreSQL",
+   "kind": "infra"
+  }
+ ],
+ "steps": [
+  {
+   "from": "web",
+   "to": "safety",
+   "label": "POST /safety/reports {targetUserId, reason, description}",
+   "kind": "call",
+   "mechanism": "http",
+   "note": "Route có JWT guard toàn cục và @Throttle 10 request/60 phút mỗi tài khoản.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/safety/safety.controller.ts",
+     "line": 37,
+     "quote": "@Throttle({ default: { limit: 10, ttl: minutes(60) } })"
+    }
+   ]
+  },
+  {
+   "from": "safety",
+   "to": "user",
+   "label": "Kiểm tra người bị báo cáo tồn tại (getByIdOrThrow)",
+   "kind": "call",
+   "mechanism": "di-call",
+   "note": "Trước đó tự báo cáo chính mình bị từ chối với 400 SELF_REPORT_FORBIDDEN.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/safety/safety.service.ts",
+     "line": 66,
+     "quote": "await this.userService.getByIdOrThrow(targetUserId);"
+    }
+   ]
+  },
+  {
+   "from": "safety",
+   "to": "postgres",
+   "label": "Mở transaction, khoá pessimistic_write dòng User của người bị báo cáo",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "note": "Khoá tuần tự hoá mọi lần phạt cùng một target, tránh vượt trần khi report đồng thời.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/safety/safety.service.ts",
+     "line": 83,
+     "quote": "return this.dataSource.transaction(async (manager) => {"
+    },
+    {
+     "file": "apps/core-api/src/modules/safety/safety.service.ts",
+     "line": 89,
+     "quote": "lock: { mode: 'pessimistic_write' },"
+    }
+   ]
+  },
+  {
+   "from": "safety",
+   "to": "postgres",
+   "label": "Đếm report đã phạt cùng cặp trong cooldown và tổng phạt 24h",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "note": "penalty = 0 nếu cặp đã bị phạt trong cooldown, ngược lại min(penaltyPerReport, remainingCap).",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/safety/safety.service.ts",
+     "line": 94,
+     "quote": "(await manager.count(Report, {"
+    },
+    {
+     "file": "apps/core-api/src/modules/safety/safety.service.ts",
+     "line": 106,
+     "quote": "'COALESCE(SUM(r.trustPenaltyApplied), 0)'"
+    }
+   ]
+  },
+  {
+   "from": "safety",
+   "to": "postgres",
+   "label": "INSERT Report kèm trustPenaltyApplied (luôn ghi để giữ evidence)",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/safety/safety.service.ts",
+     "line": 118,
+     "quote": "manager.create(Report, {"
+    }
+   ]
+  },
+  {
+   "from": "safety",
+   "to": "user",
+   "label": "Nếu penalty > 0: adjustTrustScore(manager, target, -penalty, floor)",
+   "kind": "call",
+   "mechanism": "di-call",
+   "note": "Truyền cùng manager nên chạy trong transaction của safety.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/safety/safety.service.ts",
+     "line": 128,
+     "quote": "await this.userService.adjustTrustScore("
+    }
+   ]
+  },
+  {
+   "from": "user",
+   "to": "postgres",
+   "label": "UPDATE users.trust_score = GREATEST(floor, trust_score + delta)",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/user/user.service.ts",
+     "line": 222,
+     "quote": "GREATEST(:floor, trust_score + :delta)"
+    }
+   ]
+  },
+  {
+   "from": "safety",
+   "to": "web",
+   "label": "Commit, trả 201 ReportDto",
+   "kind": "return",
+   "mechanism": "http"
+  }
+ ],
+ "groups": [
+  {
+   "from": 3,
+   "to": 7,
+   "label": "Transaction ghi report + trừ điểm",
+   "kind": "transaction"
+  }
+ ],
+ "invariants": [
+  "Report và trừ trust score phải cùng một transaction để không có report được tính phạt mà điểm không giảm (hoặc ngược lại).",
+  "Dòng User bị khoá pessimistic_write trước khi đọc tổng phạt trong ngày, nếu không hai report đồng thời cùng đọc một tổng và vượt trần.",
+  "Điểm tin cậy chỉ bị đổi qua UserService.adjustTrustScore với manager của safety; tuy nhiên safety tự khoá dòng users bằng manager.getRepository(User).findOne (chỉ đọc có khoá, không ghi)."
+ ],
+ "failureModes": [
+  {
+   "when": "Người báo cáo trùng người bị báo cáo",
+   "effect": "Ném DomainException SELF_REPORT_FORBIDDEN (400), chưa mở transaction nào."
+  },
+  {
+   "when": "Người bị báo cáo không tồn tại",
+   "effect": "getByIdOrThrow ném lỗi trước transaction, không ghi gì."
+  },
+  {
+   "when": "Lỗi giữa chừng trong transaction (ví dụ UPDATE trust score)",
+   "effect": "Transaction rollback, Report cũng không được lưu."
+  },
+  {
+   "when": "Cặp đã bị phạt trong cooldown hoặc đã chạm trần ngày",
+   "effect": "Report vẫn được ghi với trustPenaltyApplied = 0 và không gọi adjustTrustScore."
+  }
+ ],
+ "dataIssues": [],
+ "uncertain": []
+}

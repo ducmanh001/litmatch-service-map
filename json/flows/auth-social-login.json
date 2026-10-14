@@ -1,0 +1,53 @@
+{
+ "id": "auth-social-login",
+ "title": "Đăng nhập bằng Apple, Google hoặc Facebook",
+ "summary": "Client gửi ID token (Google/Apple) hoặc access token (Facebook) lên POST /auth/social. Server không tin token mà tự xác minh với nhà cung cấp, rồi module auth tìm hoặc tạo danh tính, nhờ module user tạo hồ sơ, và cuối cùng ký access token cùng refresh token.",
+ "caption": "Luồng POST /auth/social: xác minh token với nhà cung cấp, tìm hoặc tạo user trong một transaction, rồi cấp phiên.",
+ "participants": [
+  {"id": "web", "label": "Web client", "kind": "client"},
+  {"id": "auth", "label": "Auth", "kind": "service"},
+  {"id": "external:social", "label": "Apple/Google/Facebook", "kind": "external"},
+  {"id": "user", "label": "User", "kind": "service"},
+  {"id": "postgres", "label": "PostgreSQL", "kind": "infra"}
+ ],
+ "steps": [
+  {"from": "web", "to": "auth", "label": "POST /auth/social gửi provider và idToken", "kind": "call", "mechanism": "http", "note": "Route @Public (không cần JWT) và bị throttle 10 request/phút.",
+   "evidence": [{"file": "apps/core-api/src/modules/auth/auth.controller.ts", "line": 90, "quote": "@Post('social')"}]},
+  {"from": "auth", "to": "external:social", "label": "Google/Apple: jwtVerify chữ ký, issuer, audience qua JWKS", "kind": "call", "mechanism": "sdk", "note": "Facebook đi nhánh khác: gọi Graph debug_token bằng App Secret (bước kế tiếp là nhánh thay thế).",
+   "evidence": [{"file": "apps/core-api/src/modules/auth/services/social-verifier.ts", "line": 37, "quote": "async verify("}]},
+  {"from": "auth", "to": "external:social", "label": "Facebook: fetch debug_token, kiểm is_valid và app_id", "kind": "call", "mechanism": "http", "note": "Timeout 5 giây; token sai hoặc lỗi mạng đều trả 401 SOCIAL_TOKEN_INVALID với thông báo chung.",
+   "evidence": [{"file": "apps/core-api/src/modules/auth/services/social-verifier.ts", "line": 90, "quote": "private async verifyFacebookAccessToken("}]},
+  {"from": "auth", "to": "postgres", "label": "Tìm auth_identities theo (provider, providerUid)", "kind": "call", "mechanism": "shared-db",
+   "evidence": [{"file": "apps/core-api/src/modules/auth/auth.service.ts", "line": 156, "quote": "const existing = await this.identityRepo.findOneBy({"}]},
+  {"from": "auth", "to": "user", "label": "Danh tính đã có: lấy user, kiểm status Active", "kind": "call", "mechanism": "di-call", "note": "assertActive ném 403 USER_BANNED nếu tài khoản bị khoá.",
+   "evidence": [{"file": "apps/core-api/src/modules/auth/auth.service.ts", "line": 162, "quote": "await this.userService.getByIdOrThrow(existing.userId),"}]},
+  {"from": "auth", "to": "user", "label": "Chưa có danh tính: tạo user trong transaction", "kind": "call", "mechanism": "di-call", "note": "Nickname dạng User-<số ngẫu nhiên>, isGuest = false.",
+   "evidence": [{"file": "apps/core-api/src/modules/auth/auth.service.ts", "line": 170, "quote": "const user = await this.userService.createWithManager(manager, {"}]},
+  {"from": "auth", "to": "postgres", "label": "Lưu AuthIdentity cùng transaction với user", "kind": "call", "mechanism": "shared-db",
+   "evidence": [{"file": "apps/core-api/src/modules/auth/auth.service.ts", "line": 174, "quote": "await manager.save("}]},
+  {"from": "auth", "to": "postgres", "label": "Race unique violation: đọc lại identity của request thắng", "kind": "call", "mechanism": "shared-db", "note": "Chỉ chạy khi transaction lỗi unique violation; sau đó lấy user qua UserService và kiểm assertActive.",
+   "evidence": [{"file": "apps/core-api/src/modules/auth/auth.service.ts", "line": 185, "quote": "const identity = await this.identityRepo.findOneByOrFail({"}]},
+  {"from": "auth", "to": "auth", "label": "Ký JWT access token (sub, isGuest, role, jti)", "kind": "call", "mechanism": "sdk",
+   "evidence": [{"file": "apps/core-api/src/modules/auth/services/token.service.ts", "line": 47, "quote": "const accessToken = await this.jwtService.signAsync(payload, { expiresIn });"}]},
+  {"from": "auth", "to": "postgres", "label": "Lưu băm refresh token (tokenHash, familyId, expiresAt)", "kind": "call", "mechanism": "shared-db",
+   "evidence": [{"file": "apps/core-api/src/modules/auth/repositories/typeorm-refresh-session.adapter.ts", "line": 18, "quote": "await this.dataSource.getRepository(RefreshToken).insert({"}]},
+  {"from": "auth", "to": "web", "label": "200: accessToken, csrfToken; refreshToken đặt vào cookie httpOnly", "kind": "return", "mechanism": "http", "note": "finalizeSession gọi setAuthCookies rồi bóc refreshToken khỏi body trả về."}
+ ],
+ "groups": [
+  {"from": 2, "to": 3, "label": "Xác minh token với nhà cung cấp", "kind": "external"},
+  {"from": 6, "to": 7, "label": "Transaction tạo user và identity", "kind": "transaction"}
+ ],
+ "invariants": [
+  "Server phải tự xác minh token với nhà cung cấp trước khi đụng DB, vì không được tin token do client gửi lên mà chưa kiểm chữ ký, issuer và audience.",
+  "User và AuthIdentity được tạo trong cùng một dataSource.transaction để không có user mồ côi hoặc identity trỏ vào user không tồn tại; auth sở hữu danh tính còn user sở hữu hồ sơ.",
+  "Unique (provider, providerUid) ở DB là chốt chặn cuối khi hai request đầu tiên chạy song song: bên thua đọc lại identity của bên thắng thay vì tạo user thứ hai."
+ ],
+ "failureModes": [
+  {"when": "Token Google/Apple/Facebook sai, hết hạn hoặc lỗi mạng/JWKS", "effect": "Ném 401 SOCIAL_TOKEN_INVALID với thông báo chung, không tạo user và không cấp phiên; lỗi gốc chỉ được log warn."},
+  {"when": "Provider chưa cấu hình client id hoặc app secret", "effect": "Ném 400 SOCIAL_PROVIDER_NOT_SUPPORTED."},
+  {"when": "User tương ứng có status khác Active", "effect": "assertActive ném 403 USER_BANNED, không ký token."},
+  {"when": "Transaction tạo user/identity lỗi", "effect": "Cả user lẫn identity bị rollback; nếu là unique violation thì đọc lại identity đã có, lỗi khác được ném tiếp."}
+ ],
+ "dataIssues": [],
+ "uncertain": []
+}

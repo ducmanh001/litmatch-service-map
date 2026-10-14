@@ -1,0 +1,247 @@
+{
+ "id": "mood-status-visibility",
+ "title": "Trạng thái tâm trạng và quyền xem",
+ "summary": "Người dùng đặt và xoá mood theo preset với Idempotency-Key, rồi người khác xem mood đó. Mood sở hữu log sự kiện, còn quyền xem phụ thuộc block do Safety sở hữu nên getPublicMood phải hỏi Safety trước khi đọc mood.",
+ "caption": "Đặt/xoá mood ghi log idempotent vào PostgreSQL; xem mood của mình chỉ suy ra từ log, còn xem mood người khác hỏi Safety về block hai chiều trước khi suy ra mood hiện tại lúc đọc.",
+ "participants": [
+  {
+   "id": "web",
+   "label": "Web client",
+   "kind": "client"
+  },
+  {
+   "id": "mood",
+   "label": "Mood",
+   "kind": "service"
+  },
+  {
+   "id": "safety",
+   "label": "Safety",
+   "kind": "service"
+  },
+  {
+   "id": "postgres",
+   "label": "PostgreSQL",
+   "kind": "infra"
+  }
+ ],
+ "steps": [
+  {
+   "from": "web",
+   "to": "mood",
+   "label": "GET /mood/presets lấy catalog preset đang bật",
+   "kind": "call",
+   "mechanism": "http"
+  },
+  {
+   "from": "mood",
+   "to": "postgres",
+   "label": "Đọc mood_presets đang active, sắp theo sortOrder",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/mood/mood.service.ts",
+     "line": 47,
+     "quote": "return this.presetRepo.find({"
+    }
+   ]
+  },
+  {
+   "from": "web",
+   "to": "mood",
+   "label": "POST /mood/status với presetCode và Idempotency-Key",
+   "kind": "call",
+   "mechanism": "http"
+  },
+  {
+   "from": "mood",
+   "to": "postgres",
+   "label": "Kiểm preset tồn tại và active, tính expiresAt theo TTL",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/mood/mood.service.ts",
+     "line": 63,
+     "quote": "const preset = await this.presetRepo.findOneBy({"
+    }
+   ]
+  },
+  {
+   "from": "mood",
+   "to": "postgres",
+   "label": "Ghi dòng mood_status_events kind set; trùng key thì đọc lại dòng cũ",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "note": "Unique violation trên idempotencyKey được coi là replay hợp lệ: findOneByOrFail trả dòng đã có.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/mood/mood.service.ts",
+     "line": 167,
+     "quote": "return await this.eventRepo.save(build());"
+    }
+   ]
+  },
+  {
+   "from": "mood",
+   "to": "web",
+   "label": "Trả mood hiện tại gồm preset, setAt, expiresAt",
+   "kind": "return",
+   "mechanism": "http"
+  },
+  {
+   "from": "web",
+   "to": "mood",
+   "label": "GET /mood/status/me xem mood của chính mình",
+   "kind": "call",
+   "mechanism": "http",
+   "note": "Route cố định 'status/me' được khai báo trước 'status/:userId' trong controller.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/mood/mood.controller.ts",
+     "line": 47,
+     "quote": "@Get('status/me')"
+    }
+   ]
+  },
+  {
+   "from": "mood",
+   "to": "postgres",
+   "label": "Suy ra mood của mình từ event mới nhất, không kiểm block",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "note": "getMyMood gọi thẳng deriveCurrentMood, không hỏi Safety vì không tự block chính mình. Trả null nếu event mới nhất là clear hoặc đã quá expiresAt.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/mood/mood.service.ts",
+     "line": 115,
+     "quote": "return this.deriveCurrentMood(userId);"
+    }
+   ]
+  },
+  {
+   "from": "mood",
+   "to": "web",
+   "label": "Trả mood hiện tại của mình hoặc null",
+   "kind": "return",
+   "mechanism": "http"
+  },
+  {
+   "from": "web",
+   "to": "mood",
+   "label": "GET /mood/status/:userId xem mood của người khác",
+   "kind": "call",
+   "mechanism": "http"
+  },
+  {
+   "from": "mood",
+   "to": "safety",
+   "label": "Hỏi getBlockedUserIds(viewerId) để kiểm block hai chiều",
+   "kind": "call",
+   "mechanism": "di-call",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/mood/mood.service.ts",
+     "line": 131,
+     "quote": "const blockedIds = await this.safetyService.getBlockedUserIds(viewerId);"
+    }
+   ],
+   "note": "Nếu viewerId trùng targetId thì getPublicMood bỏ qua bước hỏi Safety. getBlockedUserIds trả userId có block ACTIVE hai chiều (dòng mới nhất mỗi cặp là Blocked)."
+  },
+  {
+   "from": "safety",
+   "to": "postgres",
+   "label": "Đọc bảng blocks theo hai chiều, lấy hành động mới nhất",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/safety/safety.service.ts",
+     "line": 241,
+     "quote": "const rows = await this.blockRepo.query("
+    }
+   ]
+  },
+  {
+   "from": "safety",
+   "to": "mood",
+   "label": "Trả danh sách userId đang block với viewer",
+   "kind": "return",
+   "mechanism": "di-call"
+  },
+  {
+   "from": "mood",
+   "to": "postgres",
+   "label": "Nếu không bị block: đọc event mới nhất và preset để suy ra mood",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "note": "Nếu targetId nằm trong danh sách block thì trả null, không đọc event. Mood hết hạn hoặc bị clear cũng trả null.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/mood/mood.service.ts",
+     "line": 142,
+     "quote": "const latest = await this.eventRepo.findOne({"
+    }
+   ]
+  },
+  {
+   "from": "mood",
+   "to": "web",
+   "label": "Trả mood hoặc null nếu bị block, hết hạn, đã xoá",
+   "kind": "return",
+   "mechanism": "http"
+  },
+  {
+   "from": "web",
+   "to": "mood",
+   "label": "DELETE /mood/status với Idempotency-Key",
+   "kind": "call",
+   "mechanism": "http"
+  },
+  {
+   "from": "mood",
+   "to": "postgres",
+   "label": "Ghi dòng mood_status_events kind clear, idempotent theo key",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/mood/mood.service.ts",
+     "line": 103,
+     "quote": "this.eventRepo.create({"
+    }
+   ]
+  },
+  {
+   "from": "mood",
+   "to": "web",
+   "label": "Trả 204 No Content",
+   "kind": "return",
+   "mechanism": "http"
+  }
+ ],
+ "groups": [],
+ "invariants": [
+  "Mood là log append-only; mood hiện tại được suy ra lúc đọc từ dòng mới nhất và expiresAt, nên không cần job dọn hết hạn.",
+  "Quyền xem thuộc Safety: Mood phải hỏi getBlockedUserIds mỗi lần đọc (không cache) để block mới có hiệu lực ngay, và không tự lưu block.",
+  "Idempotency-Key được gói thành khoá unique trong DB nên retry cùng key không tạo thêm dòng mà đọc lại dòng cũ.",
+  "Xem mood của chính mình không qua Safety: getMyMood gọi thẳng deriveCurrentMood, chỉ xem mood người khác mới kiểm block."
+ ],
+ "failureModes": [
+  {
+   "when": "Preset không tồn tại hoặc đã tắt khi set mood",
+   "effect": "Ném DomainException PRESET_NOT_FOUND với HTTP 404, không ghi event."
+  },
+  {
+   "when": "Safety.getBlockedUserIds lỗi khi xem mood người khác",
+   "effect": "Lỗi lan lên getPublicMood (không có try/catch), request xem mood thất bại thay vì lộ mood."
+  },
+  {
+   "when": "Retry set/clear với cùng Idempotency-Key",
+   "effect": "Unique violation được bắt và trả dòng đã tồn tại, không tạo bản ghi mới."
+  }
+ ],
+ "dataIssues": [],
+ "uncertain": []
+}

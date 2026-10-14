@@ -1,0 +1,41 @@
+{
+ "id": "admin-user-lookup-and-unban",
+ "title": "Admin tra cứu người dùng và mở khoá",
+ "summary": "Admin xem danh sách, xem chi tiết rồi mở khoá một tài khoản. Module Admin chỉ điều phối: dữ liệu users thuộc User, còn bản ghi audit phải được ghi cùng transaction với việc đổi status để không có mở khoá nào thiếu dấu vết.",
+ "caption": "Admin-console gọi AdminController, AdminService chuyển việc đọc/đổi status cho UserService và ghi audit trong cùng một transaction.",
+ "participants": [
+  {"id": "admin-console", "label": "Admin console", "kind": "client"},
+  {"id": "admin", "label": "Admin", "kind": "service"},
+  {"id": "user", "label": "User", "kind": "service"},
+  {"id": "postgres", "label": "PostgreSQL", "kind": "infra"}
+ ],
+ "steps": [
+  {"from": "admin-console", "to": "admin", "label": "GET /admin/users: lọc theo status, role, nickname, phân trang", "kind": "call", "mechanism": "http", "note": "Controller yêu cầu role Admin hoặc Moderator và permission ViewUsers (AdminPermissionGuard).", "evidence": [{"file": "apps/core-api/src/modules/admin/admin.controller.ts", "line": 114, "quote": "@Get('users')"}]},
+  {"from": "admin", "to": "user", "label": "Chuyển bộ lọc sang UserService.findPage", "kind": "call", "mechanism": "di-call", "evidence": [{"file": "apps/core-api/src/modules/admin/admin.service.ts", "line": 61, "quote": "return this.userService.findPage(filter, limit, offset);"}]},
+  {"from": "user", "to": "postgres", "label": "Truy vấn bảng users có lọc, sắp xếp createdAt giảm dần, skip/take", "kind": "call", "mechanism": "shared-db", "evidence": [{"file": "apps/core-api/src/modules/user/user.service.ts", "line": 194, "quote": "const qb = this.userRepo.createQueryBuilder('u');"}]},
+  {"from": "admin", "to": "admin-console", "label": "Trả trang danh sách người dùng", "kind": "return", "mechanism": "http"},
+  {"from": "admin-console", "to": "admin", "label": "GET /admin/users/:id: xem hồ sơ nội bộ của một user", "kind": "call", "mechanism": "http", "evidence": [{"file": "apps/core-api/src/modules/admin/admin.controller.ts", "line": 131, "quote": "@Get('users/:id')"}]},
+  {"from": "admin", "to": "user", "label": "Gọi UserService.getByIdOrThrow", "kind": "call", "mechanism": "di-call", "evidence": [{"file": "apps/core-api/src/modules/admin/admin.service.ts", "line": 53, "quote": "return this.userService.getByIdOrThrow(userId);"}]},
+  {"from": "user", "to": "postgres", "label": "Đọc user theo id, không thấy thì ném 404", "kind": "call", "mechanism": "shared-db", "evidence": [{"file": "apps/core-api/src/modules/user/user.service.ts", "line": 88, "quote": "const user = await this.userRepo.findOneBy({ id });"}]},
+  {"from": "admin", "to": "admin-console", "label": "Trả AdminUserDto (status + role)", "kind": "return", "mechanism": "http"},
+  {"from": "admin-console", "to": "admin", "label": "POST /admin/users/:id/unban: mở khoá tài khoản", "kind": "call", "mechanism": "http", "note": "Cần permission BanUsers.", "evidence": [{"file": "apps/core-api/src/modules/admin/admin.controller.ts", "line": 155, "quote": "@Post('users/:id/unban')"}]},
+  {"from": "admin", "to": "postgres", "label": "Mở transaction cho mở khoá và ghi audit", "kind": "call", "mechanism": "shared-db", "evidence": [{"file": "apps/core-api/src/modules/admin/admin.service.ts", "line": 92, "quote": "return this.dataSource.transaction(async (manager) => {"}]},
+  {"from": "admin", "to": "user", "label": "Gọi UserService.unbanUser với manager của transaction", "kind": "call", "mechanism": "di-call", "evidence": [{"file": "apps/core-api/src/modules/admin/admin.service.ts", "line": 93, "quote": "const user = await this.userService.unbanUser(manager, targetUserId);"}]},
+  {"from": "user", "to": "postgres", "label": "Đọc user rồi lưu status = Active", "kind": "call", "mechanism": "shared-db", "evidence": [{"file": "apps/core-api/src/modules/user/user.service.ts", "line": 255, "quote": "return repo.save(user);"}]},
+  {"from": "admin", "to": "postgres", "label": "Ghi admin_audit_logs action user.unbanned cùng transaction", "kind": "call", "mechanism": "shared-db", "evidence": [{"file": "apps/core-api/src/modules/admin/admin.service.ts", "line": 94, "quote": "await this.auditLogService.record("}, {"file": "apps/core-api/src/common/audit/audit-log.service.ts", "line": 30, "quote": "await repo.save("}]},
+  {"from": "admin", "to": "admin-console", "label": "Trả AdminUserDto của user đã mở khoá", "kind": "return", "mechanism": "http"}
+ ],
+ "groups": [
+  {"from": 10, "to": 13, "label": "Transaction mở khoá + audit", "kind": "transaction"}
+ ],
+ "invariants": [
+  "Admin không tự ghi bảng users: việc đổi status đi qua UserService (module sở hữu dữ liệu) nhưng dùng EntityManager của Admin, nên status và audit nằm trong cùng một transaction.",
+  "Audit được ghi bằng cùng manager trong transaction, nên nếu ghi audit lỗi thì việc mở khoá cũng bị rollback, không có mở khoá thiếu dấu vết."
+ ],
+ "failureModes": [
+  {"when": "User id không tồn tại (xem chi tiết hoặc mở khoá)", "effect": "UserService ném DomainException 404 PROFILE_NOT_FOUND; khi mở khoá, lỗi nổi ra khỏi callback nên transaction không ghi gì."},
+  {"when": "Ghi admin_audit_logs lỗi trong lúc mở khoá", "effect": "Lỗi ném ra khỏi callback transaction, status của user không được lưu."}
+ ],
+ "dataIssues": [],
+ "uncertain": []
+}

@@ -1,0 +1,376 @@
+{
+ "id": "support",
+ "title": "Support",
+ "tagline": "Phiếu hỗ trợ và vòng đời xử lý",
+ "deployable": "core-api",
+ "role": "Sở hữu bảng support_tickets: người dùng gửi phản hồi/yêu cầu hỗ trợ (idempotent) và xem lại phiếu của mình; vòng đời trạng thái open -> in_progress -> resolved -> closed. Không có endpoint cho staff: staff xử lý qua module admin gọi vào SupportService, và support không gửi thông báo hay realtime khi staff trả lời.",
+ "owns": [
+  "bảng support_tickets (userId, category, message, status, staffResponse, idempotencyKey)",
+  "unique uq_support_ticket_user_idempotency (userId, idempotencyKey)"
+ ],
+ "confidence": "high",
+ "endpoints": [
+  {
+   "id": "e1",
+   "kind": "rest",
+   "method": "POST",
+   "path": "/api/v1/support/tickets",
+   "purpose": "Gửi phiếu hỗ trợ (category + message tối đa 2000 ký tự) ở trạng thái open; bắt buộc header Idempotency-Key, cùng key gửi lại thì trả phiếu cũ, khác nội dung thì 409.",
+   "auth": "jwt",
+   "file": "apps/core-api/src/modules/support/support.controller.ts",
+   "line": 40,
+   "quote": "@Post()"
+  },
+  {
+   "id": "e2",
+   "kind": "rest",
+   "method": "GET",
+   "path": "/api/v1/support/tickets/me",
+   "purpose": "Liệt kê phiếu của chính mình theo cursor (createdAt, id) giảm dần để theo dõi trạng thái và staffResponse.",
+   "auth": "jwt",
+   "file": "apps/core-api/src/modules/support/support.controller.ts",
+   "line": 55,
+   "quote": "@Get('me')"
+  }
+ ],
+ "collaborators": [
+  {
+   "id": "c1",
+   "label": "phiếu + unique idempotency",
+   "what": "Ghi/đọc bảng support_tickets: save phiếu mới, findOneByOrFail(userId, idempotencyKey) khi replay, query builder phân trang theo cursor, và findOne khoá pessimistic_write khi đổi status.",
+   "why": "Idempotency được giữ bởi unique index (userId, idempotencyKey) trong DB: khi client retry mạng yếu hoặc bấm đúp, request thứ hai vi phạm unique và được đọc lại thành replay thay vì tạo phiếu trùng; check-then-insert ở tầng ứng dụng sẽ race.",
+   "ifMissing": "Retry/bấm đúp tạo nhiều phiếu giống nhau; hai staff đổi status đồng thời có thể ghi đè nhau.",
+   "with": "postgres",
+   "withKind": "infra",
+   "direction": "out",
+   "mechanism": "shared-db",
+   "endpoints": [
+    "e1",
+    "e2"
+   ],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/support/entities/support-ticket.entity.ts",
+     "line": 18,
+     "quote": "@Entity({ name: 'support_tickets' })"
+    }
+   ],
+   "review": {
+    "verdict": "supported"
+   },
+   "logic": {
+    "verdict": "sound"
+   }
+  },
+  {
+   "id": "c2",
+   "label": "staff cập nhật phiếu",
+   "what": "AdminService.listSupportTickets gọi SupportService.listAll(limit, cursor, status); updateSupportTicket mở transaction và gọi setStatusWithManager(manager, ticketId, {status, staffResponse}).",
+   "why": "Admin truyền EntityManager để đổi status/staffResponse và ghi audit log 'support.ticket.updated' cùng một transaction (hành động staff nhạy cảm không được thành công một nửa). Support khoá hàng phiếu rồi kiểm canTransition để hai staff song song không nhảy trạng thái sai thứ tự.",
+   "ifMissing": "Đổi status mà không có audit (hoặc ngược lại), hoặc phiếu bị chuyển từ closed về trạng thái cũ.",
+   "with": "admin",
+   "withKind": "service",
+   "direction": "in",
+   "mechanism": "di-call",
+   "endpoints": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/admin/admin.service.ts",
+     "line": 242,
+     "quote": "return this.supportService.listAll(limit, cursor, status);"
+    },
+    {
+     "file": "apps/core-api/src/modules/admin/admin.service.ts",
+     "line": 251,
+     "quote": "const ticket = await this.supportService.setStatusWithManager("
+    }
+   ],
+   "basis": "ast",
+   "logic": {
+    "verdict": "sound"
+   }
+  },
+  {
+   "id": "c50",
+   "with": "web",
+   "withKind": "client",
+   "direction": "in",
+   "mechanism": "http",
+   "endpoints": [
+    "e1",
+    "e2"
+   ],
+   "label": "Idempotency-Key, đọc phiếu",
+   "what": "apps/web gửi POST /support/tickets với header Idempotency-Key do client sinh (idempotencyKey nằm trong input của mutation) và đọc danh sách phiếu qua GET /support/tickets/me?limit=20; sau khi tạo phiếu mutation invalidate query danh sách.",
+   "why": "Server chỉ chống trùng nếu client dùng lại đúng một key cho cùng lần gửi (unique userId+idempotencyKey). Không có push/realtime khi staff trả lời và web không có polling (không refetchInterval trong features/support), nên staffResponse mới chỉ hiện khi danh sách được đọc lại.",
+   "ifMissing": "Thiếu header thì e1 bị từ chối; client sinh key mới mỗi lần retry thì mất chống trùng; không đọc lại danh sách thì user không thấy phản hồi của staff.",
+   "evidence": [
+    {
+     "file": "apps/web/src/features/support/api.ts",
+     "line": 36,
+     "quote": "params: { header: { 'Idempotency-Key': input.idempotencyKey } },"
+    }
+   ],
+   "review": {
+    "verdict": "supported"
+   },
+   "logic": {
+    "verdict": "sound"
+   }
+  }
+ ],
+ "waivedEdges": [],
+ "excludedRoutes": [],
+ "notes": [
+  "Không có docs/services cho support; mô tả dựa trên code.",
+  "Module chỉ có 2 route cho user (POST /support/tickets, GET /support/tickets/me). Staff list/update nằm ở module admin (listAll, setStatusWithManager), nên admin console không gọi support trực tiếp.",
+  "Không có thông báo/realtime khi staff đổi status hoặc trả lời (staffResponse): không có event, job hay lời gọi NotificationService ở support/admin. Web cũng không poll: features/support/api.ts chỉ có useQuery đọc danh sách và useMutation tạo phiếu rồi invalidate supportKeys.mine (api.ts:41-42), không có refetchInterval; phản hồi staff chỉ hiện khi query được đọc lại (mở màn hình hoặc sau khi gửi phiếu).",
+  "Máy trạng thái: canTransition cho phép Open -> InProgress/Resolved/Closed, InProgress -> Resolved/Closed, Resolved -> Closed; Closed là cuối; giữ nguyên status cũng hợp lệ."
+ ],
+ "techniques": [
+  {
+   "slug": "jwt-bearer",
+   "name": "JWT bearer (access token không trạng thái)",
+   "model": "JWT bearer",
+   "how": "Client gửi access token (JWT) trong header Authorization; guard xác minh chữ ký và hạn rồi gắn user vào request, server không giữ phiên.",
+   "why": "Không trạng thái nên scale ngang dễ và không phải tra DB mỗi request; đánh đổi là không thu hồi tức thì trước khi token hết hạn.",
+   "alternative": "Session phía server (cookie + kho phiên) thu hồi được tức thì nhưng cần kho phiên dùng chung.",
+   "endpoints": [
+    "e1",
+    "e2"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/app/app.module.ts",
+     "line": 117,
+     "quote": "{ provide: APP_GUARD, useClass: JwtAuthGuard },"
+    }
+   ],
+   "auto": true,
+   "count": 2,
+   "id": "t1",
+   "local": "JwtAuthGuard toàn cục bảo vệ /support/tickets, người gửi lấy từ @CurrentUser()."
+  },
+  {
+   "id": "t2",
+   "slug": "ownership-check",
+   "name": "Kiểm tra quyền sở hữu tài nguyên",
+   "model": "Kiểm tra chủ sở hữu",
+   "how": "So userId của tài nguyên với userId người gọi trước khi đọc hoặc sửa.",
+   "why": "Ngăn IDOR: không thao tác được trên tài nguyên của người khác bằng cách đoán id.",
+   "endpoints": [
+    "e2"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/support/support.service.ts",
+     "line": 69,
+     "quote": "return this.list({ userId }, limit, cursor);"
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "local": "GET /support/tickets/me gọi listMine(user.userId) và SupportService.list lọc ticket.userId = userId, nên người dùng chỉ thấy phiếu của mình; listAll chỉ admin gọi.",
+   "addedByLogicReview": true
+  },
+  {
+   "slug": "idempotency-key",
+   "name": "Idempotency-Key (client sinh, server khử trùng)",
+   "model": "Idempotency-Key",
+   "how": "Client gửi khoá duy nhất cho mỗi thao tác; server lưu khoá (unique) và trả lại kết quả cũ khi gặp lại.",
+   "why": "Retry mạng không tạo bản ghi hoặc trừ tiền hai lần.",
+   "endpoints": [
+    "e1"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/support/entities/support-ticket.entity.ts",
+     "line": 21,
+     "quote": "@Index('uq_support_ticket_user_idempotency', ['userId', 'idempotencyKey'], {"
+    },
+    {
+     "file": "apps/core-api/src/modules/support/support.controller.ts",
+     "line": 22,
+     "quote": "ApiIdempotencyKeyHeader,"
+    },
+    {
+     "file": "apps/core-api/src/modules/support/support.service.ts",
+     "line": 32,
+     "quote": "idempotencyKey: string,"
+    }
+   ],
+   "auto": true,
+   "count": 10,
+   "id": "t3",
+   "local": "POST /support/tickets (e1) bắt buộc Idempotency-Key; unique (userId, idempotencyKey) cho replay trả phiếu cũ, khác category/message thì 409 IDEMPOTENCY_CONFLICT. GET /support/tickets/me (e2) không dùng key."
+  },
+  {
+   "slug": "unique-constraint-guard",
+   "name": "Ràng buộc unique ở DB làm chốt chặn cuối",
+   "model": "Ràng buộc DB",
+   "how": "Ràng buộc unique hoặc index duy nhất ở DB là chốt chặn cuối cho trùng lặp.",
+   "why": "Check-rồi-insert ở tầng code vẫn dính race; DB mới bảo đảm tuyệt đối.",
+   "endpoints": [
+    "e1"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/support/entities/support-ticket.entity.ts",
+     "line": 22,
+     "quote": "unique: true,"
+    },
+    {
+     "file": "apps/core-api/src/modules/support/support.service.ts",
+     "line": 8,
+     "quote": "isUniqueViolation,"
+    }
+   ],
+   "auto": true,
+   "count": 3,
+   "id": "t4",
+   "local": "Index unique uq_support_ticket_user_idempotency là chốt chặn cuối; SupportService dùng isUniqueViolation/violatedConstraint để xử lý replay."
+  },
+  {
+   "id": "t5",
+   "slug": "state-machine",
+   "name": "Máy trạng thái tường minh",
+   "model": "State machine",
+   "how": "Trạng thái và các bước chuyển hợp lệ được định nghĩa tường minh.",
+   "why": "Chặn chuyển trạng thái sai thứ tự và dễ kiểm thử.",
+   "endpoints": [
+    "e1"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/support/support.service.ts",
+     "line": 41,
+     "quote": "status: SupportTicketStatus.Open,"
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "local": "Phiếu luôn khởi tạo ở SupportTicketStatus.Open; các bước tiếp theo (open, in_progress, resolved, closed) chỉ đổi qua setStatusWithManager với canTransition, closed là trạng thái cuối.",
+   "addedByLogicReview": true
+  },
+  {
+   "slug": "entity-manager-propagation",
+   "name": "Truyền EntityManager giữa module (chung một transaction)",
+   "model": "Chung transaction",
+   "how": "Module sở hữu dữ liệu nhận EntityManager của giao dịch đang chạy để việc của nó nằm trong cùng transaction.",
+   "why": "Nhiều module dùng chung DB nên atomicity xuyên module không cần saga hay 2PC.",
+   "alternative": "Saga/outbox xuyên service: cần khi tách deployable, thừa khi cùng process.",
+   "endpoints": [],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/support/support.service.ts",
+     "line": 76,
+     "quote": "async setStatusWithManager("
+    }
+   ],
+   "auto": true,
+   "count": 2,
+   "id": "t6",
+   "local": "SupportService.setStatusWithManager nhận EntityManager để Admin cập nhật ticket trong cùng transaction với audit log."
+  },
+  {
+   "slug": "pessimistic-lock",
+   "name": "Khoá bi quan (SELECT … FOR UPDATE)",
+   "model": "Khoá bi quan",
+   "how": "SELECT … FOR UPDATE khoá hàng đang xử lý để giao dịch khác phải chờ.",
+   "why": "Chặn hai request song song cùng đọc rồi cùng ghi (race) trên số dư, ticket, session.",
+   "alternative": "Khoá lạc quan (version) ít chờ hơn nhưng phải retry khi xung đột.",
+   "endpoints": [],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/support/support.service.ts",
+     "line": 83,
+     "quote": "lock: { mode: 'pessimistic_write' },"
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "id": "t7",
+   "local": "setStatusWithManager đọc ticket với lock pessimistic_write trước khi đổi status, tránh hai staff ghi đè nhau."
+  },
+  {
+   "slug": "rate-limit-throttler",
+   "name": "Rate limit (@nestjs/throttler)",
+   "model": "Rate limit",
+   "how": "@Throttle giới hạn số request theo khoảng thời gian cho từng route.",
+   "why": "Chặn spam và dò quét bằng cách giới hạn số request theo thời gian, trước khi request tới logic nghiệp vụ.",
+   "endpoints": [
+    "e1",
+    "e2"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/app/app.module.ts",
+     "line": 116,
+     "quote": "{ provide: APP_GUARD, useClass: ThrottlerGuard },"
+    }
+   ],
+   "auto": true,
+   "count": 2,
+   "id": "t8",
+   "local": "ThrottlerGuard toàn cục áp rate limit mặc định cho các route support."
+  },
+  {
+   "slug": "openapi-contract",
+   "name": "Hợp đồng OpenAPI + client sinh tự động",
+   "model": "OpenAPI",
+   "how": "OpenAPI sinh từ code và client TypeScript sinh tự động.",
+   "why": "Client và server không lệch hợp đồng.",
+   "endpoints": [
+    "e1",
+    "e2"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/support/support.controller.ts",
+     "line": 43,
+     "quote": "@ApiOperation({ summary: 'Gửi phản hồi/yêu cầu hỗ trợ — idempotent' })"
+    }
+   ],
+   "auto": true,
+   "count": 2,
+   "id": "t9",
+   "local": "SupportController gắn @ApiOperation và @ApiCreatedResponse({ type: SupportTicketDto }) cho hợp đồng OpenAPI."
+  },
+  {
+   "slug": "cursor-pagination",
+   "name": "Phân trang cursor (keyset)",
+   "model": "Keyset",
+   "how": "Phân trang theo cursor thay vì offset.",
+   "why": "Ổn định khi dữ liệu thay đổi và nhanh ở trang sâu.",
+   "endpoints": [
+    "e2"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/support/dto/support.dtos.ts",
+     "line": 62,
+     "quote": "export class ListSupportTicketsQueryDto extends CursorPageQueryDto {"
+    },
+    {
+     "file": "apps/core-api/src/modules/support/support.controller.ts",
+     "line": 61,
+     "quote": "@Query() query: CursorPageQueryDto,"
+    }
+   ],
+   "auto": true,
+   "count": 2,
+   "id": "t10",
+   "local": "GET /support/tickets/me nhận CursorPageQueryDto (ListSupportTicketsQueryDto) và trả SupportTicketsPageDto kèm CursorPageMeta."
+  }
+ ]
+}

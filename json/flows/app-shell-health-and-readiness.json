@@ -1,0 +1,43 @@
+{
+ "id": "app-shell-health-and-readiness",
+ "title": "Kiểm tra sẵn sàng của core-api (readiness)",
+ "summary": "Probe Docker/k8s gọi /health/ready để biết core-api có nhận traffic được không; app-shell phải hỏi thật PostgreSQL và Redis song song với timeout 1 giây rồi trả 200 hoặc 503.",
+ "caption": "Probe gọi /health/ready, app-shell chạy song song SELECT 1 trên PostgreSQL và PING trên Redis, rồi trả 200 hoặc 503.",
+ "participants": [
+  {"id": "web", "label": "Probe (Docker/k8s)", "kind": "client"},
+  {"id": "app-shell", "label": "app-shell", "kind": "service"},
+  {"id": "postgres", "label": "PostgreSQL", "kind": "infra"},
+  {"id": "redis", "label": "Redis", "kind": "infra"}
+ ],
+ "steps": [
+  {"from": "web", "to": "app-shell", "label": "GET /health/ready (route public, throttle 30 lượt/phút)", "kind": "call", "mechanism": "http",
+   "note": "Route đánh dấu @Public nên không cần JWT.",
+   "evidence": []},
+  {"from": "app-shell", "to": "app-shell", "label": "HealthController.ready gọi ReadinessService.check()", "kind": "call", "mechanism": "di-call",
+   "evidence": [{"file": "apps/core-api/src/app/health.controller.ts", "line": 47, "quote": "const result = await this.readiness.check();"}]},
+  {"from": "app-shell", "to": "postgres", "label": "SELECT 1 với timeout 1 giây", "kind": "call", "mechanism": "shared-db",
+   "evidence": [{"file": "apps/core-api/src/app/readiness.service.ts", "line": 57, "quote": "await this.withTimeout(this.dataSource.query('SELECT 1'), 1_000);"}]},
+  {"from": "app-shell", "to": "redis", "label": "PING với timeout 1 giây (kết nối lazy nếu chưa có)", "kind": "call", "mechanism": "redis-state",
+   "evidence": [{"file": "apps/core-api/src/app/readiness.service.ts", "line": 67, "quote": "await this.withTimeout(this.redis.ping(), 1_000);"}]},
+  {"from": "postgres", "to": "app-shell", "label": "Trả kết quả: 'up'; lỗi hoặc quá hạn thì 'down'", "kind": "return", "mechanism": "shared-db",
+   "evidence": []},
+  {"from": "redis", "to": "app-shell", "label": "Trả PONG: 'up'; lỗi hoặc quá hạn thì 'down'", "kind": "return", "mechanism": "redis-state",
+   "evidence": []},
+  {"from": "app-shell", "to": "app-shell", "label": "Gộp kết quả: cả hai 'up' thì status 'ok', ngược lại 'unavailable'", "kind": "call", "mechanism": "di-call",
+   "evidence": [{"file": "apps/core-api/src/app/readiness.service.ts", "line": 44, "quote": "status: ready ? 'ok' : 'unavailable',"}]},
+  {"from": "app-shell", "to": "web", "label": "Trả 200 {status, checks}; status không phải 'ok' thì 503", "kind": "return", "mechanism": "http",
+   "evidence": []}
+ ],
+ "groups": [],
+ "invariants": [
+  "Readiness phải hỏi thật PostgreSQL và Redis (SELECT 1, PING) thay vì chỉ báo process còn sống; liveness /health/live riêng không gọi dependency, nên probe có thể tách 'đang chạy' khỏi 'sẵn sàng nhận traffic'.",
+  "Hai kiểm tra chạy song song bằng Promise.all và mỗi cái có timeout 1 giây, nên một dependency treo không làm probe treo; lỗi được bắt và đổi thành 'down' thay vì ném exception."
+ ],
+ "failureModes": [
+  {"when": "PostgreSQL lỗi hoặc không trả lời trong 1 giây", "effect": "checks.postgres = 'down', status 'unavailable', endpoint trả HTTP 503"},
+  {"when": "Redis không kết nối được hoặc PING quá 1 giây", "effect": "checks.redis = 'down', status 'unavailable', endpoint trả HTTP 503; lỗi event của Redis bị nuốt, không gây unhandled event"},
+  {"when": "Probe gọi quá 30 lượt/phút", "effect": "Throttler áp giới hạn cho route này (khai báo @Throttle limit 30, ttl 1 phút)"}
+ ],
+ "dataIssues": [],
+ "uncertain": []
+}

@@ -1,0 +1,327 @@
+{
+ "id": "matching-to-call",
+ "title": "Từ hàng đợi ghép đôi đến cuộc gọi thoại",
+ "summary": "Hai người xếp hàng ghép đôi, worker ghép cặp và hai bên xác nhận, sau đó vào cuộc gọi LiveKit. Matching sở hữu MatchSession, Calling sở hữu CallSession nên hai service phải gọi nhau qua DI và báo kết quả xuống client qua Redis và gateway.",
+ "caption": "Luồng một cặp người dùng đi từ vé ghép đôi, tới MatchSession, tới CallSession trên LiveKit và kết thúc cuộc gọi.",
+ "participants": [
+  {
+   "id": "web",
+   "label": "Web client",
+   "kind": "client"
+  },
+  {
+   "id": "matching",
+   "label": "Matching",
+   "kind": "service"
+  },
+  {
+   "id": "economy",
+   "label": "Economy",
+   "kind": "service"
+  },
+  {
+   "id": "calling",
+   "label": "Calling",
+   "kind": "service"
+  },
+  {
+   "id": "postgres",
+   "label": "PostgreSQL",
+   "kind": "infra"
+  },
+  {
+   "id": "redis",
+   "label": "Redis",
+   "kind": "infra"
+  },
+  {
+   "id": "signaling-gateway",
+   "label": "Signaling gateway",
+   "kind": "service"
+  },
+  {
+   "id": "media-server",
+   "label": "LiveKit SFU",
+   "kind": "service"
+  }
+ ],
+ "steps": [
+  {
+   "from": "web",
+   "to": "matching",
+   "label": "POST /matching/tickets: xin vào hàng đợi ghép đôi",
+   "kind": "call",
+   "mechanism": "http"
+  },
+  {
+   "from": "matching",
+   "to": "economy",
+   "label": "Trừ diamond cho lượt ghép thêm ngay trong giao dịch",
+   "kind": "call",
+   "mechanism": "di-call",
+   "note": "Trước đó joinQueue kiểm tra hạn mức khách và VIP tier; việc trừ tiền chỉ xảy ra khi lượt ghép vượt hạn mức.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/matching/matching.service.ts",
+     "line": 139,
+     "quote": "await this.economy.spendDiamondInTransaction("
+    }
+   ]
+  },
+  {
+   "from": "matching",
+   "to": "postgres",
+   "label": "Lưu MatchTicket cùng giao dịch với việc trừ diamond",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/matching/matching.service.ts",
+     "line": 152,
+     "quote": "return manager.save("
+    },
+    {
+     "file": "apps/core-api/src/modules/matching/matching.service.ts",
+     "line": 618,
+     "quote": "await this.queue.enqueue("
+    }
+   ],
+   "note": "Sau khi giao dịch commit, joinQueue gọi ensureEnqueued: ZADD NX vào hàng đợi Redis theo shard, SADD shard active rồi MatcherWakeup.notify để đánh thức worker; nếu bước Redis lỗi, ticket vẫn nằm trong DB và client retry cùng Idempotency-Key sẽ enqueue lại."
+  },
+  {
+   "from": "matching",
+   "to": "postgres",
+   "label": "Worker ghép cặp: lưu MatchSession confirmed, ticket và thông báo",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "note": "Trong tryPair, session được tạo thẳng với status Confirmed và cả hai ticket sang Confirmed; thông báo tạo bằng createWithManager nên cùng giao dịch. Worker chạy theo wake-up của MatcherWakeup (debounce) và có timer backstop định kỳ.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/matching/jobs/matcher-worker.service.ts",
+     "line": 280,
+     "quote": "const session = await manager.save("
+    }
+   ]
+  },
+  {
+   "from": "matching",
+   "to": "redis",
+   "label": "Sau khi ghép, publish sự kiện realtime cho hai người",
+   "kind": "async",
+   "mechanism": "redis-pubsub",
+   "note": "Worker cũng gọi sendPush của Notification sau giao dịch.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/matching/jobs/matcher-worker.service.ts",
+     "line": 377,
+     "quote": "return publishRealtimeEvent("
+    }
+   ]
+  },
+  {
+   "from": "redis",
+   "to": "signaling-gateway",
+   "label": "Gateway nhận qua PSUBSCRIBE realtime:user:*",
+   "kind": "async",
+   "mechanism": "redis-pubsub",
+   "evidence": [
+    {
+     "file": "apps/signaling-gateway/src/app/signaling.gateway.ts",
+     "line": 346,
+     "quote": ".psubscribe(REALTIME_USER_CHANNEL_PATTERN)"
+    }
+   ]
+  },
+  {
+   "from": "signaling-gateway",
+   "to": "web",
+   "label": "Relay sự kiện đã ghép được xuống socket của người dùng",
+   "kind": "async",
+   "mechanism": "socket",
+   "evidence": [
+    {
+     "file": "apps/signaling-gateway/src/app/signaling.gateway.ts",
+     "line": 332,
+     "quote": "this.server.local.to(userRoom(userId)).emit(envelope.event, envelope.data);"
+    }
+   ]
+  },
+  {
+   "from": "web",
+   "to": "matching",
+   "label": "POST /matching/tickets/:id/confirm (đường tương thích pending_confirm)",
+   "kind": "call",
+   "mechanism": "http",
+   "note": "Luồng mới đã confirmed ngay trong tryPair; endpoint này chỉ hoàn tất các ticket matched/session pending_confirm từ phiên bản cũ hoặc từ invite."
+  },
+  {
+   "from": "matching",
+   "to": "postgres",
+   "label": "Khoá session và ticket, đủ 2 bên mới lưu session, ticket và thông báo",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "note": "Sau giao dịch, confirmTicket còn publish realtime và sendPush (best effort).",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/matching/matching.service.ts",
+     "line": 389,
+     "quote": "await manager.save(session);"
+    }
+   ]
+  },
+  {
+   "from": "web",
+   "to": "calling",
+   "label": "POST /calling/match-sessions/:matchSessionId/join",
+   "kind": "call",
+   "mechanism": "http"
+  },
+  {
+   "from": "calling",
+   "to": "matching",
+   "label": "Đọc MatchSession qua MatchingService, Calling không tự ghi",
+   "kind": "call",
+   "mechanism": "di-call",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/calling/calling.service.ts",
+     "line": 105,
+     "quote": "const session = await this.matchingService.findSessionById(matchSessionId);"
+    }
+   ]
+  },
+  {
+   "from": "calling",
+   "to": "postgres",
+   "label": "Tạo CallSession gắn với matchSessionId",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "note": "Sau đó mintJoinToken cấp token LiveKit và trả về cho client.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/calling/calling.service.ts",
+     "line": 146,
+     "quote": "call = await this.callRepo.save("
+    }
+   ]
+  },
+  {
+   "from": "media-server",
+   "to": "calling",
+   "label": "Webhook LiveKit báo người tham gia, Calling tìm CallSession theo roomName",
+   "kind": "call",
+   "mechanism": "webhook",
+   "note": "Handler gọi markJoined, markDisconnected hoặc markRoomDisconnected, mỗi hàm mở một giao dịch.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/calling/calling.service.ts",
+     "line": 492,
+     "quote": "const call = await this.callRepo.findOneBy({ roomName: event.roomName });"
+    }
+   ]
+  },
+  {
+   "from": "web",
+   "to": "calling",
+   "label": "POST /calling/calls/:id/end: kết thúc cuộc gọi",
+   "kind": "call",
+   "mechanism": "http"
+  },
+  {
+   "from": "calling",
+   "to": "matching",
+   "label": "Báo Matching kết thúc phiên thoại của cuộc gọi",
+   "kind": "call",
+   "mechanism": "di-call",
+   "note": "endById lưu CallSession trong giao dịch rồi cleanupEndedCall gọi endVoiceSessionForCall (ném lỗi nếu dữ liệu hỏng, không nuốt), xoá phòng LiveKit và publish realtime (hai việc này best-effort); sau đó endCall còn gọi endVoiceSession cho phiên của user.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/calling/calling.service.ts",
+     "line": 688,
+     "quote": "await this.matchingService.endVoiceSessionForCall("
+    }
+   ]
+  },
+  {
+   "from": "calling",
+   "to": "web",
+   "label": "Trả kết quả kết thúc cuộc gọi cho client",
+   "kind": "return",
+   "mechanism": "http"
+  }
+ ],
+ "groups": [
+  {
+   "from": 2,
+   "to": 3,
+   "label": "Giao dịch vào hàng đợi: trừ diamond và lưu ticket",
+   "kind": "transaction"
+  },
+  {
+   "from": 4,
+   "to": 4,
+   "label": "Giao dịch tryPair của worker",
+   "kind": "transaction"
+  },
+  {
+   "from": 5,
+   "to": 7,
+   "label": "Publish realtime sau khi ghép",
+   "kind": "besteffort"
+  },
+  {
+   "from": 9,
+   "to": 9,
+   "label": "Giao dịch xác nhận ticket",
+   "kind": "transaction"
+  }
+ ],
+ "invariants": [
+  "Trừ diamond và lưu MatchTicket nằm chung một giao dịch trong joinQueue, nên không có ticket nếu việc trừ tiền thất bại và ngược lại.",
+  "Matching là nơi ghi MatchSession; Calling chỉ đọc qua MatchingService.findSessionById và báo kết thúc qua endVoiceSessionForCall (trong cleanupEndedCall) hoặc endVoiceSession (trong endCall), giữ ranh giới sở hữu dữ liệu.",
+  "Publish realtime và sendPush diễn ra sau giao dịch ghép cặp, nên thông báo chỉ đi khi session và ticket đã lưu xong.",
+  "Đường confirm là đường tương thích: tryPair hiện tạo MatchSession ở trạng thái confirmed ngay, còn PendingConfirm chỉ giữ cho session cũ."
+ ],
+ "failureModes": [
+  {
+   "when": "Redis publish hoặc sendPush sau khi ghép cặp thất bại",
+   "effect": "Giao dịch đã commit nên MatchSession vẫn tồn tại; client có thể không nhận được sự kiện realtime tức thì."
+  },
+  {
+   "when": "Giao dịch tryPair hoặc confirmTicket lỗi giữa chừng",
+   "effect": "Session, thông báo và ticket được rollback cùng nhau, không để lại trạng thái nửa vời."
+  }
+ ],
+ "dataIssues": [],
+ "uncertain": [
+  "Gateway relay (bước 6-7) dùng chung bằng chứng từ VERIFIED FACTS."
+ ],
+ "resolved": [
+  {
+   "id": "matching-to-call#1",
+   "status": "confirmed",
+   "finding": "Không có participant notification riêng; createWithManager chạy trong giao dịch tryPair và sendPush sau commit (nuốt lỗi), cả hai được ghi trong note của các bước 4-5, đúng với code."
+  },
+  {
+   "id": "matching-to-call#2",
+   "status": "confirmed",
+   "finding": "Flow đã ghi ensureEnqueued trong note bước 3: sau commit, ZADD NX vào hàng đợi, markActive rồi matcherWakeup.notify; lỗi Redis để ticket zombie trong DB, retry cùng key sẽ enqueue lại."
+  },
+  {
+   "id": "matching-to-call#4",
+   "status": "confirmed",
+   "finding": "LivekitWebhookController verify chữ ký rồi gọi handleWebhookEvent; service tìm CallSession theo roomName rồi gọi markJoined/markDisconnected/markRoomDisconnected theo loại event. Flow đúng."
+  },
+  {
+   "id": "matching-to-call#5",
+   "status": "confirmed",
+   "finding": "joinCall gọi mintJoinToken sau khi tạo CallSession; cleanupEndedCall gọi endVoiceSessionForCall, deleteRoom (nuốt lỗi) và publishRealtimeEvent (nuốt lỗi). Note của flow mô tả đúng."
+  },
+  {
+   "id": "matching-to-call#6",
+   "status": "confirmed",
+   "finding": "publishRealtimeEvent bọc try/catch và chỉ logger.warn nên lỗi publish bị nuốt; sendPush cũng catch. Nhóm besteffort 5-7 hợp lý vì DB đã commit trước khi publish."
+  }
+ ],
+ "resolutionApplied": true
+}

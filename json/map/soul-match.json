@@ -1,0 +1,984 @@
+{
+ "id": "soul-match",
+ "title": "Soul Match",
+ "deployable": "core-api",
+ "role": "Sở hữu phòng chat ẩn danh ngắn sau khi Matching ghép cặp: tin nhắn (append-only), rating 2 chiều rude|boring|like (bất biến) và quyết định 'cả hai like → mở Friendship + unlock profile'. KHÔNG sở hữu MatchSession (Matching ghi), Friendship/Conversation (Friend ghi), hồ sơ người dùng (User) và không có entity phòng riêng: phase chatting/rating/closed được derive từ giờ server.",
+ "owns": [
+  "bảng soul_chat_messages (append-only, seq bigint identity cho cursor, idempotency_key unique, FK tới match_sessions và users)",
+  "bảng soul_match_ratings (bất biến, unique (session_id, rater_user_id))",
+  "không giữ key Redis nào: chỉ PUBLISH lên channel realtime:user:{userId}"
+ ],
+ "confidence": "high",
+ "endpoints": [
+  {
+   "id": "e1",
+   "kind": "rest",
+   "method": "GET",
+   "path": "/api/v1/soul-match/sessions/:id",
+   "purpose": "Poll trạng thái phòng chat ẩn danh (phase chatting|rating|closed, chatEndsAt/ratingEndsAt, verdict CỦA MÌNH, cờ matched); id lạ hoặc không phải thành viên đều trả 404 gộp để không dò được sessionId.",
+   "auth": "jwt",
+   "file": "apps/core-api/src/modules/soul-match/soul-match.controller.ts",
+   "line": 47,
+   "quote": "@Get('sessions/:id')"
+  },
+  {
+   "id": "e2",
+   "kind": "rest",
+   "method": "GET",
+   "path": "/api/v1/soul-match/sessions/:id/messages",
+   "purpose": "Liệt kê message ẩn danh theo cursor seq, chỉ trả senderRole me|partner (không lộ userId đối phương); phòng đã closed trả 409 SOUL_MATCH_CHAT_NOT_OPEN vì lịch sử ẩn danh bị khoá.",
+   "auth": "jwt",
+   "file": "apps/core-api/src/modules/soul-match/soul-match.controller.ts",
+   "line": 62,
+   "quote": "@Get('sessions/:id/messages')"
+  },
+  {
+   "id": "e3",
+   "kind": "rest",
+   "method": "POST",
+   "path": "/api/v1/soul-match/sessions/:id/messages",
+   "purpose": "Gửi message ẩn danh: bắt buộc header Idempotency-Key (unique DB, retry trả lại message cũ), throttle 60 req/phút, chỉ khi phase chatting, re-check UserStatus.Banned, khoá hàng MatchSession rồi lưu và publish soul.message sau commit.",
+   "auth": "jwt",
+   "file": "apps/core-api/src/modules/soul-match/soul-match.controller.ts",
+   "line": 85,
+   "quote": "@Post('sessions/:id/messages')"
+  },
+  {
+   "id": "e4",
+   "kind": "rest",
+   "method": "POST",
+   "path": "/api/v1/soul-match/sessions/:id/rating",
+   "purpose": "Chốt verdict rude|boring|like một lần (cùng verdict là replay, khác verdict là 409); khi cả hai like thì tạo Friendship + Conversation + import lịch sử chat trong CÙNG transaction rồi publish soul.matched.",
+   "auth": "jwt",
+   "file": "apps/core-api/src/modules/soul-match/soul-match.controller.ts",
+   "line": 109,
+   "quote": "@Post('sessions/:id/rating')"
+  },
+  {
+   "id": "e5",
+   "kind": "rest",
+   "method": "POST",
+   "path": "/api/v1/soul-match/sessions/:id/end",
+   "purpose": "Rời phòng: Matching đặt MatchSession sang ended cho cả hai (idempotent, trả 204) rồi publish soul.ended cho cả hai; Friendship đã tạo được giữ nguyên.",
+   "auth": "jwt",
+   "file": "apps/core-api/src/modules/soul-match/soul-match.controller.ts",
+   "line": 125,
+   "quote": "@Post('sessions/:id/end')"
+  },
+  {
+   "id": "e6",
+   "kind": "rest",
+   "method": "GET",
+   "path": "/api/v1/soul-match/sessions/:id/partner",
+   "purpose": "Trả PublicProfileDto của đối phương chỉ khi FriendService.areFriends=true; chưa match trả 403 SOUL_MATCH_PARTNER_LOCKED (Friendship là nguồn sự thật của unlock).",
+   "auth": "jwt",
+   "file": "apps/core-api/src/modules/soul-match/soul-match.controller.ts",
+   "line": 138,
+   "quote": "@Get('sessions/:id/partner')"
+  },
+  {
+   "id": "e7",
+   "kind": "socket-emit",
+   "method": "EMIT",
+   "path": "soul.message",
+   "purpose": "Báo tin nhắn mới cho cả người gửi (senderRole='me') và đối phương ('partner') qua Redis realtime:user:{userId}; chỉ bắn cho message MỚI (replay idempotency không bắn lại), best-effort, socket đã xác thực JWT ở gateway.",
+   "auth": "internal",
+   "file": "apps/core-api/src/modules/soul-match/soul-match.service.ts",
+   "line": 206,
+   "quote": "event: RealtimeEvents.SoulMessage,"
+  },
+  {
+   "id": "e8",
+   "kind": "socket-emit",
+   "method": "EMIT",
+   "path": "soul.matched",
+   "purpose": "Báo cả hai đã cùng like và Friendship vừa được tạo MỚI để client mở khoá profile; không bắn lại khi replay hoặc khi cặp đã là bạn từ session trước.",
+   "auth": "internal",
+   "file": "apps/core-api/src/modules/soul-match/soul-match.service.ts",
+   "line": 393,
+   "quote": "event: RealtimeEvents.SoulMatched,"
+  },
+  {
+   "id": "e9",
+   "kind": "socket-emit",
+   "method": "EMIT",
+   "path": "soul.ended",
+   "purpose": "Báo một thành viên đã rời phòng (reason=member_left, không kèm userId) để client đối phương đóng UI ngay; bắn lại ở mỗi lần gọi POST /end, kể cả khi session đã ended.",
+   "auth": "internal",
+   "file": "apps/core-api/src/modules/soul-match/soul-match.service.ts",
+   "line": 107,
+   "quote": "event: RealtimeEvents.SoulEnded,"
+  }
+ ],
+ "collaborators": [
+  {
+   "id": "c1",
+   "with": "matching",
+   "withKind": "service",
+   "direction": "out",
+   "mechanism": "di-call",
+   "endpoints": [
+    "e1",
+    "e2",
+    "e3",
+    "e4",
+    "e5",
+    "e6"
+   ],
+   "what": "Đọc MatchSession qua MatchingService.findSessionById để dựng phòng (matchType=soul, status confirmed|ended, confirmedAAt/BAt) và gọi MatchingService.endSoulSession khi một bên rời; Soul Match không bao giờ tự ghi match_sessions.",
+   "why": "Phòng Soul không có entity riêng mà là view dẫn xuất từ MatchSession, chỉ Matching được ghi (boundary AGENTS.md/docs/03). Matching cũng là nơi duy nhất ghép cặp (canPair, gender filter) và chốt trạng thái confirmed, nên phòng chỉ mở được khi session đã đủ 2 bên xác nhận.",
+   "ifMissing": "Soul Match phải tự giữ bản sao cặp/trạng thái hoặc ghi thẳng match_sessions: trạng thái lệch với Matching, phá ownership, và không xác minh được ai là thành viên hay phòng đã ended.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/soul-match/soul-match.service.ts",
+     "line": 434,
+     "quote": "const session = await this.matchingService.findSessionById(sessionId);"
+    },
+    {
+     "file": "apps/core-api/src/modules/soul-match/soul-match.service.ts",
+     "line": 105,
+     "quote": "const session = await this.matchingService.endSoulSession(user, sessionId);"
+    },
+    {
+     "file": "apps/core-api/src/modules/matching/jobs/matcher-worker.service.ts",
+     "line": 281,
+     "quote": "manager.create(MatchSession, {"
+    }
+   ],
+   "label": "đọc/đóng MatchSession",
+   "review": {
+    "verdict": "supported"
+   },
+   "logic": {
+    "verdict": "sound"
+   }
+  },
+  {
+   "id": "c2",
+   "with": "matching",
+   "withKind": "service",
+   "direction": "out",
+   "mechanism": "shared-db",
+   "endpoints": [
+    "e3",
+    "e4"
+   ],
+   "what": "Trong sendMessage và rate, mở transaction rồi manager.findOne(MatchSession, lock pessimistic_write) để khoá hàng match_sessions (chỉ khoá, không ghi); các bảng soul_* cũng có FK tới match_sessions(id).",
+   "why": "READ COMMITTED: hai rating 'like' song song không thấy insert chưa commit của nhau nên cả hai kết luận 'chưa đủ 2 like' và không ai tạo Friendship; khoá hàng session serialize hai rater. sendMessage dùng cùng khoá để tin nhắn không lọt giữa bước snapshot lịch sử và bước import sang Friend Chat.",
+   "ifMissing": "Mutual-like có thể bị mất (cả hai thích mà không có Friendship) hoặc tin nhắn gửi đúng lúc import bị rơi khỏi lịch sử Friend Chat.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/soul-match/soul-match.service.ts",
+     "line": 311,
+     "quote": "await manager.findOne(MatchSession, {"
+    },
+    {
+     "file": "apps/core-api/src/modules/soul-match/soul-match.service.ts",
+     "line": 163,
+     "quote": "const lockedSession = await manager.findOne(MatchSession, {"
+    },
+    {
+     "file": "apps/core-api/src/database/migrations/1752400000000-soul-match.ts",
+     "line": 48,
+     "quote": "session_id      uuid         NOT NULL REFERENCES match_sessions(id),"
+    }
+   ],
+   "label": "khoá hàng match_sessions",
+   "review": {
+    "verdict": "supported"
+   },
+   "logic": {
+    "verdict": "sound"
+   }
+  },
+  {
+   "id": "c3",
+   "with": "friend",
+   "withKind": "service",
+   "direction": "out",
+   "mechanism": "di-call",
+   "endpoints": [
+    "e1",
+    "e3",
+    "e4",
+    "e6",
+    "e8"
+   ],
+   "what": "rate() gọi FriendService.ensureFriendship(manager, ..., FriendshipSource.SoulMatch, messageSeeds) khi cả hai like, kèm snapshot tin nhắn ẩn danh; FriendService.areFriends quyết định cờ matched, phase chatting vô hạn và quyền xem profile đối phương.",
+   "why": "Friendship + Conversation thuộc Friend (bất biến có Friendship ⇒ có Conversation, unique cặp canonical), nên Soul Match phải truyền EntityManager để rating, Friendship, Conversation và lịch sử chat commit/rollback cùng nhau. Friendship là nguồn sự thật duy nhất của 'unlock'.",
+   "ifMissing": "Mutual-like có thể để lại Friendship thiếu Conversation hoặc mất lịch sử chat; cờ matched/unlock lệch giữa hai module; cặp match lại hoặc retry tạo bản ghi trùng.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/soul-match/soul-match.service.ts",
+     "line": 362,
+     "quote": "const { created } = await this.friendService.ensureFriendship("
+    },
+    {
+     "file": "apps/core-api/src/modules/soul-match/soul-match.service.ts",
+     "line": 412,
+     "quote": "if (!(await this.friendService.areFriends(user.userId, partnerId))) {"
+    },
+    {
+     "file": "apps/core-api/src/modules/friend/friend.service.ts",
+     "line": 124,
+     "quote": "// Conversation tạo cùng lúc, dù Friendship replay hay mới"
+    }
+   ],
+   "label": "ensureFriendship (cùng tx)",
+   "review": {
+    "verdict": "supported"
+   },
+   "logic": {
+    "verdict": "sound"
+   }
+  },
+  {
+   "id": "c4",
+   "with": "user",
+   "withKind": "service",
+   "direction": "out",
+   "mechanism": "di-call",
+   "endpoints": [
+    "e3",
+    "e6"
+   ],
+   "what": "sendMessage đọc UserService.getByIdOrThrow để chặn UserStatus.Banned ngay lúc gửi; getPartnerProfile trả PublicProfileDto.from(user) (DTO công khai của User) cho đối phương sau khi match.",
+   "why": "Access token là JWT stateless TTL ngắn, trạng thái banned chỉ được kiểm tra lại ở refresh/login nên user bị ban giữa phòng vẫn gửi tiếp được tới khi token hết hạn; Soul Match re-check đúng lúc hành động (docs/10 § 10.0.C). Reveal dùng đúng PublicProfileDto để không tự chế DTO lộ field.",
+   "ifMissing": "Tài khoản bị ban vẫn nhắn được trong phòng ẩn danh; profile reveal dễ lệch hoặc lộ field so với DTO công khai chuẩn của User.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/soul-match/soul-match.service.ts",
+     "line": 137,
+     "quote": "const profile = await this.userService.getByIdOrThrow(user.userId);"
+    },
+    {
+     "file": "apps/core-api/src/common/guards/jwt-auth.guard.ts",
+     "line": 18,
+     "quote": "trạng thái banned được kiểm tra lại"
+    },
+    {
+     "file": "apps/core-api/src/modules/soul-match/soul-match.service.ts",
+     "line": 419,
+     "quote": "return PublicProfileDto.from("
+    }
+   ],
+   "label": "re-check ban, public DTO",
+   "review": {
+    "verdict": "supported"
+   },
+   "logic": {
+    "verdict": "sound"
+   }
+  },
+  {
+   "id": "c5",
+   "with": "signaling-gateway",
+   "withKind": "service",
+   "direction": "out",
+   "mechanism": "redis-pubsub",
+   "endpoints": [
+    "e3",
+    "e4",
+    "e5",
+    "e7",
+    "e8",
+    "e9"
+   ],
+   "what": "Sau khi DB commit, publish envelope soul.message / soul.matched / soul.ended lên Redis channel realtime:user:{userId} của từng người nhận; signaling-gateway chỉ relay nguyên văn xuống socket Socket.IO.",
+   "why": "Gateway không có DB hay business logic nên mọi quyết định ẩn danh phải xong ở core-api: payload tính sẵn theo từng người nhận (senderRole me|partner, không có userId). Publish sau commit để không bắn event của giao dịch bị rollback; best-effort vì REST poll vẫn là nguồn sự thật.",
+   "ifMissing": "Client chỉ biết có tin nhắn mới, mutual-like hoặc đối phương rời phòng khi poll: chat ngắn bị trễ và UI của đối phương không đóng ngay khi một bên rời.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/soul-match/soul-match.service.ts",
+     "line": 215,
+     "quote": "return publishRealtimeEvent("
+    },
+    {
+     "file": "apps/core-api/src/modules/soul-match/soul-match.service.ts",
+     "line": 112,
+     "quote": "publishRealtimeEvent(this.redis, this.logger, uid, envelope),"
+    },
+    {
+     "file": "apps/signaling-gateway/src/app/signaling.gateway.ts",
+     "line": 346,
+     "quote": ".psubscribe(REALTIME_USER_CHANNEL_PATTERN)"
+    }
+   ],
+   "label": "phát soul.* sau commit",
+   "basis": "ast",
+   "logic": {
+    "verdict": "sound"
+   }
+  },
+  {
+   "id": "c6",
+   "with": "redis",
+   "withKind": "infra",
+   "direction": "out",
+   "mechanism": "redis-pubsub",
+   "endpoints": [
+    "e7",
+    "e8",
+    "e9"
+   ],
+   "what": "Module giữ một client ioredis riêng (SOUL_MATCH_REDIS, tạo từ REDIS_URL, đóng ở onApplicationShutdown) và chỉ dùng để PUBLISH lên realtime:user:{userId}; không lưu key hay queue nào.",
+   "why": "Gateway là process khác nên đường duy nhất từ core-api sang gateway là Redis pub/sub; pub/sub không lưu và không bảo đảm giao, vì vậy event chỉ là gợi ý refetch còn REST + DB mới là sự thật. Client riêng để publish không dùng chung connection.",
+   "ifMissing": "Không có kênh đẩy sang gateway; mọi cập nhật chỉ còn REST polling.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/soul-match/redis/soul-match-redis.provider.ts",
+     "line": 7,
+     "quote": "Client ioredis riêng của Soul Match — chỉ để publish realtime event (không dùng chung connection)."
+    },
+    {
+     "file": "apps/core-api/src/modules/soul-match/redis/soul-match-redis.provider.ts",
+     "line": 14,
+     "quote": "createCoreRedisClient(config.getOrThrow('REDIS_URL', { infer: true })),"
+    },
+    {
+     "file": "apps/core-api/src/modules/soul-match/soul-match.module.ts",
+     "line": 34,
+     "quote": "await closeCoreRedisClient(this.redis);"
+    }
+   ],
+   "label": "PUBLISH realtime:user",
+   "review": {
+    "verdict": "supported"
+   },
+   "logic": {
+    "verdict": "sound"
+   }
+  },
+  {
+   "id": "c7",
+   "with": "postgres",
+   "withKind": "infra",
+   "direction": "out",
+   "mechanism": "shared-db",
+   "endpoints": [
+    "e1",
+    "e2",
+    "e3",
+    "e4",
+    "e5",
+    "e6"
+   ],
+   "what": "Ghi soul_chat_messages (append-only, seq bigint identity) và soul_match_ratings trong transaction của core-api; unique DB uq_soul_chat_messages_idempotency_key và uq_soul_match_ratings_session_rater là chốt chặn cuối.",
+   "why": "Idempotency và race của chat/rating không thể dựa vào check-rồi-insert ở code: retry mạng và hai request song song chỉ an toàn nhờ unique constraint DB. Message giữ append-only (khoá qua API, không xoá) để còn bằng chứng cho Report/T&S.",
+   "ifMissing": "Retry nhân đôi tin nhắn, một người có hai verdict, và report 'thô lỗ' không còn evidence để xử lý.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/soul-match/entities/soul-chat-message.entity.ts",
+     "line": 14,
+     "quote": "@Entity({ name: 'soul_chat_messages' })"
+    },
+    {
+     "file": "apps/core-api/src/modules/soul-match/entities/soul-match-rating.entity.ts",
+     "line": 23,
+     "quote": "@Index('uq_soul_match_ratings_session_rater', ['sessionId', 'raterUserId'], {"
+    },
+    {
+     "file": "apps/core-api/src/database/migrations/1752400000000-soul-match.ts",
+     "line": 53,
+     "quote": "CONSTRAINT uq_soul_chat_messages_idempotency_key UNIQUE (idempotency_key)"
+    }
+   ],
+   "label": "tin nhắn + rating bất biến",
+   "review": {
+    "verdict": "supported"
+   },
+   "logic": {
+    "verdict": "sound"
+   }
+  },
+  {
+   "id": "c8",
+   "with": "web",
+   "withKind": "client",
+   "direction": "in",
+   "mechanism": "http",
+   "endpoints": [
+    "e1",
+    "e2",
+    "e3",
+    "e4",
+    "e5",
+    "e6"
+   ],
+   "what": "Web poll GET session/messages làm fallback, tự sinh Idempotency-Key cho mỗi tin nhắn (chỉ reset sau khi gửi thành công) và gọi POST /end khi user rời màn (pagehide, popstate, click link).",
+   "why": "Server không có presence hay job nào tự kết thúc phòng: MatchSession chỉ sang ended qua POST /end nên client phải gọi khi rời. Idempotency-Key do client sinh vì chỉ client biết lần gửi lại là retry; realtime là best-effort nên client bắt buộc có poll fallback.",
+   "ifMissing": "Không gọi /end thì phòng của đối phương không đóng ngay (chỉ tự hết theo đồng hồ, hoặc mở vô thời hạn nếu đã match); key đổi mỗi lần retry thì tin nhắn bị nhân đôi.",
+   "evidence": [
+    {
+     "file": "apps/web/src/features/soul-match/api.ts",
+     "line": 70,
+     "quote": "refetchInterval: SOUL_MESSAGES_REFETCH_INTERVAL_MS,"
+    },
+    {
+     "file": "apps/web/src/features/soul-match/components/soul-message-composer.tsx",
+     "line": 28,
+     "quote": "const { key, resetKey } = useIdempotencyKey();"
+    },
+    {
+     "file": "apps/web/src/features/soul-match/components/soul-chat-phase-view.tsx",
+     "line": 60,
+     "quote": "window.addEventListener('pagehide', end);"
+    }
+   ],
+   "label": "poll, Idempotency-Key, /end",
+   "review": {
+    "verdict": "supported"
+   },
+   "logic": {
+    "verdict": "sound"
+   }
+  },
+  {
+   "id": "c9",
+   "with": "web",
+   "withKind": "client",
+   "direction": "out",
+   "mechanism": "socket",
+   "endpoints": [
+    "e7",
+    "e8",
+    "e9"
+   ],
+   "what": "Event soul.message / soul.matched / soul.ended đến web qua socket của signaling-gateway; web chỉ dùng chúng để invalidate và refetch query tương ứng (messages hoặc session), soul.ended còn đặt lý do đóng phòng ngay.",
+   "why": "Event là gợi ý best-effort, không mang đủ state để thay REST, nên client phải hiểu 'nhận event ⇒ refetch REST'. senderRole đã tính sẵn theo từng người nhận nên web render được mà không cần biết userId đối phương.",
+   "ifMissing": "Client bỏ qua event thì chat chỉ cập nhật theo chu kỳ poll; client coi event là nguồn sự thật thì một event bị mất (best-effort) làm lệch trạng thái phòng.",
+   "evidence": [
+    {
+     "file": "apps/web/src/features/soul-match/components/soul-chat-phase-view.tsx",
+     "line": 70,
+     "quote": "Realtime chỉ gợi ý refetch sớm"
+    },
+    {
+     "file": "apps/web/src/features/soul-match/components/soul-chat-phase-view.tsx",
+     "line": 71,
+     "quote": "useRealtimeEvent<SoulMessageEventData>(RealtimeEvents.SoulMessage, (data) => {"
+    },
+    {
+     "file": "apps/web/src/features/soul-match/components/soul-chat-phase-view.tsx",
+     "line": 85,
+     "quote": "useRealtimeEvent<SoulEndedEventData>(RealtimeEvents.SoulEnded, (data) => {"
+    }
+   ],
+   "label": "soul.* → refetch",
+   "review": {
+    "verdict": "supported"
+   },
+   "logic": {
+    "verdict": "sound"
+   }
+  }
+ ],
+ "waivedEdges": [],
+ "excludedRoutes": [],
+ "notes": [
+  "Đã đối chiếu docs/services/soul-match-service.md với code: 6 route, 3 event (soul.message/soul.matched/soul.ended), phase derive-khi-đọc, rating bất biến, import lịch sử vào Friend Chat đều khớp; không thấy lệch.",
+  "Soul Match KHÔNG import Safety: block/report chỉ được chặn ở Matching lúc ghép cặp (canPair qua MATCH_INTERACTION_POLICY). Trong phòng chỉ re-check UserStatus.Banned; không thấy kiểm block/report khi gửi message, kể cả sau khi đã matched (phòng giữ phase chatting tới khi POST /end). Người kiểm chứng nên xác nhận đây là chủ đích.",
+  "Không có job/cron: confirmedAt = max(confirmedAAt, confirmedBAt); chatEndsAt = confirmedAt + SOUL_CHAT_DURATION_SECONDS (mặc định 150); ratingEndsAt = chatEndsAt + SOUL_RATING_WINDOW_SECONDS (mặc định 120). Trạng thái ended chỉ được đặt bởi MatchingService.endSoulSession, và chỉ SoulMatchService.endSession gọi hàm này.",
+  "POST /end publish lại soul.ended cho cả hai ở MỖI lần gọi (kể cả khi session đã ended), khác soul.message/soul.matched chỉ bắn ở lần tạo đầu; client phải xử lý event này idempotent.",
+  "SoulMatchModule exports rỗng và không module nào import nó; cũng không module nào (Safety/Admin) đọc soul_chat_messages làm bằng chứng T&S: 'giữ cho T&S' hiện chỉ là ý định lưu trữ, chưa có call site đọc.",
+  "Bất biến ẩn danh dựa vào kỷ luật phía gọi: GET /users/:id (module user) trả PublicProfileDto cho bất kỳ userId nào, nên ẩn danh chỉ giữ được vì Matching/Soul Match không bao giờ trả userId đối phương trước khi cả hai like (payload match_confirmed chỉ có sessionId + matchType).",
+  "Import lịch sử chat dùng key friend:import:soul:{sessionId}:{messageId} (soul-match.constants.ts) trùng định dạng với migration backfill 1756600000000; unique messages.idempotency_key của Friend làm retry/replay là no-op."
+ ],
+ "tagline": "Phòng chat ẩn danh, rating, mutual-like",
+ "techniques": [
+  {
+   "slug": "jwt-bearer",
+   "name": "JWT bearer (access token không trạng thái)",
+   "model": "JWT bearer",
+   "how": "Client gửi access token (JWT) trong header Authorization; guard xác minh chữ ký và hạn rồi gắn user vào request, server không giữ phiên.",
+   "why": "Không trạng thái nên scale ngang dễ và không phải tra DB mỗi request; đánh đổi là không thu hồi tức thì trước khi token hết hạn.",
+   "alternative": "Session phía server (cookie + kho phiên) thu hồi được tức thì nhưng cần kho phiên dùng chung.",
+   "endpoints": [
+    "e1",
+    "e2",
+    "e3",
+    "e4",
+    "e5",
+    "e6"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/app/app.module.ts",
+     "line": 117,
+     "quote": "{ provide: APP_GUARD, useClass: JwtAuthGuard },"
+    }
+   ],
+   "auto": true,
+   "count": 6,
+   "id": "t1",
+   "local": "Mọi endpoint /soul-match/sessions/:id/* đi qua JwtAuthGuard là APP_GUARD toàn cục."
+  },
+  {
+   "slug": "rebac-relationship",
+   "name": "Kiểm tra theo quan hệ (bạn bè, block, thành viên phòng)",
+   "model": "ReBAC",
+   "how": "Cho phép hoặc chặn dựa trên quan hệ giữa hai người: bạn bè, block, cùng phòng.",
+   "why": "Quyền trong mạng xã hội phụ thuộc quan hệ động chứ không phải vai trò cố định.",
+   "endpoints": [
+    "e4",
+    "e6",
+    "e1",
+    "e2",
+    "e3"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/soul-match/soul-match.service.ts",
+     "line": 324,
+     "quote": "matched: await this.friendService.areFriends("
+    }
+   ],
+   "auto": true,
+   "count": 5,
+   "id": "t2",
+   "local": "SoulMatchService xác định partner của session và gọi friendService.areFriends(user.userId, partnerId) để trả cờ matched khi rating."
+  },
+  {
+   "slug": "abac-attribute-policy",
+   "name": "ABAC theo thuộc tính (guest, ban, VIP, giới tính, tuổi…)",
+   "model": "ABAC",
+   "how": "Quyết định dựa trên thuộc tính của người dùng hoặc tài nguyên như guest, bị ban, hạng VIP, giới tính, tuổi.",
+   "why": "Nghiệp vụ có quy tắc theo ngữ cảnh mà vai trò đơn thuần không diễn đạt được.",
+   "alternative": "Policy engine (OPA/Casbin/CASL) tách chính sách khỏi mã nhưng thêm thành phần vận hành.",
+   "endpoints": [
+    "e3"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/soul-match/soul-match.service.ts",
+     "line": 138,
+     "quote": "if (profile.status === UserStatus.Banned) {"
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "id": "t3",
+   "local": "Gửi message soul chat kiểm tra profile.status === UserStatus.Banned và ném SoulMatchErrors.USER_BANNED 'Tài khoản bị khoá'."
+  },
+  {
+   "slug": "idempotency-key",
+   "name": "Idempotency-Key (client sinh, server khử trùng)",
+   "model": "Idempotency-Key",
+   "how": "Client gửi khoá duy nhất cho mỗi thao tác; server lưu khoá (unique) và trả lại kết quả cũ khi gặp lại.",
+   "why": "Retry mạng không tạo bản ghi hoặc trừ tiền hai lần.",
+   "endpoints": [
+    "e3",
+    "e4"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/soul-match/entities/soul-chat-message.entity.ts",
+     "line": 39,
+     "quote": "idempotencyKey!: string;"
+    },
+    {
+     "file": "apps/core-api/src/modules/soul-match/soul-match.constants.ts",
+     "line": 4,
+     "quote": "export const UQ_MESSAGE_IDEMPOTENCY = 'uq_soul_chat_messages_idempotency_key';"
+    },
+    {
+     "file": "apps/core-api/src/modules/soul-match/soul-match.controller.ts",
+     "line": 34,
+     "quote": "ApiIdempotencyKeyHeader,"
+    }
+   ],
+   "auto": true,
+   "count": 14,
+   "id": "t4",
+   "local": "Chỉ POST messages (e3) dùng header Idempotency-Key: SoulChatMessage.idempotencyKey prefix soul:msg:{userId}:{key}, unique uq_soul_chat_messages_idempotency_key; rating (e4) idempotent nhờ unique (sessionId, raterUserId)."
+  },
+  {
+   "id": "t5",
+   "slug": "derived-state",
+   "name": "Trạng thái suy ra từ dữ liệu gốc/thời gian (không lưu cờ)",
+   "model": "Trạng thái suy ra",
+   "how": "Trạng thái được tính lại từ dữ liệu gốc và giờ server mỗi lần đọc, không lưu cờ.",
+   "why": "Không cần timer hay job để chuyển trạng thái và không có cờ bị lệch.",
+   "endpoints": [
+    "e1",
+    "e2",
+    "e3",
+    "e4",
+    "e6"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/soul-match/soul-match.service.ts",
+     "line": 489,
+     "quote": "matched || now < chatEndsAt.getTime()"
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "local": "Phase chatting|rating|closed không lưu entity mà derive trong getRoomForMember từ confirmedAt + SOUL_CHAT_DURATION_SECONDS/SOUL_RATING_WINDOW_SECONDS; matched (areFriends) giữ phòng ở chatting vô hạn.",
+   "addedByLogicReview": true
+  },
+  {
+   "slug": "unique-constraint-guard",
+   "name": "Ràng buộc unique ở DB làm chốt chặn cuối",
+   "model": "Ràng buộc DB",
+   "how": "Ràng buộc unique hoặc index duy nhất ở DB là chốt chặn cuối cho trùng lặp.",
+   "why": "Check-rồi-insert ở tầng code vẫn dính race; DB mới bảo đảm tuyệt đối.",
+   "endpoints": [
+    "e3",
+    "e4"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/soul-match/entities/soul-match-rating.entity.ts",
+     "line": 24,
+     "quote": "unique: true,"
+    },
+    {
+     "file": "apps/core-api/src/modules/soul-match/soul-match.service.ts",
+     "line": 225,
+     "quote": "if (!isUniqueViolation(err)) throw err;"
+    }
+   ],
+   "auto": true,
+   "count": 3,
+   "id": "t6",
+   "local": "Unique (sessionId, raterUserId) của soul_match_ratings và unique idempotency key của message; service bắt isUniqueViolation rồi trả bản ghi đã có."
+  },
+  {
+   "slug": "db-transaction",
+   "name": "Transaction DB (một đơn vị công việc)",
+   "model": "Transaction",
+   "how": "Gói nhiều thao tác ghi vào một transaction: cùng commit hoặc cùng rollback.",
+   "why": "Tránh trạng thái nửa vời khi lỗi giữa chừng.",
+   "endpoints": [
+    "e3",
+    "e4"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/soul-match/soul-match.service.ts",
+     "line": 160,
+     "quote": "const message = await this.dataSource.transaction(async (manager) => {"
+    }
+   ],
+   "auto": true,
+   "count": 2,
+   "id": "t7",
+   "local": "Gửi message chạy trong dataSource.transaction(async (manager) => ...) để khoá session, kiểm tra trạng thái rồi lưu message."
+  },
+  {
+   "slug": "pessimistic-lock",
+   "name": "Khoá bi quan (SELECT … FOR UPDATE)",
+   "model": "Khoá bi quan",
+   "how": "SELECT … FOR UPDATE khoá hàng đang xử lý để giao dịch khác phải chờ.",
+   "why": "Chặn hai request song song cùng đọc rồi cùng ghi (race) trên số dư, ticket, session.",
+   "alternative": "Khoá lạc quan (version) ít chờ hơn nhưng phải retry khi xung đột.",
+   "endpoints": [
+    "e3",
+    "e4"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/soul-match/soul-match.service.ts",
+     "line": 165,
+     "quote": "lock: { mode: 'pessimistic_write' },"
+    }
+   ],
+   "auto": true,
+   "count": 2,
+   "id": "t8",
+   "local": "Gửi message và rating cùng khoá dòng MatchSession bằng lock pessimistic_write, để message không lọt giữa bước snapshot và chuyển sang Friend Chat."
+  },
+  {
+   "id": "t9",
+   "slug": "append-only",
+   "name": "Bảng chỉ thêm (bất biến)",
+   "model": "Bất biến",
+   "how": "Bảng chỉ thêm, không sửa hoặc xoá dòng cũ.",
+   "why": "Giữ bằng chứng bất biến cho kiểm toán và xử lý báo cáo.",
+   "endpoints": [
+    "e3",
+    "e4"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/soul-match/entities/soul-chat-message.entity.ts",
+     "line": 10,
+     "quote": "APPEND-ONLY (không updatedAt"
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "local": "soul_chat_messages và soul_match_ratings chỉ INSERT (không updatedAt, không API xoá/sửa); rating immutable, phòng đóng chỉ khoá qua API để giữ bằng chứng cho T&S.",
+   "addedByLogicReview": true
+  },
+  {
+   "slug": "append-only",
+   "name": "Bảng chỉ thêm (bất biến)",
+   "model": "Bất biến",
+   "how": "Bảng chỉ thêm, không sửa hoặc xoá dòng cũ.",
+   "why": "Giữ bằng chứng bất biến cho kiểm toán và xử lý báo cáo.",
+   "endpoints": [],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/soul-match/entities/soul-chat-message.entity.ts",
+     "line": 10,
+     "quote": "* Message của chat ẩn danh tạm thời — APPEND-ONLY (không updatedAt, không extend"
+    },
+    {
+     "file": "apps/core-api/src/modules/soul-match/entities/soul-match-rating.entity.ts",
+     "line": 18,
+     "quote": "* xem bên kia like chưa rồi đổi lại\" — docs/10 § Soul Match). Append-only nên không"
+    }
+   ],
+   "auto": true,
+   "count": 2,
+   "id": "t10",
+   "local": "SoulChatMessage và SoulMatchRating là append-only (không updatedAt, không extend BaseAppEntity); rating bất biến để chống thăm dò đổi ý."
+  },
+  {
+   "id": "t11",
+   "slug": "redis-pubsub-fanout",
+   "name": "Redis pub/sub fanout (at-most-once, không replay)",
+   "model": "Pub/Sub",
+   "how": "core-api PUBLISH lên kênh realtime:user:{id}; gateway PSUBSCRIBE rồi đẩy xuống socket; không lưu, không replay.",
+   "why": "Sự kiện chỉ là gợi ý còn REST là nguồn sự thật nên at-most-once là đủ và rất rẻ.",
+   "alternative": "Redis Streams hoặc Kafka bền và replay được nhưng cần consumer group + ack: thừa với tin gợi ý.",
+   "endpoints": [
+    "e7",
+    "e8",
+    "e9"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/soul-match/soul-match.service.ts",
+     "line": 112,
+     "quote": "publishRealtimeEvent(this.redis, this.logger, uid, envelope),"
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "local": "publishRealtimeEvent đẩy envelope soul.* lên realtime:user:{userId} của cả hai thành viên qua client SOUL_MATCH_REDIS; gateway relay xuống socket.",
+   "addedByLogicReview": true
+  },
+  {
+   "id": "t12",
+   "slug": "publish-after-commit",
+   "name": "Chỉ publish sau khi commit",
+   "model": "Sau commit",
+   "how": "Chỉ phát realtime sau khi transaction commit.",
+   "why": "Không bắn sự kiện của giao dịch bị rollback.",
+   "endpoints": [
+    "e7",
+    "e8"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/soul-match/soul-match.service.ts",
+     "line": 390,
+     "quote": "Realtime SAU khi transaction commit"
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "local": "soul.message và soul.matched chỉ publish sau khi dataSource.transaction trả về và chỉ cho bản ghi mới (newlyMatched / không phải replay unique-violation).",
+   "addedByLogicReview": true
+  },
+  {
+   "id": "t13",
+   "slug": "polling-fallback",
+   "name": "REST polling làm fallback cho realtime best-effort",
+   "model": "Polling dự phòng",
+   "how": "Client vẫn đọc trạng thái qua REST khi realtime rớt.",
+   "why": "Realtime best-effort nên cần đường dự phòng đúng đắn.",
+   "endpoints": [
+    "e1",
+    "e2"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/web/src/features/soul-match/api.ts",
+     "line": 67,
+     "quote": "Realtime là best-effort — poll cứng làm fallback thật"
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "local": "Web useSoulMessages refetchInterval SOUL_MESSAGES_REFETCH_INTERVAL_MS (5s) và session 10s làm fallback thật khi socket soul.* rớt.",
+   "addedByLogicReview": true
+  },
+  {
+   "slug": "rate-limit-throttler",
+   "name": "Rate limit (@nestjs/throttler)",
+   "model": "Rate limit",
+   "how": "@Throttle giới hạn số request theo khoảng thời gian cho từng route.",
+   "why": "Chặn spam và dò quét bằng cách giới hạn số request theo thời gian, trước khi request tới logic nghiệp vụ.",
+   "endpoints": [
+    "e3",
+    "e1",
+    "e2",
+    "e4",
+    "e5",
+    "e6"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/soul-match/soul-match.controller.ts",
+     "line": 87,
+     "quote": "@Throttle({ default: { limit: 60, ttl: minutes(1) } })"
+    },
+    {
+     "file": "apps/core-api/src/app/app.module.ts",
+     "line": 116,
+     "quote": "{ provide: APP_GUARD, useClass: ThrottlerGuard },"
+    }
+   ],
+   "auto": true,
+   "count": 7,
+   "id": "t14",
+   "local": "POST .../messages gắn @Throttle({ default: { limit: 60, ttl: minutes(1) } }) riêng cho chat ngắn, trên nền ThrottlerGuard toàn cục."
+  },
+  {
+   "slug": "best-effort-degrade",
+   "name": "Best-effort: lỗi phụ không phá nghiệp vụ chính",
+   "model": "Best-effort",
+   "how": "Việc phụ (push, realtime) lỗi chỉ ghi log, không phá nghiệp vụ chính.",
+   "why": "Nghiệp vụ đã commit không nên hỏng vì kênh phụ.",
+   "endpoints": [
+    "e3",
+    "e4",
+    "e7",
+    "e8",
+    "e9"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/soul-match/soul-match.service.ts",
+     "line": 195,
+     "quote": "// Realtime SAU khi persist, chỉ cho message MỚI (replay không bắn lại) — best-effort,"
+    }
+   ],
+   "auto": true,
+   "count": 2,
+   "id": "t15",
+   "local": "Realtime soul.message được publish sau khi persist, chỉ cho message mới, best-effort; senderRole tính riêng cho từng người nhận."
+  },
+  {
+   "slug": "openapi-contract",
+   "name": "Hợp đồng OpenAPI + client sinh tự động",
+   "model": "OpenAPI",
+   "how": "OpenAPI sinh từ code và client TypeScript sinh tự động.",
+   "why": "Client và server không lệch hợp đồng.",
+   "endpoints": [
+    "e1",
+    "e2",
+    "e3",
+    "e4",
+    "e5",
+    "e6"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/soul-match/soul-match.controller.ts",
+     "line": 48,
+     "quote": "@ApiOperation({"
+    }
+   ],
+   "auto": true,
+   "count": 6,
+   "id": "t16",
+   "local": "SoulMatchController khai báo @ApiOperation với summary từng endpoint (vd trạng thái phòng chat ẩn danh) để sinh OpenAPI."
+  },
+  {
+   "slug": "cursor-pagination",
+   "name": "Phân trang cursor (keyset)",
+   "model": "Keyset",
+   "how": "Phân trang theo cursor thay vì offset.",
+   "why": "Ổn định khi dữ liệu thay đổi và nhanh ở trang sâu.",
+   "endpoints": [
+    "e2"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/soul-match/soul-match.controller.ts",
+     "line": 71,
+     "quote": "@Query() query: CursorPageQueryDto,"
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "id": "t17",
+   "local": "GET /soul-match/sessions/:id/messages nhận CursorPageQueryDto và trả SoulMessagesPageDto theo phân trang cursor."
+  },
+  {
+   "id": "t18",
+   "slug": "anti-enumeration",
+   "name": "Chống dò tài khoản",
+   "model": "Chống dò",
+   "how": "Phản hồi đồng nhất để không dò được tài khoản có tồn tại hay không.",
+   "why": "Chống thu thập người dùng.",
+   "endpoints": [
+    "e1",
+    "e2",
+    "e3",
+    "e4",
+    "e5",
+    "e6"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/soul-match/soul-match.service.ts",
+     "line": 427,
+     "quote": "gộp 404 — không làm oracle dò sessionId"
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "local": "getRoomForMember gộp session không tồn tại và caller không phải thành viên thành cùng 404 SESSION_NOT_FOUND để không làm oracle dò sessionId.",
+   "addedByLogicReview": true
+  },
+  {
+   "id": "t19",
+   "slug": "data-minimization",
+   "name": "Tối thiểu hoá dữ liệu trả về (ẩn danh, DTO công khai)",
+   "model": "Tối thiểu dữ liệu",
+   "how": "Chỉ trả trường cần thiết (DTO công khai, ẩn danh theo từng người nhận).",
+   "why": "Giảm rò rỉ dữ liệu: chỉ trả đúng các trường cần thiết cho người nhận thay vì cả bản ghi nội bộ.",
+   "endpoints": [
+    "e2",
+    "e7"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/soul-match/soul-match.service.ts",
+     "line": 196,
+     "quote": "senderRole tính per-recipient TẠI ĐÂY"
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "local": "senderRole me|partner được tính riêng từng người nhận ngay trong core-api nên payload soul.message và danh sách message không lộ userId đối phương trước khi match.",
+   "addedByLogicReview": true
+  }
+ ]
+}

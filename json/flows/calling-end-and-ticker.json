@@ -1,0 +1,359 @@
+{
+ "id": "calling-end-and-ticker",
+ "title": "Kết thúc cuộc gọi và đồng hồ cuộc gọi",
+ "summary": "Một cuộc gọi Voice Match có thể kết thúc từ nhiều phía (poll GET, nút kết thúc, ticker nền). Calling chốt CallSession, nhưng MatchSession thuộc Matching, phòng thuộc LiveKit và báo realtime đi qua Redis tới gateway nên nhiều service phải phối hợp.",
+ "caption": "Mọi nhánh kết thúc đều qua CallingService.endById rồi cleanupEndedCall: Matching đóng session, xóa phòng LiveKit, publish call.ended qua Redis tới gateway.",
+ "participants": [
+  {
+   "id": "web",
+   "label": "Web client",
+   "kind": "client"
+  },
+  {
+   "id": "calling",
+   "label": "Calling",
+   "kind": "service"
+  },
+  {
+   "id": "matching",
+   "label": "Matching",
+   "kind": "service"
+  },
+  {
+   "id": "postgres",
+   "label": "PostgreSQL",
+   "kind": "infra"
+  },
+  {
+   "id": "redis",
+   "label": "Redis",
+   "kind": "infra"
+  },
+  {
+   "id": "signaling-gateway",
+   "label": "Signaling gateway",
+   "kind": "service"
+  },
+  {
+   "id": "external:livekit",
+   "label": "LiveKit",
+   "kind": "service"
+  }
+ ],
+ "steps": [
+  {
+   "from": "web",
+   "to": "calling",
+   "label": "GET /calling/calls/:id (poll trạng thái cuộc gọi)",
+   "kind": "call",
+   "mechanism": "http",
+   "note": "Mọi route REST đều qua JwtAuthGuard toàn cục trừ @Public.",
+   "evidence": []
+  },
+  {
+   "from": "calling",
+   "to": "postgres",
+   "label": "Đọc CallSession theo id",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/calling/calling.service.ts",
+     "line": 266,
+     "quote": "let call = await this.callRepo.findOneBy({ id: callId });"
+    }
+   ]
+  },
+  {
+   "from": "calling",
+   "to": "external:livekit",
+   "label": "Đối soát: liệt kê participant đang có trong phòng",
+   "kind": "call",
+   "mechanism": "sdk",
+   "note": "Nếu LiveKit lỗi, GET chỉ log debug và trả call hiện có, không trả 500.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/calling/calling.service.ts",
+     "line": 530,
+     "quote": "this.livekit.listParticipantIdentities(call.roomName)"
+    }
+   ]
+  },
+  {
+   "from": "calling",
+   "to": "postgres",
+   "label": "Pending: markJoined; Active mà đối phương vắng: endById khóa dòng, chốt ended",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "note": "endById khóa pessimistic_write, chỉ lần chuyển trạng thái thật sự (justEnded) mới dọn dẹp và publish.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/calling/calling.service.ts",
+     "line": 443,
+     "quote": "const result = await this.dataSource.transaction(async (manager) => {"
+    }
+   ]
+  },
+  {
+   "from": "calling",
+   "to": "matching",
+   "label": "cleanupEndedCall: endVoiceSessionForCall đóng MatchSession của cặp",
+   "kind": "call",
+   "mechanism": "di-call",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/calling/calling.service.ts",
+     "line": 688,
+     "quote": "await this.matchingService.endVoiceSessionForCall("
+    }
+   ]
+  },
+  {
+   "from": "matching",
+   "to": "postgres",
+   "label": "Khóa match_sessions, đặt status Ended + endedAt",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "note": "Bỏ qua nếu session không tồn tại, đã Ended hoặc không phải Confirmed; ném lỗi nếu cặp user không khớp.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/matching/matching.service.ts",
+     "line": 588,
+     "quote": "await this.dataSource.transaction(async (manager) => {"
+    }
+   ]
+  },
+  {
+   "from": "calling",
+   "to": "external:livekit",
+   "label": "Xóa phòng LiveKit, lỗi bị nuốt (phòng có thể đã tự đóng)",
+   "kind": "call",
+   "mechanism": "sdk",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/calling/calling.service.ts",
+     "line": 693,
+     "quote": "await this.livekit.deleteRoom(call.roomName).catch((err) => {"
+    }
+   ]
+  },
+  {
+   "from": "calling",
+   "to": "redis",
+   "label": "Publish call.ended cho cả hai user",
+   "kind": "async",
+   "mechanism": "redis-pubsub",
+   "note": "publishRealtimeEvent bọc try/catch, lỗi chỉ log warn.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/calling/calling.service.ts",
+     "line": 710,
+     "quote": "publishRealtimeEvent(this.redis, this.logger, uid, envelope),"
+    },
+    {
+     "file": "apps/core-api/src/common/realtime/redis-realtime-publisher.adapter.ts",
+     "line": 11,
+     "quote": "return this.redis.publish(channel, payload);"
+    }
+   ]
+  },
+  {
+   "from": "redis",
+   "to": "signaling-gateway",
+   "label": "Gateway PSUBSCRIBE realtime:user:* nhận envelope",
+   "kind": "async",
+   "mechanism": "redis-pubsub",
+   "evidence": [
+    {
+     "file": "apps/signaling-gateway/src/app/signaling.gateway.ts",
+     "line": 346,
+     "quote": ".psubscribe(REALTIME_USER_CHANNEL_PATTERN)"
+    }
+   ]
+  },
+  {
+   "from": "signaling-gateway",
+   "to": "web",
+   "label": "Emit call.ended tới room user của từng người",
+   "kind": "async",
+   "mechanism": "socket",
+   "evidence": [
+    {
+     "file": "apps/signaling-gateway/src/app/signaling.gateway.ts",
+     "line": 332,
+     "quote": "this.server.local.to(userRoom(userId)).emit(envelope.event, envelope.data);"
+    }
+   ]
+  },
+  {
+   "from": "calling",
+   "to": "web",
+   "label": "Trả CallSession (đã ended nếu vừa chốt)",
+   "kind": "return",
+   "mechanism": "http",
+   "evidence": []
+  },
+  {
+   "from": "web",
+   "to": "calling",
+   "label": "POST /calling/match-sessions/:matchSessionId/end (rời màn Voice Match)",
+   "kind": "call",
+   "mechanism": "http",
+   "evidence": []
+  },
+  {
+   "from": "calling",
+   "to": "matching",
+   "label": "findSessionById, kiểm user thuộc session (không thì 404)",
+   "kind": "call",
+   "mechanism": "di-call",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/calling/calling.service.ts",
+     "line": 329,
+     "quote": "const session = await this.matchingService.findSessionById(matchSessionId);"
+    }
+   ]
+  },
+  {
+   "from": "calling",
+   "to": "postgres",
+   "label": "Tìm CallSession theo matchSessionId; nếu có thì endById Completed",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "note": "Sau endById chạy lại cleanupEndedCall như các bước 5-10: đóng Matching, xóa phòng, publish call.ended.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/calling/calling.service.ts",
+     "line": 340,
+     "quote": "const call = await this.callRepo.findOneBy({ matchSessionId });"
+    }
+   ]
+  },
+  {
+   "from": "calling",
+   "to": "matching",
+   "label": "endVoiceSession chốt MatchSession terminal cho cặp (idempotent)",
+   "kind": "call",
+   "mechanism": "di-call",
+   "note": "Matching khóa match_sessions trong một transaction riêng; nếu đã Ended thì trả luôn session.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/calling/calling.service.ts",
+     "line": 342,
+     "quote": "await this.matchingService.endVoiceSession(user, matchSessionId);"
+    },
+    {
+     "file": "apps/core-api/src/modules/matching/matching.service.ts",
+     "line": 502,
+     "quote": "return this.dataSource.transaction(async (manager) => {"
+    }
+   ]
+  },
+  {
+   "from": "calling",
+   "to": "web",
+   "label": "Trả 200 sau khi call và MatchSession đã đóng",
+   "kind": "return",
+   "mechanism": "http",
+   "evidence": []
+  },
+  {
+   "from": "calling",
+   "to": "postgres",
+   "label": "Ticker nền: quét pending quá hạn, active hết cửa sổ reconnect, active quá free-call",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "note": "Chạy qua ManagedInterval theo CALLING_TICKER_INTERVAL_MS với clusterSingleton, mỗi tick tối đa 100 call mỗi loại.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/calling/jobs/call-ticker.service.ts",
+     "line": 83,
+     "quote": "const stale = await this.dataSource.getRepository(CallSession).find({"
+    }
+   ]
+  },
+  {
+   "from": "calling",
+   "to": "postgres",
+   "label": "Với mỗi call quá hạn: endById (pending_timeout, completed, free_limit)",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "note": "Sau đó cleanupEndedCall như các bước 5-10. Lock FOR UPDATE chống race end-vs-tick.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/calling/jobs/call-ticker.service.ts",
+     "line": 90,
+     "quote": "await this.callingService.endById(call.id, CallEndReason.PendingTimeout);"
+    }
+   ]
+  }
+ ],
+ "groups": [
+  {
+   "from": 3,
+   "to": 3,
+   "label": "Gọi SDK LiveKit",
+   "kind": "external"
+  },
+  {
+   "from": 4,
+   "to": 4,
+   "label": "Transaction khóa CallSession",
+   "kind": "transaction"
+  },
+  {
+   "from": 6,
+   "to": 6,
+   "label": "Transaction của Matching",
+   "kind": "transaction"
+  },
+  {
+   "from": 7,
+   "to": 8,
+   "label": "Dọn phòng và báo realtime",
+   "kind": "besteffort"
+  },
+  {
+   "from": 14,
+   "to": 14,
+   "label": "endById trong transaction",
+   "kind": "transaction"
+  },
+  {
+   "from": 18,
+   "to": 18,
+   "label": "endById trong transaction",
+   "kind": "transaction"
+  }
+ ],
+ "invariants": [
+  "endById khóa CallSession rồi mới đổi trạng thái, nên end từ poll, nút bấm và ticker không thể chốt đôi và chỉ lần justEnded mới dọn phòng và publish.",
+  "Matching đóng MatchSession trước khi publish call.ended, để user nhận event rồi tìm match lại không bị session confirmed cũ giữ chân.",
+  "Calling không ghi match_sessions: chỉ Matching là nơi ghi, nên Calling phải gọi endVoiceSessionForCall/endVoiceSession."
+ ],
+ "failureModes": [
+  {
+   "when": "LiveKit RoomService lỗi khi GET /calling/calls/:id",
+   "effect": "reconcile bị bỏ qua, GET trả call hiện có; webhook và ticker là đường dự phòng."
+  },
+  {
+   "when": "deleteRoom thất bại (phòng đã tự đóng)",
+   "effect": "Lỗi bị nuốt, chỉ log debug, luồng publish tiếp tục."
+  },
+  {
+   "when": "Publish Redis lỗi",
+   "effect": "Chỉ log warn, call vẫn đã ended trong DB; client còn polling dự phòng."
+  },
+  {
+   "when": "endVoiceSessionForCall ném lỗi (cặp user không khớp session)",
+   "effect": "cleanupEndedCall dừng trước deleteRoom và publish, CallSession đã ended trong DB."
+  },
+  {
+   "when": "endById ném lỗi khi ticker xử lý call active quá free-call",
+   "effect": "Lỗi được catch và log theo từng call, thử lại ở tick sau. Với nhánh pending-timeout và reconnect-timeout không có catch từng call: lỗi thoát khỏi tick, ManagedInterval chỉ log lỗi và các bước sau của tick đó bị bỏ qua."
+  }
+ ],
+ "dataIssues": [],
+ "uncertain": []
+}

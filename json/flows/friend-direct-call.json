@@ -1,0 +1,187 @@
+{
+ "id": "friend-direct-call",
+ "title": "Gọi trực tiếp cho bạn bè",
+ "summary": "Hai người đã follow nhau gọi voice lâu dài không qua ghép đôi: Calling phải hỏi Friend (và Safety bên trong Friend) xem được phép gọi chưa, rồi mới tạo hoặc lấy CallSession và cấp token LiveKit.",
+ "caption": "Calling kiểm quyền gọi qua Friend (block + follow hai chiều), tạo/lấy CallSession rồi ký token LiveKit trả về cho client.",
+ "participants": [
+  {
+   "id": "web",
+   "label": "Web client",
+   "kind": "client"
+  },
+  {
+   "id": "calling",
+   "label": "Calling",
+   "kind": "service"
+  },
+  {
+   "id": "friend",
+   "label": "Friend",
+   "kind": "service"
+  },
+  {
+   "id": "safety",
+   "label": "Safety",
+   "kind": "service"
+  },
+  {
+   "id": "user",
+   "label": "User",
+   "kind": "service"
+  },
+  {
+   "id": "postgres",
+   "label": "PostgreSQL",
+   "kind": "infra"
+  }
+ ],
+ "steps": [
+  {
+   "from": "web",
+   "to": "calling",
+   "label": "POST /calling/friends/:friendUserId/join (đã qua JWT guard, throttle 20 lần/phút)",
+   "kind": "call",
+   "mechanism": "http",
+   "note": "Route có @Throttle 20 request mỗi phút; mọi REST route yêu cầu JWT trừ khi @Public."
+  },
+  {
+   "from": "calling",
+   "to": "friend",
+   "label": "Hỏi ProfileSocialService.canCall(userId, friendUserId)",
+   "kind": "call",
+   "mechanism": "di-call",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/calling/calling.service.ts",
+     "line": 208,
+     "quote": "if (!(await this.profileSocialService.canCall(user.userId, friendUserId))) {"
+    }
+   ]
+  },
+  {
+   "from": "friend",
+   "to": "safety",
+   "label": "Kiểm tra block theo cả hai chiều (A chặn B, B chặn A)",
+   "kind": "call",
+   "mechanism": "di-call",
+   "note": "Hai lời gọi isBlocked chạy song song; nếu một chiều bị block thì canCall trả false ngay.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/friend/services/profile-social.service.ts",
+     "line": 152,
+     "quote": "this.safetyService.isBlocked(userAId, userBId),"
+    }
+   ]
+  },
+  {
+   "from": "friend",
+   "to": "postgres",
+   "label": "Kiểm tra follow hai chiều còn active (areMutuallyFollowing)",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/friend/services/profile-social.service.ts",
+     "line": 156,
+     "quote": "return this.areMutuallyFollowing(userAId, userBId);"
+    }
+   ]
+  },
+  {
+   "from": "friend",
+   "to": "calling",
+   "label": "Trả true/false; false thì Calling ném 404 SESSION_NOT_FOUND",
+   "kind": "return",
+   "mechanism": "di-call",
+   "note": "Nhánh lỗi: thông báo 'Hai bạn cần follow nhau để gọi voice lâu dài' với HttpStatus.NOT_FOUND."
+  },
+  {
+   "from": "calling",
+   "to": "postgres",
+   "label": "Tìm CallSession kind=Friend của cặp canonical đang Pending/Active",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/calling/calling.service.ts",
+     "line": 216,
+     "quote": "let call = await this.callRepo"
+    }
+   ]
+  },
+  {
+   "from": "calling",
+   "to": "postgres",
+   "label": "Chưa có thì tạo CallSession Pending; trùng unique thì đọc lại bản đang có",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "note": "Không có transaction: chống race bằng cách bắt lỗi unique violation rồi getOneOrFail.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/calling/calling.service.ts",
+     "line": 228,
+     "quote": "call = await this.callRepo.save("
+    }
+   ]
+  },
+  {
+   "from": "calling",
+   "to": "calling",
+   "label": "Ký token join room qua LivekitRoomPort.mintJoinToken (identity = userId)",
+   "kind": "call",
+   "mechanism": "sdk",
+   "note": "Adapter dùng AccessToken của SDK với apiKey/secret, ký cục bộ; trong code này không có lời gọi mạng tới media-server ở bước cấp token.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/calling/calling.service.ts",
+     "line": 252,
+     "quote": "const token = await this.livekit.mintJoinToken("
+    }
+   ]
+  },
+  {
+   "from": "calling",
+   "to": "user",
+   "label": "Chỉ khi bật multi-region: đọc region hai bên để chọn LIVEKIT URL",
+   "kind": "call",
+   "mechanism": "di-call",
+   "note": "Nếu chưa cấu hình LIVEKIT_REGION_URLS thì trả LIVEKIT_URL mặc định, không gọi User; lỗi lookup cũng fallback URL mặc định.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/calling/calling.service.ts",
+     "line": 583,
+     "quote": "this.userService.getByIdOrThrow(call.userAId),"
+    }
+   ]
+  },
+  {
+   "from": "calling",
+   "to": "web",
+   "label": "Trả JoinCallDto: call, token, livekitUrl",
+   "kind": "return",
+   "mechanism": "http"
+  }
+ ],
+ "groups": [],
+ "invariants": [
+  "Calling không tự đọc Friendship/follow/block: quyền gọi do Friend quyết định (canCall) và phải được hỏi trước khi tạo CallSession, nên không bao giờ có phiên hay token cho cặp bị block hoặc chưa follow nhau.",
+  "Token LiveKit chỉ được ký sau khi đã có CallSession (roomName lấy từ call), identity do server đặt là userId của người gọi nên client không chọn được danh tính.",
+  "CallSession friend dùng cặp canonical (userAId, userBId) nên hai chiều gọi cùng tìm ra một phiên Pending/Active; unique violation được đọc lại thay vì tạo trùng."
+ ],
+ "failureModes": [
+  {
+   "when": "Một bên block bên kia hoặc chưa follow hai chiều",
+   "effect": "canCall trả false, Calling ném DomainException 404 SESSION_NOT_FOUND và không tạo CallSession, không cấp token."
+  },
+  {
+   "when": "Hai request đồng thời cùng tạo CallSession cho một cặp",
+   "effect": "Request thua gặp unique violation, đọc lại CallSession đang có bằng getOneOrFail và dùng nó; lỗi khác unique được ném ra."
+  },
+  {
+   "when": "Lookup region của user lỗi khi multi-region bật",
+   "effect": "Calling ghi warn và fallback LIVEKIT_URL; việc chọn URL không chặn join call."
+  }
+ ],
+ "dataIssues": [],
+ "uncertain": []
+}

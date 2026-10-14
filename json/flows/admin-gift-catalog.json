@@ -1,0 +1,49 @@
+{
+"id":"admin-gift-catalog",
+"title":"Admin quản lý danh mục quà",
+"summary":"Admin xem, tạo và sửa quà trong catalog; giá kim cương là dữ liệu trong bảng gifts do Gift sở hữu, còn Admin điều phối quyền và ghi audit log cùng transaction. Client thường chỉ đọc catalog đang bật.",
+"caption":"Admin gọi AdminService, AdminService gọi GiftService ghi bảng gifts và ghi audit log trong cùng một transaction; client chỉ đọc GET /gifts.",
+"participants":[
+{"id":"admin-console","label":"Admin console","kind":"client"},
+{"id":"web","label":"Web client","kind":"client"},
+{"id":"admin","label":"Admin","kind":"service"},
+{"id":"gift","label":"Gift","kind":"service"},
+{"id":"postgres","label":"PostgreSQL","kind":"infra"}
+],
+"steps":[
+{"from":"admin-console","to":"admin","label":"GET /admin/gifts: xem toàn bộ catalog (cần quyền ManageGifts)","kind":"call","mechanism":"http","note":"Controller gắn @RequireAdminPermission(AdminPermission.ManageGifts); mọi route REST đều qua JwtAuthGuard.","evidence":[{"file":"apps/core-api/src/modules/admin/admin.controller.ts","line":356,"quote":"@RequireAdminPermission(AdminPermission.ManageGifts)"}]},
+{"from":"admin","to":"gift","label":"Gọi GiftService.listAllForAdmin","kind":"call","mechanism":"di-call","evidence":[{"file":"apps/core-api/src/modules/admin/admin.service.ts","line":271,"quote":"return this.giftService.listAllForAdmin();"}]},
+{"from":"gift","to":"postgres","label":"Đọc mọi quà kể cả đã tắt, sắp theo sortOrder, code","kind":"call","mechanism":"shared-db","evidence":[{"file":"apps/core-api/src/modules/gift/gift.service.ts","line":96,"quote":"return this.giftRepo.find({ order: { sortOrder: 'ASC', code: 'ASC' } });"}]},
+{"from":"admin","to":"admin-console","label":"Trả danh sách quà đầy đủ (AdminGiftDto)","kind":"return","mechanism":"http"},
+{"from":"admin-console","to":"admin","label":"POST /admin/gifts: tạo quà mới (code, name, priceDiamond)","kind":"call","mechanism":"http","evidence":[{"file":"apps/core-api/src/modules/admin/admin.controller.ts","line":367,"quote":"@RequireAdminPermission(AdminPermission.ManageGifts)"}]},
+{"from":"admin","to":"postgres","label":"Mở transaction cho tạo quà và audit","kind":"call","mechanism":"shared-db","evidence":[{"file":"apps/core-api/src/modules/admin/admin.service.ts","line":275,"quote":"return this.dataSource.transaction(async (manager) => {"}]},
+{"from":"admin","to":"gift","label":"GiftService.createGift(manager, input) trên cùng manager","kind":"call","mechanism":"di-call","evidence":[{"file":"apps/core-api/src/modules/admin/admin.service.ts","line":276,"quote":"const gift = await this.giftService.createGift(manager, input);"}]},
+{"from":"gift","to":"postgres","label":"INSERT quà (active=true); trùng code bị uq_gifts_code chặn","kind":"call","mechanism":"shared-db","note":"Lỗi unique uq_gifts_code được dịch thành CODE_ALREADY_EXISTS (409), transaction rollback.","evidence":[{"file":"apps/core-api/src/modules/gift/gift.service.ts","line":109,"quote":"return await repo.save("}]},
+{"from":"admin","to":"postgres","label":"Ghi admin_audit_logs gift.created cùng transaction","kind":"call","mechanism":"shared-db","evidence":[{"file":"apps/core-api/src/modules/admin/admin.service.ts","line":277,"quote":"await this.auditLogService.record("}]},
+{"from":"admin","to":"admin-console","label":"Trả quà vừa tạo (AdminGiftDto)","kind":"return","mechanism":"http"},
+{"from":"admin-console","to":"admin","label":"PATCH /admin/gifts/:id: sửa giá, tên, thứ tự, bật/tắt","kind":"call","mechanism":"http","evidence":[{"file":"apps/core-api/src/modules/admin/admin.controller.ts","line":380,"quote":"@RequireAdminPermission(AdminPermission.ManageGifts)"}]},
+{"from":"admin","to":"postgres","label":"Mở transaction cho sửa quà và audit","kind":"call","mechanism":"shared-db","evidence":[{"file":"apps/core-api/src/modules/admin/admin.service.ts","line":296,"quote":"return this.dataSource.transaction(async (manager) => {"}]},
+{"from":"admin","to":"gift","label":"GiftService.updateGift(manager, giftId, input)","kind":"call","mechanism":"di-call","evidence":[{"file":"apps/core-api/src/modules/admin/admin.service.ts","line":297,"quote":"const gift = await this.giftService.updateGift(manager, giftId, input);"}]},
+{"from":"gift","to":"postgres","label":"Đọc quà theo id (404 nếu không có) rồi lưu trường đổi","kind":"call","mechanism":"shared-db","note":"Không hard-delete: tắt quà bằng active=false để gift_events còn FK tới gifts.id.","evidence":[{"file":"apps/core-api/src/modules/gift/gift.service.ts","line":140,"quote":"const gift = await repo.findOneBy({ id: giftId });"}]},
+{"from":"admin","to":"postgres","label":"Ghi admin_audit_logs gift.updated cùng transaction","kind":"call","mechanism":"shared-db","evidence":[{"file":"apps/core-api/src/modules/admin/admin.service.ts","line":298,"quote":"await this.auditLogService.record("}]},
+{"from":"admin","to":"admin-console","label":"Trả quà sau khi sửa (AdminGiftDto)","kind":"return","mechanism":"http"},
+{"from":"web","to":"gift","label":"GET /gifts: client chỉ đọc catalog đang bật","kind":"call","mechanism":"http","evidence":[{"file":"apps/core-api/src/modules/gift/gift.controller.ts","line":41,"quote":"@Get('gifts')"}]},
+{"from":"gift","to":"postgres","label":"Đọc quà active=true theo sortOrder, code","kind":"call","mechanism":"shared-db","evidence":[{"file":"apps/core-api/src/modules/gift/gift.service.ts","line":89,"quote":"where: { active: true },"}]},
+{"from":"gift","to":"web","label":"Trả danh mục quà kèm giá do server quyết định","kind":"return","mechanism":"http"}
+],
+"groups":[
+{"from":6,"to":9,"label":"Transaction tạo quà + audit","kind":"transaction"},
+{"from":12,"to":15,"label":"Transaction sửa quà + audit","kind":"transaction"}
+],
+"invariants":[
+"Giá quà nằm ở bảng gifts do Gift sở hữu; client chỉ đọc qua GET /gifts nên không thể tự đặt giá, và Admin chỉ điều phối quyền rồi gọi GiftService.",
+"Admin truyền cùng manager cho GiftService và audit log, nên quà đổi và bản ghi audit cùng commit hoặc cùng rollback.",
+"Quà không bị xóa cứng vì gift_events tham chiếu FK tới gifts.id; muốn gỡ quà thì đặt active=false, GET /gifts công khai chỉ trả quà active."
+],
+"failureModes":[
+{"when":"Hai admin tạo trùng code gần như cùng lúc","effect":"uq_gifts_code chặn, GiftService ném CODE_ALREADY_EXISTS (409), transaction rollback, không có audit log."},
+{"when":"PATCH với id không tồn tại","effect":"GiftService ném GIFT_NOT_FOUND (404), transaction rollback, không ghi audit."}
+],
+"dataIssues":[],
+"uncertain":[]
+}

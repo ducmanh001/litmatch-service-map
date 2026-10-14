@@ -1,0 +1,193 @@
+{
+ "id": "matching-invite-decline-cancel",
+ "title": "Từ chối hoặc huỷ lời mời",
+ "summary": "Invitee từ chối hoặc inviter huỷ một MatchInvite. matching khoá dòng invite và kiểm tra hết hạn tại thời điểm thao tác, rồi gọi user để dựng DTO trả về.",
+ "caption": "Decline và cancel cùng một đường: khoá invite trong transaction, lazy-expire, lưu trạng thái, rồi lấy hồ sơ inviter từ user.",
+ "participants": [
+  {
+   "id": "web",
+   "label": "Web client",
+   "kind": "client"
+  },
+  {
+   "id": "matching",
+   "label": "matching",
+   "kind": "service"
+  },
+  {
+   "id": "user",
+   "label": "user",
+   "kind": "service"
+  },
+  {
+   "id": "postgres",
+   "label": "PostgreSQL",
+   "kind": "infra"
+  }
+ ],
+ "steps": [
+  {
+   "from": "web",
+   "to": "matching",
+   "label": "POST /matching/invites/:id/decline — invitee từ chối",
+   "kind": "call",
+   "mechanism": "http"
+  },
+  {
+   "from": "matching",
+   "to": "postgres",
+   "label": "Transaction: khoá dòng invite, kiểm tra chủ sở hữu, hết hạn, chuyển trạng thái",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "note": "lockInvite ném 404 nếu không có; sai chủ sở hữu ném 403; assertNotExpired/assertTransition ném 409. Khi hết hạn chỉ gán status trong bộ nhớ rồi ném lỗi, transaction rollback nên trạng thái hết hạn không được lưu.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/matching/services/invite.service.ts",
+     "line": 236,
+     "quote": "return this.dataSource.transaction(async (manager) => {"
+    },
+    {
+     "file": "apps/core-api/src/modules/matching/services/invite.service.ts",
+     "line": 605,
+     "quote": "const invite = await manager.findOne(MatchInvite, {"
+    }
+   ]
+  },
+  {
+   "from": "matching",
+   "to": "postgres",
+   "label": "Lưu invite sang trạng thái Declined kèm respondedAt",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/matching/services/invite.service.ts",
+     "line": 249,
+     "quote": "return manager.save(invite);"
+    }
+   ]
+  },
+  {
+   "from": "matching",
+   "to": "user",
+   "label": "Lấy hồ sơ người mời để dựng MatchInviteDto",
+   "kind": "call",
+   "mechanism": "di-call",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/matching/controllers/invite.controller.ts",
+     "line": 138,
+     "quote": "await this.userService.getByIdOrThrow(invite.inviterUserId),"
+    }
+   ]
+  },
+  {
+   "from": "matching",
+   "to": "web",
+   "label": "Trả MatchInviteDto (200 OK)",
+   "kind": "return",
+   "mechanism": "http"
+  },
+  {
+   "from": "web",
+   "to": "matching",
+   "label": "POST /matching/invites/:id/cancel — inviter huỷ trước khi có phản hồi",
+   "kind": "call",
+   "mechanism": "http"
+  },
+  {
+   "from": "matching",
+   "to": "postgres",
+   "label": "Transaction: khoá dòng invite, kiểm tra chủ sở hữu, hết hạn, chuyển trạng thái",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "note": "lockInvite ném 404 nếu không có; sai chủ sở hữu ném 403; assertNotExpired/assertTransition ném 409. Khi hết hạn chỉ gán status trong bộ nhớ rồi ném lỗi, transaction rollback nên trạng thái hết hạn không được lưu.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/matching/services/invite.service.ts",
+     "line": 257,
+     "quote": "return this.dataSource.transaction(async (manager) => {"
+    },
+    {
+     "file": "apps/core-api/src/modules/matching/services/invite.service.ts",
+     "line": 605,
+     "quote": "const invite = await manager.findOne(MatchInvite, {"
+    }
+   ]
+  },
+  {
+   "from": "matching",
+   "to": "postgres",
+   "label": "Lưu invite sang trạng thái Cancelled kèm respondedAt",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/matching/services/invite.service.ts",
+     "line": 270,
+     "quote": "return manager.save(invite);"
+    }
+   ]
+  },
+  {
+   "from": "matching",
+   "to": "user",
+   "label": "Lấy hồ sơ người mời để dựng MatchInviteDto",
+   "kind": "call",
+   "mechanism": "di-call",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/matching/controllers/invite.controller.ts",
+     "line": 138,
+     "quote": "await this.userService.getByIdOrThrow(invite.inviterUserId),"
+    }
+   ]
+  },
+  {
+   "from": "matching",
+   "to": "web",
+   "label": "Trả MatchInviteDto (200 OK)",
+   "kind": "return",
+   "mechanism": "http"
+  }
+ ],
+ "groups": [
+  {
+   "from": 2,
+   "to": 3,
+   "label": "Transaction declineInvite",
+   "kind": "transaction"
+  },
+  {
+   "from": 7,
+   "to": 8,
+   "label": "Transaction cancelInvite",
+   "kind": "transaction"
+  }
+ ],
+ "invariants": [
+  "Dòng invite được khoá pessimistic_write trước khi kiểm tra, nên hai thao tác đồng thời trên cùng invite (decline, cancel, accept) được tuần tự hoá.",
+  "Lazy-expire kiểm tra expiresAt ngay lúc thao tác vì sweeper có thể chưa chạy; trạng thái Expired chỉ được lưu bởi sweeper, còn ở đây transaction bị rollback khi ném lỗi 409.",
+  "Việc gọi user.getByIdOrThrow diễn ra sau transaction, ở controller, nên lỗi ở bước dựng DTO không làm hoàn tác trạng thái đã lưu."
+ ],
+ "failureModes": [
+  {
+   "when": "Invite không tồn tại",
+   "effect": "lockInvite ném INVITE_NOT_FOUND (404), transaction kết thúc."
+  },
+  {
+   "when": "Người gọi không phải invitee (decline) hoặc inviter (cancel)",
+   "effect": "Ném INVITE_FORBIDDEN (403), không ghi gì."
+  },
+  {
+   "when": "Invite đang Pending nhưng đã quá expiresAt, hoặc chuyển trạng thái không hợp lệ",
+   "effect": "Ném INVITE_INVALID_TRANSITION (409); transaction rollback nên không lưu trạng thái Expired."
+  },
+  {
+   "when": "user.getByIdOrThrow thất bại sau khi đã lưu",
+   "effect": "Phản hồi lỗi nhưng trạng thái invite đã commit (Suy luận từ việc gọi nằm ngoài transaction)."
+  }
+ ],
+ "dataIssues": [],
+ "uncertain": []
+}

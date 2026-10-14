@@ -1,0 +1,313 @@
+{
+ "id": "party-room-speaker-invite",
+ "title": "Mời lên nói và phản hồi lời mời",
+ "summary": "Host mời một khán giả lên speaker; khán giả chấp nhận hoặc từ chối. Chấp nhận phải đổi role trong PostgreSQL và cấp quyền publish thật trên LiveKit SFU, còn thông báo tới client đi qua Redis và signaling-gateway nên nhiều thành phần phải phối hợp.",
+ "caption": "Lời mời được lưu trong DB rồi báo realtime; chấp nhận đổi role, cấp quyền publish trên SFU và phát role mới cho cả phòng.",
+ "participants": [
+  {
+   "id": "web",
+   "label": "Web client",
+   "kind": "client"
+  },
+  {
+   "id": "party-room",
+   "label": "Party room",
+   "kind": "service"
+  },
+  {
+   "id": "postgres",
+   "label": "PostgreSQL",
+   "kind": "infra"
+  },
+  {
+   "id": "redis",
+   "label": "Redis",
+   "kind": "infra"
+  },
+  {
+   "id": "signaling-gateway",
+   "label": "Signaling gateway",
+   "kind": "service"
+  },
+  {
+   "id": "media-server",
+   "label": "LiveKit SFU",
+   "kind": "service"
+  }
+ ],
+ "steps": [
+  {
+   "from": "web",
+   "to": "party-room",
+   "label": "Host gọi POST /party/rooms/:id/members/:userId/speaker-invite",
+   "kind": "call",
+   "mechanism": "http"
+  },
+  {
+   "from": "party-room",
+   "to": "postgres",
+   "label": "Transaction: khóa phòng, kiểm tra host và target là audience, đặt speakerInvitePending",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/party-room/party-room.service.ts",
+     "line": 514,
+     "quote": "const { member, changed } = await this.dataSource.transaction("
+    }
+   ]
+  },
+  {
+   "from": "party-room",
+   "to": "redis",
+   "label": "Publish PartySpeakerInviteReceived cho target (chỉ khi lời mời mới)",
+   "kind": "async",
+   "mechanism": "redis-pubsub",
+   "note": "publishRealtimeEvent bắt lỗi publish và chỉ ghi log cảnh báo, không làm hỏng request.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/party-room/party-room.service.ts",
+     "line": 559,
+     "quote": "await publishRealtimeEvent(this.redis, this.logger, targetUserId, {"
+    }
+   ]
+  },
+  {
+   "from": "redis",
+   "to": "signaling-gateway",
+   "label": "Gateway PSUBSCRIBE realtime:user:* nhận envelope",
+   "kind": "async",
+   "mechanism": "redis-pubsub",
+   "evidence": [
+    {
+     "file": "apps/signaling-gateway/src/app/signaling.gateway.ts",
+     "line": 346,
+     "quote": ".psubscribe(REALTIME_USER_CHANNEL_PATTERN)"
+    }
+   ]
+  },
+  {
+   "from": "signaling-gateway",
+   "to": "web",
+   "label": "Emit lời mời tới socket room của target",
+   "kind": "async",
+   "mechanism": "socket",
+   "evidence": [
+    {
+     "file": "apps/signaling-gateway/src/app/signaling.gateway.ts",
+     "line": 332,
+     "quote": "this.server.local.to(userRoom(userId)).emit(envelope.event, envelope.data);"
+    }
+   ]
+  },
+  {
+   "from": "party-room",
+   "to": "web",
+   "label": "Trả thành viên đã có speakerInvitePending",
+   "kind": "return",
+   "mechanism": "http"
+  },
+  {
+   "from": "web",
+   "to": "party-room",
+   "label": "Target gọi POST /party/rooms/:id/speaker-invite/accept",
+   "kind": "call",
+   "mechanism": "http"
+  },
+  {
+   "from": "party-room",
+   "to": "postgres",
+   "label": "Transaction: kiểm tra lời mời, đếm speaker so với speakerLimit, đổi role thành Speaker",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/party-room/party-room.service.ts",
+     "line": 572,
+     "quote": "const result = await this.dataSource.transaction("
+    }
+   ]
+  },
+  {
+   "from": "party-room",
+   "to": "media-server",
+   "label": "Sau commit: updateParticipantPublish canPublish=true, chờ ACK từ SFU",
+   "kind": "call",
+   "mechanism": "sdk",
+   "note": "Nếu SFU lỗi, role được hoàn lại trong transaction mới và request trả 503.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/party-room/party-room.service.ts",
+     "line": 1083,
+     "quote": "await this.livekit.updateParticipantPublish("
+    }
+   ]
+  },
+  {
+   "from": "media-server",
+   "to": "party-room",
+   "label": "ACK cấp quyền publish (updated hoặc not_connected)",
+   "kind": "return",
+   "mechanism": "sdk"
+  },
+  {
+   "from": "party-room",
+   "to": "postgres",
+   "label": "Đọc danh sách thành viên còn trong phòng",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/party-room/party-room.service.ts",
+     "line": 1321,
+     "quote": "const members = await this.memberRepo.findBy({ roomId, leftAt: IsNull() });"
+    }
+   ],
+   "note": "Nằm ngoài try/catch của publish: lỗi đọc roster không bị nuốt, accept trả lỗi dù role đã đổi và SFU đã cấp quyền."
+  },
+  {
+   "from": "party-room",
+   "to": "redis",
+   "label": "Publish PartyRoleChanged cho từng thành viên trong phòng",
+   "kind": "async",
+   "mechanism": "redis-pubsub",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/party-room/party-room.service.ts",
+     "line": 1326,
+     "quote": "publishRealtimeEvent(this.redis, this.logger, m.userId, envelope),"
+    }
+   ]
+  },
+  {
+   "from": "redis",
+   "to": "signaling-gateway",
+   "label": "Gateway nhận envelope role mới qua PSUBSCRIBE",
+   "kind": "async",
+   "mechanism": "redis-pubsub",
+   "evidence": [
+    {
+     "file": "apps/signaling-gateway/src/app/signaling.gateway.ts",
+     "line": 346,
+     "quote": ".psubscribe(REALTIME_USER_CHANNEL_PATTERN)"
+    }
+   ]
+  },
+  {
+   "from": "signaling-gateway",
+   "to": "web",
+   "label": "Emit role mới tới các thành viên trong phòng",
+   "kind": "async",
+   "mechanism": "socket",
+   "evidence": [
+    {
+     "file": "apps/signaling-gateway/src/app/signaling.gateway.ts",
+     "line": 332,
+     "quote": "this.server.local.to(userRoom(userId)).emit(envelope.event, envelope.data);"
+    }
+   ]
+  },
+  {
+   "from": "party-room",
+   "to": "web",
+   "label": "Trả thành viên đã là Speaker",
+   "kind": "return",
+   "mechanism": "http"
+  },
+  {
+   "from": "web",
+   "to": "party-room",
+   "label": "Hoặc target gọi POST /party/rooms/:id/speaker-invite/decline",
+   "kind": "call",
+   "mechanism": "http"
+  },
+  {
+   "from": "party-room",
+   "to": "postgres",
+   "label": "Transaction: xóa speakerInvitePending, không đổi role, không gọi SFU",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/party-room/party-room.service.ts",
+     "line": 640,
+     "quote": "return this.dataSource.transaction(async (manager) => {"
+    }
+   ]
+  },
+  {
+   "from": "party-room",
+   "to": "web",
+   "label": "Trả thành viên (idempotent)",
+   "kind": "return",
+   "mechanism": "http"
+  }
+ ],
+ "groups": [
+  {
+   "from": 2,
+   "to": 2,
+   "label": "Transaction lưu lời mời",
+   "kind": "transaction"
+  },
+  {
+   "from": 3,
+   "to": 5,
+   "label": "Báo realtime, best-effort",
+   "kind": "besteffort"
+  },
+  {
+   "from": 8,
+   "to": 8,
+   "label": "Transaction đổi role",
+   "kind": "transaction"
+  },
+  {
+   "from": 9,
+   "to": 10,
+   "label": "Cấp quyền publish trên SFU",
+   "kind": "external"
+  },
+  {
+   "from": 12,
+   "to": 14,
+   "label": "Phát role mới, best-effort",
+   "kind": "besteffort"
+  },
+  {
+   "from": 17,
+   "to": 17,
+   "label": "Transaction từ chối",
+   "kind": "transaction"
+  }
+ ],
+ "invariants": [
+  "Lời mời chỉ đặt speakerInvitePending, role vẫn là audience và token vẫn canPublish=false; chỉ target gọi accept mới đổi role, nên client không tự bypass được consent.",
+  "Việc đếm speaker và đổi role chạy trong cùng transaction có khóa phòng, nên giới hạn speakerLimit không bị vượt khi nhiều lời mời được chấp nhận cùng lúc.",
+  "Quyền publish được cập nhật trên SFU sau khi commit DB và chờ ACK, vì enforce thật nằm ở LiveKit; DB và SFU không được lệch nhau."
+ ],
+ "failureModes": [
+  {
+   "when": "LiveKit updateParticipantPublish lỗi khi accept",
+   "effect": "Role được hoàn về previousRole nếu không có chuyển role mới hơn, SFU được yêu cầu khôi phục grant (lỗi chỉ ghi log) và API trả 503 PARTY_MEDIA_PERMISSION_UPDATE_FAILED."
+  },
+  {
+   "when": "Redis publish lỗi",
+   "effect": "publishRealtimeEvent chỉ ghi cảnh báo, request vẫn thành công; client có thể không nhận ngay sự kiện realtime."
+  },
+  {
+   "when": "Speaker đã đủ speakerLimit khi accept",
+   "effect": "Transaction ném SPEAKER_LIMIT_REACHED (409), role không đổi và không gọi SFU."
+  },
+  {
+   "when": "Caller không phải host hoặc target không phải audience khi mời",
+   "effect": "Transaction ném lỗi NOT_HOST (403) hoặc SPEAKER_INVITE_TARGET_INVALID (409), không có thay đổi nào."
+  },
+  {
+   "when": "Target accept khi không còn lời mời (hoặc không phải audience)",
+   "effect": "Transaction ném SPEAKER_INVITE_NOT_PENDING (409); nếu đã là Speaker thì trả luôn, không gọi SFU và không publish."
+  }
+ ],
+ "dataIssues": [],
+ "uncertain": []
+}

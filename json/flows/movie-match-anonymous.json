@@ -1,0 +1,283 @@
+{
+ "id": "movie-match-anonymous",
+ "title": "Xem phim chung ẩn danh: hàng đợi, đồng bộ playback, rating",
+ "summary": "Người lạ xếp hàng xem phim chung. movie-match ghép cặp (hỏi safety có được ghép không), đồng bộ playback qua realtime tới signaling-gateway, và chỉ khi cả hai like thì friend mới tạo Friendship.",
+ "caption": "Ba pha của một phiên xem chung ẩn danh: ghép hàng đợi, đồng bộ playback realtime, rating dẫn tới Friendship khi mutual-like.",
+ "participants": [
+  {
+   "id": "web",
+   "label": "Web client",
+   "kind": "client"
+  },
+  {
+   "id": "movie-match",
+   "label": "movie-match",
+   "kind": "service"
+  },
+  {
+   "id": "safety",
+   "label": "safety",
+   "kind": "service"
+  },
+  {
+   "id": "friend",
+   "label": "friend",
+   "kind": "service"
+  },
+  {
+   "id": "postgres",
+   "label": "PostgreSQL",
+   "kind": "infra"
+  },
+  {
+   "id": "redis",
+   "label": "Redis pub/sub",
+   "kind": "infra"
+  },
+  {
+   "id": "signaling-gateway",
+   "label": "signaling-gateway",
+   "kind": "service"
+  }
+ ],
+ "steps": [
+  {
+   "from": "web",
+   "to": "movie-match",
+   "label": "POST /movie-match/anon/queue: vào hàng đợi ghép người lạ",
+   "kind": "call",
+   "mechanism": "http",
+   "note": "Mọi route REST đều qua JwtAuthGuard trừ route @Public."
+  },
+  {
+   "from": "movie-match",
+   "to": "postgres",
+   "label": "Mở transaction, khóa advisory của matcher, xử lý hết hạn, enqueue và đọc ứng viên",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/movie-match/movie-match.service.ts",
+     "line": 295,
+     "quote": "return this.dataSource.transaction(async (manager) => {"
+    },
+    {
+     "file": "apps/core-api/src/modules/movie-match/movie-match.service.ts",
+     "line": 680,
+     "quote": "await manager.query('SELECT pg_advisory_xact_lock(hashtext($1))', ["
+    }
+   ]
+  },
+  {
+   "from": "movie-match",
+   "to": "safety",
+   "label": "canPair(userId, ứng viên): kiểm tra block/report đúng lúc ghép",
+   "kind": "call",
+   "mechanism": "di-call",
+   "note": "Gọi trong vòng lặp ứng viên, nằm trong transaction của movie-match.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/movie-match/movie-match.service.ts",
+     "line": 338,
+     "quote": "if (await this.safetyService.canPair(userId, candidate.user_id)) {"
+    }
+   ]
+  },
+  {
+   "from": "movie-match",
+   "to": "postgres",
+   "label": "Tạo session, xóa khỏi hàng đợi, ghi active participant cho cả hai",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/movie-match/movie-match.service.ts",
+     "line": 710,
+     "quote": "return manager.save("
+    },
+    {
+     "file": "apps/core-api/src/modules/movie-match/movie-match.service.ts",
+     "line": 355,
+     "quote": "await manager.delete(MovieMatchQueueEntry, [userId, partnerId]);"
+    }
+   ]
+  },
+  {
+   "from": "movie-match",
+   "to": "web",
+   "label": "Trả trạng thái queued hoặc phiên đã ghép (server chọn video)",
+   "kind": "return",
+   "mechanism": "http"
+  },
+  {
+   "from": "web",
+   "to": "movie-match",
+   "label": "PATCH /anon/sessions/:id/state: gửi vị trí và play/pause",
+   "kind": "call",
+   "mechanism": "http"
+  },
+  {
+   "from": "movie-match",
+   "to": "postgres",
+   "label": "Khóa session, lazy-expire, lưu playback state mới",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/movie-match/movie-match.service.ts",
+     "line": 421,
+     "quote": "return this.dataSource.transaction(async (manager) => {"
+    },
+    {
+     "file": "apps/core-api/src/modules/movie-match/movie-match.service.ts",
+     "line": 437,
+     "quote": "await manager.save(session);"
+    }
+   ]
+  },
+  {
+   "from": "movie-match",
+   "to": "redis",
+   "label": "Publish MovieStateChanged tới kênh realtime của cả hai người",
+   "kind": "async",
+   "mechanism": "redis-pubsub",
+   "note": "publishAnonPlayback được gọi ngay trong callback transaction, sau manager.save và TRƯỚC khi commit (không phải sau commit); publishRealtimeEvent bắt lỗi và chỉ log cảnh báo, client còn polling fallback.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/movie-match/movie-match.service.ts",
+     "line": 856,
+     "quote": "publishRealtimeEvent(this.redis, this.logger, uid, envelope),"
+    },
+    {
+     "file": "apps/core-api/src/common/realtime/redis-realtime-publisher.adapter.ts",
+     "line": 11,
+     "quote": "return this.redis.publish(channel, payload);"
+    }
+   ]
+  },
+  {
+   "from": "redis",
+   "to": "signaling-gateway",
+   "label": "Gateway PSUBSCRIBE realtime:user:* nhận envelope",
+   "kind": "async",
+   "mechanism": "redis-pubsub",
+   "evidence": [
+    {
+     "file": "apps/signaling-gateway/src/app/signaling.gateway.ts",
+     "line": 346,
+     "quote": ".psubscribe(REALTIME_USER_CHANNEL_PATTERN)"
+    }
+   ]
+  },
+  {
+   "from": "signaling-gateway",
+   "to": "web",
+   "label": "Relay playback state xuống socket room user:{userId} của cả hai",
+   "kind": "async",
+   "mechanism": "socket",
+   "evidence": [
+    {
+     "file": "apps/signaling-gateway/src/app/signaling.gateway.ts",
+     "line": 346,
+     "quote": ".psubscribe(REALTIME_USER_CHANNEL_PATTERN)"
+    }
+   ]
+  },
+  {
+   "from": "web",
+   "to": "movie-match",
+   "label": "POST /anon/sessions/:id/rating: gửi rating (like/boring/rude)",
+   "kind": "call",
+   "mechanism": "http"
+  },
+  {
+   "from": "movie-match",
+   "to": "friend",
+   "label": "Chỉ khi cả hai like: ensureFriendship(manager, low, high, MovieMatch)",
+   "kind": "call",
+   "mechanism": "di-call",
+   "note": "Truyền cùng manager nên Friendship nằm trong transaction của rating.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/movie-match/movie-match.service.ts",
+     "line": 510,
+     "quote": "await this.friendService.ensureFriendship("
+    }
+   ]
+  },
+  {
+   "from": "movie-match",
+   "to": "postgres",
+   "label": "Lưu rating; chốt session Matched (cả hai like) hoặc NotMatched (rating khác like)",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/movie-match/movie-match.service.ts",
+     "line": 519,
+     "quote": "await manager.save(session);"
+    }
+   ],
+   "note": "Nếu mới một bên like và bên kia chưa rate thì chỉ lưu rating, session vẫn Active."
+  },
+  {
+   "from": "movie-match",
+   "to": "web",
+   "label": "Trả anonView với trạng thái và rating mới",
+   "kind": "return",
+   "mechanism": "http"
+  }
+ ],
+ "groups": [
+  {
+   "from": 2,
+   "to": 5,
+   "label": "Transaction ghép hàng đợi (advisory lock)",
+   "kind": "transaction"
+  },
+  {
+   "from": 7,
+   "to": 8,
+   "label": "Transaction cập nhật playback",
+   "kind": "transaction"
+  },
+  {
+   "from": 8,
+   "to": 9,
+   "label": "Publish realtime, lỗi chỉ log",
+   "kind": "besteffort"
+  },
+  {
+   "from": 12,
+   "to": 13,
+   "label": "Transaction rating gồm tạo Friendship",
+   "kind": "transaction"
+  }
+ ],
+ "invariants": [
+  "Advisory lock được lấy ngay đầu transaction ghép hàng đợi, nên các lần ghép đồng thời bị tuần tự hóa trước khi đọc ứng viên.",
+  "canPair của safety được gọi lại ngay lúc ghép, trong cùng transaction, nên không dựa vào trạng thái block/report cũ từ lúc enqueue.",
+  "friend.ensureFriendship nhận cùng manager của movie-match và chạy trước manager.save(session) cuối cùng, nên Friendship và việc chốt session nằm trong một transaction.",
+  "Chỉ khi cả lowRating và highRating là Like mới gọi ensureFriendship; rating khác Like kết thúc phiên NotMatched mà không mở Friendship."
+ ],
+ "failureModes": [
+  {
+   "when": "Publish Redis realtime lỗi khi cập nhật playback",
+   "effect": "Lỗi bị bắt và chỉ log cảnh báo; transaction vẫn tiếp tục, client dựa vào polling fallback."
+  },
+  {
+   "when": "Phiên đã hết phần xem (status không Active hoặc watchEndedAt khác null) khi PATCH state",
+   "effect": "Ném DomainException ENDED (HTTP 409) và transaction rollback, không lưu và không publish."
+  },
+  {
+   "when": "Rating khác với rating đã chốt trước đó",
+   "effect": "Ném RATING_CONFLICT (409), không thay đổi session."
+  },
+  {
+   "when": "Gửi rating khi phần xem chung chưa kết thúc",
+   "effect": "Ném RATING_NOT_OPEN (409), không chạm Friendship."
+  }
+ ],
+ "dataIssues": [],
+ "uncertain": []
+}

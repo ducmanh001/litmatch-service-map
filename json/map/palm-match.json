@@ -1,0 +1,563 @@
+{
+ "id": "palm-match",
+ "title": "Palm Match",
+ "tagline": "Ghép đôi ẩn danh theo hàng đợi, bói bài",
+ "deployable": "core-api",
+ "role": "Sở hữu hàng đợi ghép cặp ẩn danh Palm Match, phiên 2 người (lật bài, độ hợp, đánh giá like/skip) và kho nội dung bói palm_reading_templates. Không sở hữu quan hệ bạn bè/Conversation (Friend tạo), không sở hữu block/report (Safety quyết định), không chạm Economy và không phát realtime.",
+ "owns": [
+  "palm_match_sessions (snapshot dấu hiệu, độ hợp, fortune, rating, outcome, expiresAt)",
+  "palm_match_queue_entries (hàng đợi, PK userId)",
+  "palm_match_active_participants (PK userId: 1 user chỉ ở 1 phiên active)",
+  "palm_reading_templates (catalog nội dung bói)",
+  "advisory lock Postgres 'litmatch:palm-match:pairing'"
+ ],
+ "confidence": "high",
+ "endpoints": [
+  {
+   "id": "e1",
+   "kind": "rest",
+   "method": "GET",
+   "path": "/api/v1/palm-match/reading",
+   "purpose": "Trả nội dung bói giải trí {category, content, forDate}, deterministic theo hash(userId, category, ngày UTC); chỉ cần JWT, không lưu gì.",
+   "auth": "jwt",
+   "file": "apps/core-api/src/modules/palm-match/palm-match.controller.ts",
+   "line": 37,
+   "quote": "@Get('reading')"
+  },
+  {
+   "id": "e2",
+   "kind": "rest",
+   "method": "POST",
+   "path": "/api/v1/palm-match/queue",
+   "purpose": "Vào hàng đợi (idempotent) và thử ghép ngay với entry cũ nhất còn hợp lệ; mỗi ứng viên phải qua SafetyService.canPair, serialize bằng advisory lock.",
+   "auth": "jwt",
+   "file": "apps/core-api/src/modules/palm-match/palm-match.controller.ts",
+   "line": 54,
+   "quote": "@Post('queue')"
+  },
+  {
+   "id": "e3",
+   "kind": "rest",
+   "method": "GET",
+   "path": "/api/v1/palm-match/current",
+   "purpose": "State phục hồi/poll của queue hoặc phiên hiện tại, đồng thời lazy-expire hạn queue/phiên; là kênh DUY NHẤT để client biết đã được ghép.",
+   "auth": "jwt",
+   "file": "apps/core-api/src/modules/palm-match/palm-match.controller.ts",
+   "line": 66,
+   "quote": "@Get('current')"
+  },
+  {
+   "id": "e4",
+   "kind": "rest",
+   "method": "POST",
+   "path": "/api/v1/palm-match/sessions/:id/flip",
+   "purpose": "Lật lá của chính caller (idempotent), quyền theo PalmMatchActiveParticipant(userId, sessionId) lấy từ JWT, khoá phiên pessimistic_write.",
+   "auth": "jwt",
+   "file": "apps/core-api/src/modules/palm-match/palm-match.controller.ts",
+   "line": 77,
+   "quote": "@Post('sessions/:id/flip')"
+  },
+  {
+   "id": "e5",
+   "kind": "rest",
+   "method": "POST",
+   "path": "/api/v1/palm-match/sessions/:id/rating",
+   "purpose": "Chốt like/skip một lần sau khi cả hai đã lật; cả hai like thì tạo Friendship + Conversation trong cùng transaction qua FriendService.ensureFriendship.",
+   "auth": "jwt",
+   "file": "apps/core-api/src/modules/palm-match/palm-match.controller.ts",
+   "line": 88,
+   "quote": "@Post('sessions/:id/rating')"
+  },
+  {
+   "id": "e6",
+   "kind": "rest",
+   "method": "DELETE",
+   "path": "/api/v1/palm-match/current",
+   "purpose": "Huỷ queue, huỷ phiên đang active cho cả hai hoặc dismiss kết quả terminal để giải phóng slot enqueue lượt mới.",
+   "auth": "jwt",
+   "file": "apps/core-api/src/modules/palm-match/palm-match.controller.ts",
+   "line": 102,
+   "quote": "@Delete('current')"
+  }
+ ],
+ "collaborators": [
+  {
+   "id": "c1",
+   "label": "mutual-like tạo bạn",
+   "what": "Khi lowRating và highRating đều là Like, rate() gọi FriendService.ensureFriendship(manager, userLowId, userHighId, FriendshipSource.PalmMatch) với EntityManager của transaction rating.",
+   "why": "Friendship và Conversation 1:1 chỉ do Friend sở hữu và phải được tạo atomically cùng nhau (bất biến Friendship ⇒ Conversation). Truyền manager đảm bảo việc chốt outcome Matched của phiên và việc mở bạn là một DB transaction.",
+   "ifMissing": "Phiên có thể ghi Matched mà không có Friendship (hoặc ngược lại có Friendship nhưng thiếu Conversation), người dùng 'match' xong không chat được hoặc bị lệch trạng thái khi retry.",
+   "with": "friend",
+   "withKind": "service",
+   "direction": "out",
+   "mechanism": "di-call",
+   "endpoints": [
+    "e5"
+   ],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/palm-match/palm-match.service.ts",
+     "line": 286,
+     "quote": "await this.friendService.ensureFriendship("
+    }
+   ],
+   "basis": "ast",
+   "logic": {
+    "verdict": "sound"
+   }
+  },
+  {
+   "id": "c2",
+   "label": "kiểm tra block/report",
+   "what": "Với mỗi ứng viên trong 20 entry cũ nhất, joinQueue gọi SafetyService.canPair(userId, candidate.user_id): từ chối nếu có block active 2 chiều hoặc report/block trong SAFETY_REMATCH_COOLDOWN_DAYS.",
+   "why": "Ghép ẩn danh nên hai người không tự lọc được nhau; Safety là chủ sở hữu block/report và theo docs/10 § 10.0.C phải kiểm tra lại đúng lúc ghép chứ không tin trạng thái lúc enqueue (user có thể bị block/report khi đang chờ).",
+   "ifMissing": "Người đã block hoặc từng report nhau trong cooldown vẫn bị ghép lại với nhau, phá cam kết an toàn của ghép ẩn danh.",
+   "with": "safety",
+   "withKind": "service",
+   "direction": "out",
+   "mechanism": "di-call",
+   "endpoints": [
+    "e2"
+   ],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/palm-match/palm-match.service.ts",
+     "line": 158,
+     "quote": "if (await this.safetyService.canPair(userId, candidate.user_id)) {"
+    }
+   ],
+   "basis": "ast",
+   "logic": {
+    "verdict": "sound"
+   }
+  },
+  {
+   "id": "c3",
+   "label": "queue/phiên + advisory lock",
+   "what": "Ghi palm_match_sessions, palm_match_queue_entries, palm_match_active_participants và đọc palm_reading_templates; joinQueue/dismissCurrent lấy pg_advisory_xact_lock(hashtext('litmatch:palm-match:pairing')) trước khi chọn cặp.",
+   "why": "Nhiều request ghép chạy song song trên nhiều instance core-api: nếu không serialize việc chọn cặp thì 2 user có thể cùng bắt 1 ứng viên. Lock Postgres cộng PK userId của queue/active-participant biến trạng thái ghép cặp thành bất biến ở DB, không phụ thuộc bộ nhớ process.",
+   "ifMissing": "Một user có thể bị ghép vào 2 phiên cùng lúc hoặc 2 request tạo 2 phiên cho cùng cặp; trạng thái hàng đợi mất khi restart.",
+   "with": "postgres",
+   "withKind": "infra",
+   "direction": "out",
+   "mechanism": "shared-db",
+   "endpoints": [
+    "e1",
+    "e2",
+    "e3",
+    "e4",
+    "e5",
+    "e6"
+   ],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/palm-match/entities/palm-match-session.entity.ts",
+     "line": 26,
+     "quote": "@Entity({ name: 'palm_match_sessions' })"
+    },
+    {
+     "file": "apps/core-api/src/modules/palm-match/entities/palm-match-session.entity.ts",
+     "line": 76,
+     "quote": "@Entity({ name: 'palm_match_queue_entries' })"
+    },
+    {
+     "file": "apps/core-api/src/modules/palm-match/entities/palm-match-session.entity.ts",
+     "line": 89,
+     "quote": "@Entity({ name: 'palm_match_active_participants' })"
+    }
+   ],
+   "review": {
+    "verdict": "supported"
+   },
+   "logic": {
+    "verdict": "sound"
+   }
+  },
+  {
+   "id": "c50",
+   "with": "web",
+   "withKind": "client",
+   "direction": "in",
+   "mechanism": "http",
+   "endpoints": [
+    "e2",
+    "e3",
+    "e6"
+   ],
+   "label": "poll /current khi đang chờ",
+   "what": "apps/web gọi POST /palm-match/queue để vào hàng đợi rồi lặp GET /palm-match/current (react-query refetchInterval) trong khi state còn queued hoặc session đang active; DELETE /current để huỷ.",
+   "why": "Palm Match không có socket-emit nào nên server không đẩy được thông báo 'đã ghép'; client bắt buộc poll /current để thấy phiên mới, trạng thái lật bài của đối phương và kết quả.",
+   "ifMissing": "Người dùng xếp hàng xong không bao giờ biết mình đã được ghép hay đối phương đã lật/rating, màn hình đứng ở trạng thái chờ.",
+   "evidence": [
+    {
+     "file": "apps/web/src/features/palm-match/api.ts",
+     "line": 30,
+     "quote": "refetchInterval: (query) =>"
+    }
+   ],
+   "review": {
+    "verdict": "supported"
+   },
+   "logic": {
+    "verdict": "sound"
+   }
+  }
+ ],
+ "waivedEdges": [],
+ "excludedRoutes": [],
+ "notes": [
+  "Doc docs/services/palm-match-service.md lỗi thời: chỉ mô tả GET /palm-match/reading, trong khi code còn có hàng đợi ẩn danh (POST /queue, GET/DELETE /current), POST /sessions/:id/flip và /rating, 3 bảng session/queue/active-participant và mutual-like mở Friendship (FriendshipSource.PalmMatch). Theo code.",
+  "Doc nói 'không có bảng lưu lịch sử' và 'guest dùng được, không cần guard đăng ký thật': với /reading đúng là không lưu, nhưng phiên ghép cặp thì được lưu trong palm_match_sessions; còn guest chỉ là user có JWT (JwtAuthGuard global), controller không có @Public hay phân biệt guest.",
+  "Doc chưa nhắc 2 config thật của luồng ghép cặp: PALM_MATCH_QUEUE_MAX_WAIT_SECONDS và PALM_MATCH_SESSION_DURATION_SECONDS (chỉ có PALM_MATCH_TARGET_NAME_MAX_LENGTH).",
+  "Không có job nền: hạn chờ queue và hạn phiên được xử lý lazy (expireSession/expireActiveForUser) khi user gọi joinQueue/getCurrent/flip/rate, nên phiên bị bỏ rơi chỉ hết hạn khi một trong 2 người quay lại.",
+  "Palm Match không publish event realtime nào (dossier: không có socket-emit); client phát hiện được ghép cặp hoàn toàn bằng REST polling GET /palm-match/current.",
+  "Chỉ Safety.canPair được kiểm tra lúc ghép; flip/rating không kiểm tra lại block, nên block xảy ra sau khi đã ghép không chặn phiên đang chạy (suy luận từ code, không thấy check ở flip/rate)."
+ ],
+ "techniques": [
+  {
+   "slug": "jwt-bearer",
+   "name": "JWT bearer (access token không trạng thái)",
+   "model": "JWT bearer",
+   "how": "Client gửi access token (JWT) trong header Authorization; guard xác minh chữ ký và hạn rồi gắn user vào request, server không giữ phiên.",
+   "why": "Không trạng thái nên scale ngang dễ và không phải tra DB mỗi request; đánh đổi là không thu hồi tức thì trước khi token hết hạn.",
+   "alternative": "Session phía server (cookie + kho phiên) thu hồi được tức thì nhưng cần kho phiên dùng chung.",
+   "endpoints": [
+    "e1",
+    "e2",
+    "e3",
+    "e4",
+    "e5",
+    "e6"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/app/app.module.ts",
+     "line": 117,
+     "quote": "{ provide: APP_GUARD, useClass: JwtAuthGuard },"
+    }
+   ],
+   "auto": true,
+   "count": 6,
+   "id": "t1",
+   "local": "Mọi endpoint /palm-match/* đi qua JwtAuthGuard là APP_GUARD toàn cục; reading vẫn dùng được cho guest."
+  },
+  {
+   "id": "t2",
+   "slug": "ownership-check",
+   "name": "Kiểm tra quyền sở hữu tài nguyên",
+   "model": "Kiểm tra chủ sở hữu",
+   "how": "So userId của tài nguyên với userId người gọi trước khi đọc hoặc sửa.",
+   "why": "Ngăn IDOR: không thao tác được trên tài nguyên của người khác bằng cách đoán id.",
+   "endpoints": [
+    "e4",
+    "e5"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/palm-match/palm-match.service.ts",
+     "line": 434,
+     "quote": "const active = await manager.findOneBy("
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "local": "lockedActiveSession yêu cầu dòng PalmMatchActiveParticipant(userId từ JWT, sessionId) rồi khoá session pessimistic_write; không khớp trả 404 SESSION_NOT_FOUND chung.",
+   "addedByLogicReview": true
+  },
+  {
+   "slug": "rebac-relationship",
+   "name": "Kiểm tra theo quan hệ (bạn bè, block, thành viên phòng)",
+   "model": "ReBAC",
+   "how": "Cho phép hoặc chặn dựa trên quan hệ giữa hai người: bạn bè, block, cùng phòng.",
+   "why": "Quyền trong mạng xã hội phụ thuộc quan hệ động chứ không phải vai trò cố định.",
+   "endpoints": [
+    "e2"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/palm-match/palm-match.service.ts",
+     "line": 158,
+     "quote": "if (await this.safetyService.canPair(userId, candidate.user_id)) {"
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "id": "t3",
+   "local": "Khi ghép, PalmMatchService gọi safetyService.canPair(userId, candidate.user_id) kiểm lại block/report ngay lúc chọn cặp, không tin state lúc enqueue."
+  },
+  {
+   "id": "t4",
+   "slug": "server-authoritative",
+   "name": "Server là nguồn sự thật về giá/quyền (client không quyết)",
+   "model": "Server quyết định",
+   "how": "Giá, số dư, trạng thái và quyền do server tính; client chỉ gửi ý định.",
+   "why": "Client có thể bị sửa nên mọi thứ liên quan tiền hoặc quyền phải do server quyết.",
+   "endpoints": [
+    "e1"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/palm-match/palm-match.service.ts",
+     "line": 63,
+     "quote": "Seed tính hoàn toàn ở server"
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "local": "Seed hash(userId, category, ngày UTC) tính hoàn toàn ở server nên client không chọn/quay lại kết quả khác trong cùng ngày; template chọn qua ORDER BY id để deterministic.",
+   "addedByLogicReview": true
+  },
+  {
+   "slug": "entity-manager-propagation",
+   "name": "Truyền EntityManager giữa module (chung một transaction)",
+   "model": "Chung transaction",
+   "how": "Module sở hữu dữ liệu nhận EntityManager của giao dịch đang chạy để việc của nó nằm trong cùng transaction.",
+   "why": "Nhiều module dùng chung DB nên atomicity xuyên module không cần saga hay 2PC.",
+   "alternative": "Saga/outbox xuyên service: cần khi tách deployable, thừa khi cùng process.",
+   "endpoints": [
+    "e2",
+    "e6",
+    "e3",
+    "e4",
+    "e5"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/palm-match/palm-match.service.ts",
+     "line": 328,
+     "quote": "private async lockMatcher(manager: EntityManager): Promise<void> {"
+    }
+   ],
+   "auto": true,
+   "count": 6,
+   "id": "t5",
+   "local": "rate() truyền manager vào FriendService.ensureFriendship để Friendship+Conversation cùng transaction với kết quả phiên; helper private lockMatcher/expireActiveForUser dùng chung manager của joinQueue/getCurrent."
+  },
+  {
+   "slug": "db-transaction",
+   "name": "Transaction DB (một đơn vị công việc)",
+   "model": "Transaction",
+   "how": "Gói nhiều thao tác ghi vào một transaction: cùng commit hoặc cùng rollback.",
+   "why": "Tránh trạng thái nửa vời khi lỗi giữa chừng.",
+   "endpoints": [
+    "e2",
+    "e3",
+    "e4",
+    "e5",
+    "e6"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/palm-match/palm-match.service.ts",
+     "line": 115,
+     "quote": "return this.dataSource.transaction(async (manager) => {"
+    }
+   ],
+   "auto": true,
+   "count": 5,
+   "id": "t6",
+   "local": "joinQueue, getCurrent, flip, rate, dismissCurrent bọc dataSource.transaction; chỉ joinQueue/dismissCurrent lấy lockMatcher, getCurrent/joinQueue gọi expireActiveForUser, flip/rate khoá session qua lockedActiveSession."
+  },
+  {
+   "slug": "pessimistic-lock",
+   "name": "Khoá bi quan (SELECT … FOR UPDATE)",
+   "model": "Khoá bi quan",
+   "how": "SELECT … FOR UPDATE khoá hàng đang xử lý để giao dịch khác phải chờ.",
+   "why": "Chặn hai request song song cùng đọc rồi cùng ghi (race) trên số dư, ticket, session.",
+   "alternative": "Khoá lạc quan (version) ít chờ hơn nhưng phải retry khi xung đột.",
+   "endpoints": [
+    "e6",
+    "e2",
+    "e3",
+    "e4",
+    "e5"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/palm-match/palm-match.service.ts",
+     "line": 315,
+     "quote": "lock: { mode: 'pessimistic_write' },"
+    }
+   ],
+   "auto": true,
+   "count": 3,
+   "id": "t7",
+   "local": "Khi huỷ/kết thúc, manager.findOne(PalmMatchSession, { lock: { mode: 'pessimistic_write' } }) khoá session trước khi completeSession(Cancelled)."
+  },
+  {
+   "slug": "advisory-lock",
+   "name": "Advisory lock (pg_advisory) để serialize / singleton",
+   "model": "Advisory lock",
+   "how": "pg_advisory_xact_lock khoá theo khoá logic, không cần có hàng cụ thể, giữ đến hết transaction.",
+   "why": "Tuần tự hoá việc không gắn với một hàng (ghép đôi, worker singleton).",
+   "endpoints": [
+    "e2",
+    "e6"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/palm-match/palm-match.service.ts",
+     "line": 329,
+     "quote": "await manager.query('SELECT pg_advisory_xact_lock(hashtext($1))', ["
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "id": "t8",
+   "local": "lockMatcher chạy pg_advisory_xact_lock(hashtext(PALM_MATCH_ADVISORY_LOCK_KEY)) để tuần tự hoá việc ghép cặp toàn hệ thống trong transaction."
+  },
+  {
+   "slug": "unique-constraint-guard",
+   "name": "Ràng buộc unique ở DB làm chốt chặn cuối",
+   "model": "Ràng buộc DB",
+   "how": "Ràng buộc unique hoặc index duy nhất ở DB là chốt chặn cuối cho trùng lặp.",
+   "why": "Check-rồi-insert ở tầng code vẫn dính race; DB mới bảo đảm tuyệt đối.",
+   "endpoints": [
+    "e2"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/palm-match/palm-match.service.ts",
+     "line": 136,
+     "quote": ".orIgnore()"
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "id": "t9",
+   "local": "Vào queue bằng insert PalmMatchQueueEntry với orIgnore(); khoá chính của queue/active-participant là chốt DB cuối chống trùng khi vào hàng đợi lặp."
+  },
+  {
+   "id": "t10",
+   "slug": "polling-fallback",
+   "name": "REST polling làm fallback cho realtime best-effort",
+   "model": "Polling dự phòng",
+   "how": "Client vẫn đọc trạng thái qua REST khi realtime rớt.",
+   "why": "Realtime best-effort nên cần đường dự phòng đúng đắn.",
+   "endpoints": [
+    "e3"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/web/src/features/palm-match/api.ts",
+     "line": 30,
+     "quote": "refetchInterval: (query) =>"
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "local": "Palm Match không phát realtime; web useCurrentPalmMatch refetchInterval PALM_MATCH_REFETCH_INTERVAL_MS (5s) khi state queued|active là kênh duy nhất biết đã ghép.",
+   "addedByLogicReview": true
+  },
+  {
+   "id": "t11",
+   "slug": "lazy-expiry",
+   "name": "Hết hạn lười (xử lý khi có request)",
+   "model": "Hết hạn lười",
+   "how": "Hết hạn được xử lý khi có request đụng tới, không cần job.",
+   "why": "Đúng đắn không phụ thuộc job; job chỉ để dọn.",
+   "endpoints": [
+    "e2",
+    "e3",
+    "e4",
+    "e5"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/palm-match/palm-match.service.ts",
+     "line": 188,
+     "quote": "đồng thời lazy-expire deadline server"
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "local": "getCurrent/joinQueue/flip/rate gọi expireActiveForUser/expireSession: session Active quá expiresAt chuyển Expired lúc có request, queue quá PALM_MATCH_QUEUE_MAX_WAIT_SECONDS bị xoá lúc đọc; không có worker.",
+   "addedByLogicReview": true
+  },
+  {
+   "slug": "lazy-expiry",
+   "name": "Hết hạn lười (xử lý khi có request)",
+   "model": "Hết hạn lười",
+   "how": "Hết hạn được xử lý khi có request đụng tới, không cần job.",
+   "why": "Đúng đắn không phụ thuộc job; job chỉ để dọn.",
+   "endpoints": [],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/palm-match/palm-match.service.ts",
+     "line": 188,
+     "quote": "/** REST recovery state cho reload/reconnect; đồng thời lazy-expire deadline server. */"
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "id": "t12",
+   "local": "getCurrent gọi expireActiveForUser để lazy-expire deadline phía server khi user reload/reconnect, không cần sweeper riêng."
+  },
+  {
+   "slug": "rate-limit-throttler",
+   "name": "Rate limit (@nestjs/throttler)",
+   "model": "Rate limit",
+   "how": "@Throttle giới hạn số request theo khoảng thời gian cho từng route.",
+   "why": "Chặn spam và dò quét bằng cách giới hạn số request theo thời gian, trước khi request tới logic nghiệp vụ.",
+   "endpoints": [
+    "e1",
+    "e2",
+    "e3",
+    "e4",
+    "e5",
+    "e6"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/app/app.module.ts",
+     "line": 116,
+     "quote": "{ provide: APP_GUARD, useClass: ThrottlerGuard },"
+    }
+   ],
+   "auto": true,
+   "count": 6,
+   "id": "t13",
+   "local": "Các endpoint palm-match chịu ThrottlerGuard là APP_GUARD toàn cục trong app.module.ts, dùng hạn mức mặc định."
+  },
+  {
+   "slug": "openapi-contract",
+   "name": "Hợp đồng OpenAPI + client sinh tự động",
+   "model": "OpenAPI",
+   "how": "OpenAPI sinh từ code và client TypeScript sinh tự động.",
+   "why": "Client và server không lệch hợp đồng.",
+   "endpoints": [
+    "e1",
+    "e2",
+    "e3",
+    "e4",
+    "e5",
+    "e6"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/palm-match/palm-match.controller.ts",
+     "line": 38,
+     "quote": "@ApiOperation({"
+    }
+   ],
+   "auto": true,
+   "count": 6,
+   "id": "t14",
+   "local": "PalmMatchController khai báo @ApiOperation cho reading, queue, current, flip, rating để sinh OpenAPI."
+  }
+ ]
+}

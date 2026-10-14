@@ -1,0 +1,267 @@
+{
+ "id": "calling-like-after-call",
+ "title": "Like sau cuộc gọi để thành bạn",
+ "summary": "Sau Voice Match, mỗi bên bấm like; khi cả hai đã like thì Calling ghi reaction và nhờ Friend mở Friendship cùng Conversation trong cùng một giao dịch, nên không có friendship thiếu chat.",
+ "caption": "Calling đối soát call, khoá CallSession, ghi like rồi gọi Friend.ensureFriendship trong cùng giao dịch khi đối phương đã like.",
+ "participants": [
+  {
+   "id": "web",
+   "label": "Web client",
+   "kind": "client"
+  },
+  {
+   "id": "calling",
+   "label": "Calling",
+   "kind": "service"
+  },
+  {
+   "id": "external:livekit",
+   "label": "LiveKit",
+   "kind": "service"
+  },
+  {
+   "id": "matching",
+   "label": "Matching",
+   "kind": "service"
+  },
+  {
+   "id": "friend",
+   "label": "Friend",
+   "kind": "service"
+  },
+  {
+   "id": "postgres",
+   "label": "PostgreSQL",
+   "kind": "infra"
+  },
+  {
+   "id": "redis",
+   "label": "Redis",
+   "kind": "infra"
+  },
+  {
+   "id": "signaling-gateway",
+   "label": "Signaling gateway",
+   "kind": "service"
+  }
+ ],
+ "steps": [
+  {
+   "from": "web",
+   "to": "calling",
+   "label": "POST /calling/calls/:id/like (JWT)",
+   "kind": "call",
+   "mechanism": "http"
+  },
+  {
+   "from": "calling",
+   "to": "postgres",
+   "label": "getCall: đọc CallSession, kiểm tra là thành viên",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/calling/calling.service.ts",
+     "line": 266,
+     "quote": "let call = await this.callRepo.findOneBy({ id: callId });"
+    }
+   ]
+  },
+  {
+   "from": "calling",
+   "to": "external:livekit",
+   "label": "Đối soát: liệt kê participant của room",
+   "kind": "call",
+   "mechanism": "sdk",
+   "note": "Pending có người trong room thì markJoined; Active mà đối phương đã rời thì endById (Completed). Lỗi LiveKit được nuốt và trả call nguyên trạng.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/calling/calling.service.ts",
+     "line": 530,
+     "quote": "this.livekit.listParticipantIdentities(call.roomName)"
+    }
+   ]
+  },
+  {
+   "from": "calling",
+   "to": "matching",
+   "label": "Nếu call vừa bị end: chốt MatchSession voice",
+   "kind": "call",
+   "mechanism": "di-call",
+   "note": "Chỉ chạy trong nhánh endById khi call không phải Friend và có matchSessionId.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/calling/calling.service.ts",
+     "line": 688,
+     "quote": "await this.matchingService.endVoiceSessionForCall("
+    }
+   ]
+  },
+  {
+   "from": "calling",
+   "to": "redis",
+   "label": "Nếu call vừa end: publish call.ended cho cả hai user",
+   "kind": "async",
+   "mechanism": "redis-pubsub",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/calling/calling.service.ts",
+     "line": 710,
+     "quote": "publishRealtimeEvent(this.redis, this.logger, uid, envelope),"
+    },
+    {
+     "file": "apps/core-api/src/common/realtime/redis-realtime-publisher.adapter.ts",
+     "line": 11,
+     "quote": "return this.redis.publish(channel, payload);"
+    }
+   ]
+  },
+  {
+   "from": "redis",
+   "to": "signaling-gateway",
+   "label": "Gateway nhận realtime:user:* qua PSUBSCRIBE",
+   "kind": "async",
+   "mechanism": "redis-pubsub",
+   "evidence": [
+    {
+     "file": "apps/signaling-gateway/src/app/signaling.gateway.ts",
+     "line": 346,
+     "quote": ".psubscribe(REALTIME_USER_CHANNEL_PATTERN)"
+    }
+   ]
+  },
+  {
+   "from": "signaling-gateway",
+   "to": "web",
+   "label": "Emit call.ended tới room user:{userId}",
+   "kind": "async",
+   "mechanism": "socket",
+   "evidence": [
+    {
+     "file": "apps/signaling-gateway/src/app/signaling.gateway.ts",
+     "line": 332,
+     "quote": "this.server.local.to(userRoom(userId)).emit(envelope.event, envelope.data);"
+    }
+   ]
+  },
+  {
+   "from": "calling",
+   "to": "postgres",
+   "label": "Khoá CallSession, ghi VoiceMatchReaction, kiểm tra partner đã like",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/calling/calling.service.ts",
+     "line": 356,
+     "quote": "return await this.dataSource.transaction(async (manager) => {"
+    },
+    {
+     "file": "apps/core-api/src/modules/calling/calling.service.ts",
+     "line": 399,
+     "quote": "const partnerLiked = await manager.existsBy(VoiceMatchReaction, {"
+    }
+   ]
+  },
+  {
+   "from": "calling",
+   "to": "friend",
+   "label": "Cả hai đã like: ensureFriendship(manager, nguồn VoiceMatch)",
+   "kind": "call",
+   "mechanism": "di-call",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/calling/calling.service.ts",
+     "line": 404,
+     "quote": "await this.friendService.ensureFriendship("
+    }
+   ]
+  },
+  {
+   "from": "friend",
+   "to": "postgres",
+   "label": "INSERT Friendship và Conversation (orIgnore) bằng manager chung",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/friend/friend.service.ts",
+     "line": 120,
+     "quote": ".into(Friendship)"
+    },
+    {
+     "file": "apps/core-api/src/modules/friend/friend.service.ts",
+     "line": 128,
+     "quote": ".into(Conversation)"
+    }
+   ]
+  },
+  {
+   "from": "calling",
+   "to": "friend",
+   "label": "areFriends: chỉ khi partner chưa like, để xác định matched",
+   "kind": "call",
+   "mechanism": "di-call",
+   "note": "Code là `partnerLiked || await areFriends(...)`: nếu partner đã like thì matched=true và không gọi areFriends. areFriends đọc qua friendshipRepo, không dùng manager của giao dịch.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/calling/calling.service.ts",
+     "line": 413,
+     "quote": "(await this.friendService.areFriends(user.userId, partnerId));"
+    }
+   ]
+  },
+  {
+   "from": "calling",
+   "to": "web",
+   "label": "200 {liked, matched, friendUserId}",
+   "kind": "return",
+   "mechanism": "http"
+  }
+ ],
+ "groups": [
+  {
+   "from": 3,
+   "to": 3,
+   "label": "Gọi LiveKit đối soát",
+   "kind": "external"
+  },
+  {
+   "from": 5,
+   "to": 7,
+   "label": "Publish realtime best-effort",
+   "kind": "besteffort"
+  },
+  {
+   "from": 8,
+   "to": 11,
+   "label": "Giao dịch likeCall",
+   "kind": "transaction"
+  }
+ ],
+ "invariants": [
+  "Reaction, Friendship và Conversation nằm cùng một giao dịch trên khoá pessimistic_write của CallSession, nên hai lượt like đồng thời được tuần tự hoá và không tạo Friendship thiếu Conversation.",
+  "Calling không tự ghi Friendship: nó gọi FriendService.ensureFriendship với manager của mình để Friend là nơi duy nhất sở hữu bảng đó mà vẫn chung một giao dịch.",
+  "Đối soát LiveKit chạy trước giao dịch like, nên call đã bị đối phương rời được chốt ended (kèm dọn Matching) trước khi ghi reaction."
+ ],
+ "failureModes": [
+  {
+   "when": "Redis publish call.ended lỗi",
+   "effect": "publishRealtimeEvent nuốt lỗi và chỉ log cảnh báo; client còn polling fallback, like vẫn xử lý bình thường."
+  },
+  {
+   "when": "LiveKit listParticipantIdentities lỗi",
+   "effect": "reconcileCallWithLivekit bắt lỗi, ghi debug và trả call nguyên trạng; like vẫn tiếp tục."
+  },
+  {
+   "when": "Vi phạm unique reaction (nhánh dự phòng khi race; hiếm vì đã khoá CallSession)",
+   "effect": "Giao dịch rollback; likeCall bắt lỗi unique, đọc lại call và trả matched theo areFriends."
+  },
+  {
+   "when": "Call đang pending, hoặc là call kiểu Friend",
+   "effect": "Ném DomainException CALL_NOT_ENDED (409), không ghi reaction."
+  }
+ ],
+ "dataIssues": [],
+ "uncertain": []
+}

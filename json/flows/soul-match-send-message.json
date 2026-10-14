@@ -1,0 +1,234 @@
+{
+ "id": "soul-match-send-message",
+ "title": "Gửi tin nhắn ẩn danh trong phòng Soul Match",
+ "summary": "Thành viên gửi tin nhắn ẩn danh trong phòng Soul Match. Soul Match không sở hữu MatchSession và quan hệ bạn bè, nên phải hỏi Matching và Friend, hỏi User về trạng thái ban, rồi lưu tin trong transaction và đẩy realtime qua Redis và gateway.",
+ "caption": "Soul Match kiểm quyền với Matching, Friend, User, lưu tin trong transaction rồi đẩy realtime tới cả hai phía qua Redis và signaling-gateway.",
+ "participants": [
+  {
+   "id": "web",
+   "label": "Web client",
+   "kind": "client"
+  },
+  {
+   "id": "soul-match",
+   "label": "Soul Match",
+   "kind": "service"
+  },
+  {
+   "id": "matching",
+   "label": "Matching",
+   "kind": "service"
+  },
+  {
+   "id": "friend",
+   "label": "Friend",
+   "kind": "service"
+  },
+  {
+   "id": "user",
+   "label": "User",
+   "kind": "service"
+  },
+  {
+   "id": "postgres",
+   "label": "PostgreSQL",
+   "kind": "infra"
+  },
+  {
+   "id": "redis",
+   "label": "Redis",
+   "kind": "infra"
+  },
+  {
+   "id": "signaling-gateway",
+   "label": "Signaling Gateway",
+   "kind": "service"
+  }
+ ],
+ "steps": [
+  {
+   "from": "web",
+   "to": "soul-match",
+   "label": "POST /soul-match/sessions/:id/messages kèm Idempotency-Key",
+   "kind": "call",
+   "mechanism": "http",
+   "note": "Route được JwtAuthGuard bảo vệ; riêng endpoint này throttle 60 request/phút.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/soul-match/soul-match.controller.ts",
+     "line": 85,
+     "quote": "@Post('sessions/:id/messages')"
+    }
+   ]
+  },
+  {
+   "from": "soul-match",
+   "to": "matching",
+   "label": "Lấy MatchSession theo id để xác nhận người gọi là thành viên",
+   "kind": "call",
+   "mechanism": "di-call",
+   "note": "Không phải thành viên hoặc không có session thì trả 404 gộp; session chưa confirmed thì CHAT_NOT_OPEN.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/soul-match/soul-match.service.ts",
+     "line": 434,
+     "quote": "const session = await this.matchingService.findSessionById(sessionId);"
+    }
+   ]
+  },
+  {
+   "from": "soul-match",
+   "to": "friend",
+   "label": "Hỏi hai người đã là bạn chưa (matched) để tính phase phòng",
+   "kind": "call",
+   "mechanism": "di-call",
+   "note": "Nếu đã là bạn hoặc còn trong thời gian chat thì phase là Chatting; ngược lại Rating hoặc Closed.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/soul-match/soul-match.service.ts",
+     "line": 474,
+     "quote": "const matched = await this.friendService.areFriends("
+    }
+   ]
+  },
+  {
+   "from": "soul-match",
+   "to": "user",
+   "label": "Lấy hồ sơ người gửi để kiểm tra tài khoản có bị khoá không",
+   "kind": "call",
+   "mechanism": "di-call",
+   "note": "Status Banned thì trả 403 USER_BANNED.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/soul-match/soul-match.service.ts",
+     "line": 137,
+     "quote": "const profile = await this.userService.getByIdOrThrow(user.userId);"
+    }
+   ]
+  },
+  {
+   "from": "soul-match",
+   "to": "postgres",
+   "label": "Khoá dòng MatchSession (pessimistic_write) và kiểm tra lại giờ chat",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "note": "Cùng lock với bước rating để tin nhắn không lọt giữa snapshot và chuyển sang Friend Chat.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/soul-match/soul-match.service.ts",
+     "line": 163,
+     "quote": "const lockedSession = await manager.findOne(MatchSession, {"
+    }
+   ]
+  },
+  {
+   "from": "soul-match",
+   "to": "postgres",
+   "label": "Lưu SoulChatMessage với idempotencyKey có tiền tố userId",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "note": "Trùng khoá thì unique violation, được xử lý như replay.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/soul-match/soul-match.service.ts",
+     "line": 186,
+     "quote": "return manager.save("
+    }
+   ]
+  },
+  {
+   "from": "soul-match",
+   "to": "redis",
+   "label": "Publish soul message tới realtime:user của người gửi (me) và đối phương (partner)",
+   "kind": "async",
+   "mechanism": "redis-pubsub",
+   "note": "senderRole tính riêng cho từng người nhận để gateway không cần biết về ẩn danh. Lỗi publish bị logger.warn nuốt.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/soul-match/soul-match.service.ts",
+     "line": 215,
+     "quote": "return publishRealtimeEvent("
+    },
+    {
+     "file": "apps/core-api/src/common/realtime/redis-realtime-publisher.adapter.ts",
+     "line": 11,
+     "quote": "return this.redis.publish(channel, payload);"
+    }
+   ]
+  },
+  {
+   "from": "redis",
+   "to": "signaling-gateway",
+   "label": "Gateway nhận qua PSUBSCRIBE realtime:user:*",
+   "kind": "async",
+   "mechanism": "redis-pubsub",
+   "evidence": [
+    {
+     "file": "apps/signaling-gateway/src/app/signaling.gateway.ts",
+     "line": 346,
+     "quote": ".psubscribe(REALTIME_USER_CHANNEL_PATTERN)"
+    }
+   ]
+  },
+  {
+   "from": "signaling-gateway",
+   "to": "web",
+   "label": "Emit sự kiện tới room user của từng người nhận",
+   "kind": "async",
+   "mechanism": "socket",
+   "evidence": [
+    {
+     "file": "apps/signaling-gateway/src/app/signaling.gateway.ts",
+     "line": 332,
+     "quote": "this.server.local.to(userRoom(userId)).emit(envelope.event, envelope.data);"
+    }
+   ]
+  },
+  {
+   "from": "soul-match",
+   "to": "web",
+   "label": "Trả SoulMessageDto của tin vừa lưu (hoặc tin cũ nếu replay)",
+   "kind": "return",
+   "mechanism": "http"
+  }
+ ],
+ "groups": [
+  {
+   "from": 5,
+   "to": 6,
+   "label": "Transaction lưu tin nhắn",
+   "kind": "transaction"
+  },
+  {
+   "from": 7,
+   "to": 9,
+   "label": "Realtime best-effort sau khi lưu",
+   "kind": "besteffort"
+  }
+ ],
+ "invariants": [
+  "Phải hỏi Matching và Friend trước khi mở transaction: phase phòng (chat, rating, đóng) suy ra từ MatchSession và việc đã là bạn, mà Soul Match không sở hữu hai dữ liệu này.",
+  "Lock dòng MatchSession trong cùng transaction với lúc lưu tin, dùng chung lock với rating, để không có tin nhắn nào lọt giữa bước snapshot và bước chuyển sang Friend Chat.",
+  "Publish realtime chỉ chạy sau khi transaction commit xong, nên người nhận không bao giờ thấy sự kiện của tin chưa được lưu."
+ ],
+ "failureModes": [
+  {
+   "when": "Publish Redis thất bại",
+   "effect": "Lỗi bị nuốt và ghi logger.warn; tin đã lưu, request vẫn thành công, client dùng polling fallback."
+  },
+  {
+   "when": "Idempotency-Key bị gửi lại (unique violation)",
+   "effect": "Cùng session và nội dung thì trả lại tin cũ, không bắn realtime lại; khác nội dung thì 409 MESSAGE_IDEMPOTENCY_CONFLICT."
+  },
+  {
+   "when": "Hết giờ chat và chưa là bạn, hoặc tài khoản bị khoá",
+   "effect": "Trả 409 CHAT_NOT_OPEN hoặc 403 USER_BANNED, không ghi gì vào DB."
+  },
+  {
+   "when": "Nội dung vượt SOUL_CHAT_MESSAGE_MAX_LENGTH",
+   "effect": "Trả 422 MESSAGE_TOO_LONG trước khi mở transaction, không ghi DB."
+  }
+ ],
+ "dataIssues": [],
+ "uncertain": []
+}

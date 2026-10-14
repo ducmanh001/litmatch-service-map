@@ -1,0 +1,1011 @@
+{
+ "id": "calling",
+ "title": "Calling",
+ "tagline": "Vòng đời CallSession voice 2 người trên LiveKit",
+ "deployable": "core-api",
+ "role": "Sở hữu CallSession (pending/active/ended), VoiceMatchReaction, token join LiveKit và bộ đếm thời gian Voice Match enforce ở server (7 phút, pending timeout, reconnect grace). KHÔNG sở hữu MatchSession (Matching ghi), Friendship (Friend ghi), cũng không chạy SFU (media-server) và không có export cho module khác gọi vào.",
+ "owns": [
+  "bảng call_sessions (status, roomName, joinedA/BAt, startedAt, reconnectStartedAt, endReason, durationSeconds, callKind)",
+  "bảng voice_match_reactions (unique callId + raterUserId)",
+  "room LiveKit tên call-{callSessionId} (tạo ngầm khi participant đầu tiên vào, xoá khi end)"
+ ],
+ "confidence": "high",
+ "endpoints": [
+  {
+   "id": "e1",
+   "kind": "rest",
+   "method": "POST",
+   "path": "/api/v1/calling/match-sessions/:matchSessionId/join",
+   "purpose": "Member của voice MatchSession đã confirmed tạo/lấy CallSession (unique match_session_id) và nhận token LiveKit TTL ngắn + livekitUrl theo region; call đã ended trả 409 CALL_ENDED. Throttle 20/phút.",
+   "auth": "jwt",
+   "file": "apps/core-api/src/modules/calling/calling.controller.ts",
+   "line": 30,
+   "quote": "@Post('match-sessions/:matchSessionId/join')"
+  },
+  {
+   "id": "e2",
+   "kind": "rest",
+   "method": "POST",
+   "path": "/api/v1/calling/friends/:friendUserId/join",
+   "purpose": "Mở/lấy friend call lâu dài (canonical pair, không MatchSession, không free timer) chỉ khi hai bên follow nhau và không block, rồi mint token. Throttle 20/phút; không đủ điều kiện trả 404 chung.",
+   "auth": "jwt",
+   "file": "apps/core-api/src/modules/calling/calling.controller.ts",
+   "line": 55,
+   "quote": "@Post('friends/:friendUserId/join')"
+  },
+  {
+   "id": "e3",
+   "kind": "rest",
+   "method": "GET",
+   "path": "/api/v1/calling/calls/:id",
+   "purpose": "Poll fallback của call.ended: trả trạng thái call + liked/matched/friendUserId, chỉ member (404 gộp chống oracle). Không thuần đọc: gọi LiveKit listParticipants để đối soát phòng khi webhook mất và có thể chuyển call sang joined/active hoặc ended ngay trong request GET này (reconcileCallWithLivekit).",
+   "auth": "jwt",
+   "file": "apps/core-api/src/modules/calling/calling.controller.ts",
+   "line": 76,
+   "quote": "@Get('calls/:id')"
+  },
+  {
+   "id": "e4",
+   "kind": "rest",
+   "method": "POST",
+   "path": "/api/v1/calling/calls/:id/end",
+   "purpose": "Member chủ động kết thúc call, idempotent (lock FOR UPDATE), chốt luôn MatchSession voice ở Matching, dọn room và phát call.ended.",
+   "auth": "jwt",
+   "file": "apps/core-api/src/modules/calling/calling.controller.ts",
+   "line": 94,
+   "quote": "@Post('calls/:id/end')"
+  },
+  {
+   "id": "e5",
+   "kind": "rest",
+   "method": "POST",
+   "path": "/api/v1/calling/match-sessions/:matchSessionId/end",
+   "purpose": "Rời màn Voice Match: end call nếu đã có, rồi chốt MatchSession ended kể cả khi CallSession chưa được tạo.",
+   "auth": "jwt",
+   "file": "apps/core-api/src/modules/calling/calling.controller.ts",
+   "line": 113,
+   "quote": "@Post('match-sessions/:matchSessionId/end')"
+  },
+  {
+   "id": "e6",
+   "kind": "rest",
+   "method": "POST",
+   "path": "/api/v1/calling/calls/:id/like",
+   "purpose": "Ghi consent like immutable khi call active/ended (khoá CallSession, unique reaction); đủ like hai chiều thì tạo Friendship + Conversation trong CÙNG transaction. Friend call bị chặn.",
+   "auth": "jwt",
+   "file": "apps/core-api/src/modules/calling/calling.controller.ts",
+   "line": 126,
+   "quote": "@Post('calls/:id/like')"
+  },
+  {
+   "id": "e7",
+   "kind": "webhook",
+   "method": "POST",
+   "path": "/api/v1/calling/webhooks/livekit",
+   "purpose": "Nhận webhook LiveKit (participant_joined/left/connection_aborted, room_finished): verify chữ ký JWT trên raw body rồi mới cập nhật state; room không phải call-* bị bỏ qua, luôn 200 khi đã verify.",
+   "auth": "webhook-signature",
+   "file": "apps/core-api/src/modules/calling/webhooks/livekit-webhook.controller.ts",
+   "line": 35,
+   "quote": "@Post('livekit')"
+  },
+  {
+   "id": "e8",
+   "kind": "socket-emit",
+   "method": "EMIT",
+   "path": "call.ended",
+   "purpose": "Realtime call.ended {callId, matchSessionId, reason, durationSeconds} gửi cho cả hai user sau khi call chuyển ended (best-effort, poll GET /calling/calls/:id là fallback).",
+   "auth": "internal",
+   "file": "apps/core-api/src/modules/calling/calling.service.ts",
+   "line": 700,
+   "quote": "event: RealtimeEvents.CallEnded,"
+  },
+  {
+   "id": "e9",
+   "kind": "job",
+   "method": "WORKER",
+   "path": "CallTickerService.onApplicationBootstrap",
+   "purpose": "Ticker chạy mỗi CALLING_TICKER_INTERVAL_MS (một instance một lúc nhờ advisory lock): end pending_timeout, end sau reconnect grace, end free_limit khi Voice Match vượt CALLING_FREE_CALL_SECONDS.",
+   "auth": "internal",
+   "file": "apps/core-api/src/modules/calling/jobs/call-ticker.service.ts",
+   "line": 48,
+   "quote": "onApplicationBootstrap(): void {"
+  }
+ ],
+ "collaborators": [
+  {
+   "id": "c1",
+   "label": "gate follow + tạo Friendship",
+   "what": "ProfileSocialService.canCall(userId, friendUserId) cho friend call; FriendService.ensureFriendship(manager, a, b, VoiceMatch) khi mutual like; FriendService.areFriends để tính matched/friendUserId.",
+   "why": "Quan hệ follow/block/bạn bè do Friend sở hữu nên Calling không được tự tính; ensureFriendship nhận EntityManager của transaction like để Friendship + Conversation được tạo cùng lúc với VoiceMatchReaction, không bao giờ có Friendship thiếu Conversation.",
+   "ifMissing": "Người bị block hoặc không follow nhau vẫn mint được token gọi; mutual like có thể để lại reaction mà không có Friendship, hoặc Friendship không có Conversation khi retry.",
+   "with": "friend",
+   "withKind": "service",
+   "direction": "out",
+   "mechanism": "di-call",
+   "endpoints": [
+    "e2",
+    "e3",
+    "e4",
+    "e6"
+   ],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/calling/calling.service.ts",
+     "line": 208,
+     "quote": "if (!(await this.profileSocialService.canCall(user.userId, friendUserId))) {"
+    },
+    {
+     "file": "apps/core-api/src/modules/calling/calling.service.ts",
+     "line": 297,
+     "quote": "const matched = await this.friendService.areFriends(user.userId, partnerId);"
+    },
+    {
+     "file": "apps/core-api/src/modules/calling/calling.service.ts",
+     "line": 404,
+     "quote": "await this.friendService.ensureFriendship("
+    }
+   ],
+   "basis": "ast",
+   "logic": {
+    "verdict": "sound",
+    "note": "ensureFriendship insert Friendship + Conversation orIgnore trên cùng manager; canCall kiểm block 2 chiều rồi mutual follow."
+   }
+  },
+  {
+   "id": "c2",
+   "label": "đọc/chốt MatchSession voice",
+   "what": "MatchingService.findSessionById (kiểm member/matchType=voice/status=confirmed), endVoiceSession (user rời) và endVoiceSessionForCall(sessionId, userA, userB) sau khi call terminal.",
+   "why": "Matching là module DUY NHẤT được ghi MatchSession; call kết thúc từ webhook/ticker/nút end đều phải chốt session ended TRƯỚC khi phát call.ended để user quay lại tìm match không bị session confirmed cũ giữ lại (calling.service.ts:685-692). Hệ quả thứ tự: nếu bước chốt này ném lỗi thì deleteRoom và call.ended bị bỏ qua và không retry (xem notes). Join cũng re-check session sau khi tạo CallSession để chặn race với endMatchSession.",
+   "ifMissing": "User kẹt trong Voice Match session cũ không vào được queue mới; call pending orphan nằm chờ ticker timeout khi đối phương đã rời; join được cho session không còn hợp lệ.",
+   "with": "matching",
+   "withKind": "service",
+   "direction": "out",
+   "mechanism": "di-call",
+   "endpoints": [
+    "e1",
+    "e3",
+    "e4",
+    "e5",
+    "e6",
+    "e9"
+   ],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/calling/calling.service.ts",
+     "line": 105,
+     "quote": "const session = await this.matchingService.findSessionById(matchSessionId);"
+    },
+    {
+     "file": "apps/core-api/src/modules/calling/calling.service.ts",
+     "line": 167,
+     "quote": "await this.matchingService.findSessionById(matchSessionId);"
+    },
+    {
+     "file": "apps/core-api/src/modules/calling/calling.service.ts",
+     "line": 317,
+     "quote": "await this.matchingService.endVoiceSession(user, call.matchSessionId);"
+    }
+   ],
+   "basis": "ast",
+   "logic": {
+    "verdict": "sound",
+    "note": "cleanupEndedCall await endVoiceSessionForCall không bắt lỗi trước deleteRoom/publish; call đã commit Ended nên không retry — đúng."
+   }
+  },
+  {
+   "id": "c3",
+   "label": "đọc User.region",
+   "what": "UserService.getByIdOrThrow(userAId/userBId) để lấy region rồi resolveLivekitUrl(LIVEKIT_REGION_URLS, LIVEKIT_URL, userA.region).",
+   "why": "Region thuộc User; để cả hai client của cùng một call nối cùng endpoint LiveKit, URL phải tất định theo region của call.userAId (ADR 0005). Chỉ tra khi bật multi-region, lỗi lookup luôn fallback LIVEKIT_URL nên không chặn join.",
+   "ifMissing": "Hai bên có thể nhận hai URL khác nhau hoặc luôn dùng URL mặc định, tăng latency khi triển khai nhiều region.",
+   "with": "user",
+   "withKind": "service",
+   "direction": "out",
+   "mechanism": "di-call",
+   "endpoints": [
+    "e1",
+    "e2"
+   ],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/calling/calling.service.ts",
+     "line": 583,
+     "quote": "this.userService.getByIdOrThrow(call.userAId),"
+    },
+    {
+     "file": "apps/core-api/src/modules/calling/calling.service.ts",
+     "line": 584,
+     "quote": "this.userService.getByIdOrThrow(call.userBId),"
+    }
+   ],
+   "basis": "ast",
+   "logic": {
+    "verdict": "sound",
+    "note": "Chỉ tra user khi hasLivekitRegionUrls, dùng region userA, catch rồi fallback LIVEKIT_URL — khớp code."
+   }
+  },
+  {
+   "id": "c4",
+   "label": "mint token, xoá room",
+   "what": "LivekitRoomPort -> LivekitSdkClient: mintJoinToken(roomName, userId, ttl) khi join, deleteRoom khi end, listParticipantIdentities khi GET call, receiveWebhook để verify chữ ký.",
+   "why": "Âm thanh đi thẳng client <-> LiveKit nên chỉ core-api (giữ API secret) mới được cấp quyền vào room: identity = userId từ JWT, room do server đặt tên nên client không tự chọn. Phải xoá room khi end để không leak tài nguyên SFU và đối soát listParticipants vì webhook có thể mất.",
+   "ifMissing": "Client không có token nên không vào được phòng; room SFU không được dọn; webhook mất thì call kẹt pending tới CALLING_PENDING_TIMEOUT_SECONDS rồi bị ticker end dù hai bên đang nói (chỉ GET có reconcile listParticipants mới cứu được).",
+   "with": "media-server",
+   "withKind": "service",
+   "direction": "out",
+   "mechanism": "sdk",
+   "endpoints": [
+    "e1",
+    "e2",
+    "e3",
+    "e4",
+    "e5",
+    "e6",
+    "e9"
+   ],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/calling/calling.service.ts",
+     "line": 579,
+     "quote": "if (!hasLivekitRegionUrls(regionUrls)) return defaultUrl;"
+    },
+    {
+     "file": "apps/core-api/src/modules/calling/calling.service.ts",
+     "line": 591,
+     "quote": "return resolveLivekitUrl(regionUrls, defaultUrl, userA.region);"
+    },
+    {
+     "file": "apps/core-api/src/modules/calling/clients/livekit-room.adapter.ts",
+     "line": 21,
+     "quote": "return this.client.mintJoinToken(roomName, identity, ttlSeconds, {"
+    }
+   ],
+   "basis": "ast",
+   "logic": {
+    "verdict": "corrected",
+    "note": "ifMissing 'treo vô hạn' sai: ticker vẫn end pending_timeout / free_limit / reconnect-grace."
+   }
+  },
+  {
+   "id": "c5",
+   "label": "phát call.ended",
+   "what": "publishRealtimeEvent(redis, logger, userId, envelope) với RealtimeEvents.CallEnded {callId, matchSessionId, reason, durationSeconds} cho userA và userB.",
+   "why": "Khi ticker/webhook/đối phương kết thúc, client của bên còn lại không có request nào đang chờ nên cần được đẩy sự kiện để dừng màn hình call ngay; core-api chỉ publish vào realtime:user:{userId}, signaling-gateway giữ socket và relay. Publish chạy SAU commit của endById và SAU khi Matching đã chốt session; best-effort (lỗi publish bị nuốt, không rollback) vì GET /calling/calls/:id polling là fallback. Nếu bước chốt MatchSession ném lỗi thì event không bao giờ được publish (xem notes).",
+   "ifMissing": "Bên còn lại chỉ biết call đã ended sau vòng poll kế tiếp, tức UI treo/đồng hồ chạy tiếp vài giây.",
+   "with": "signaling-gateway",
+   "withKind": "service",
+   "direction": "out",
+   "mechanism": "redis-pubsub",
+   "endpoints": [
+    "e8"
+   ],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/calling/calling.service.ts",
+     "line": 710,
+     "quote": "publishRealtimeEvent(this.redis, this.logger, uid, envelope),"
+    }
+   ],
+   "basis": "ast",
+   "logic": {
+    "verdict": "sound",
+    "note": "publish sau endById commit và sau endVoiceSessionForCall; publishRealtimeEvent catch lỗi chỉ log warn; lỗi chốt session làm bỏ qua event."
+   }
+  },
+  {
+   "id": "c7",
+   "label": "call_sessions + reactions",
+   "what": "Đọc/ghi CallSession (status, mốc joined/started/reconnect, endReason, durationSeconds) và VoiceMatchReaction; transaction + pessimistic_write lock trên call row; ticker quét theo status/created_at.",
+   "why": "State machine phải bền và serialize được: lock FOR UPDATE là chốt chặn race end-vs-tick và webhook retry/out-of-order, unique match_session_id đảm bảo 1 session = 1 call, unique (callId, raterUserId) làm like idempotent. durationSeconds lấy theo giờ server, không tin client hay LiveKit.",
+   "ifMissing": "Hai webhook/ticker/nút end cùng lúc có thể end đôi (cleanup + call.ended bắn hai lần), tạo hai call cho một session hoặc đếm sai thời lượng 7 phút.",
+   "with": "postgres",
+   "withKind": "infra",
+   "direction": "out",
+   "mechanism": "shared-db",
+   "endpoints": [
+    "e1",
+    "e2",
+    "e3",
+    "e4",
+    "e5",
+    "e6",
+    "e7",
+    "e9"
+   ],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/calling/entities/call-session.entity.ts",
+     "line": 35,
+     "quote": "@Entity({ name: 'call_sessions' })"
+    },
+    {
+     "file": "apps/core-api/src/modules/calling/entities/voice-match-reaction.entity.ts",
+     "line": 10,
+     "quote": "@Entity({ name: 'voice_match_reactions' })"
+    }
+   ],
+   "review": {
+    "verdict": "supported"
+   },
+   "logic": {
+    "verdict": "sound",
+    "note": "pessimistic_write trong endById/markJoined/likeCall, unique match_session và (callId, raterUserId), durationSeconds theo giờ server đều đã xác nhận."
+   }
+  },
+  {
+   "id": "c50",
+   "with": "media-server",
+   "withKind": "service",
+   "direction": "in",
+   "mechanism": "webhook",
+   "endpoints": [
+    "e7"
+   ],
+   "label": "webhook participant/room",
+   "what": "LiveKit POST http://host.docker.internal:3000/api/v1/calling/webhooks/livekit (livekit.yaml) với event participant_joined, participant_left, participant_connection_aborted, room_finished kèm Authorization JWT ký bằng API key. Cùng sự kiện còn tới /party/webhooks/livekit vì livekit.yaml khai báo cả hai url; calling bỏ qua room không phải call-*.",
+   "why": "Chỉ SFU biết người dùng thực sự đã vào/ra phòng; CallSession chỉ chuyển pending -> active (startedAt, mốc đếm 7 phút) khi cả hai identity joined, và mở reconnect grace khi rớt. Webhook phải nằm ở core-api vì state + timer thuộc core-api, SFU không có business logic.",
+   "ifMissing": "Call kẹt pending tới pending_timeout dù hai bên đang nói, đồng hồ 7 phút không bắt đầu, rớt kết nối không được phát hiện (chỉ còn backstop listParticipants khi có GET).",
+   "evidence": [
+    {
+     "file": "apps/media-server/livekit.yaml",
+     "line": 27,
+     "quote": "- http://host.docker.internal:3000/api/v1/calling/webhooks/livekit"
+    },
+    {
+     "file": "apps/core-api/src/modules/calling/webhooks/livekit-webhook.controller.ts",
+     "line": 35,
+     "quote": "@Post('livekit')"
+    }
+   ],
+   "review": {
+    "verdict": "supported"
+   },
+   "logic": {
+    "verdict": "corrected",
+    "note": "livekit.yaml dùng http://host.docker.internal:3000, không phải core-api:3000."
+   }
+  },
+  {
+   "id": "c51",
+   "with": "media-server",
+   "withKind": "service",
+   "direction": "both",
+   "mechanism": "config",
+   "endpoints": [
+    "e1",
+    "e7"
+   ],
+   "label": "chung API key LiveKit",
+   "what": "LIVEKIT_API_KEY/LIVEKIT_API_SECRET của core-api phải trùng LIVEKIT_KEYS của media-server; webhook của LiveKit ký bằng cùng key (LIVEKIT_WEBHOOK_API_KEY).",
+   "why": "Token join do core-api ký và webhook do LiveKit ký đều là JWT dùng chung một cặp key; core-api verify webhook bằng chính key này nên hai deployable bắt buộc cấu hình đồng bộ.",
+   "ifMissing": "Lệch key: LiveKit từ chối token join, hoặc core-api trả 401 cho mọi webhook nên call không bao giờ active.",
+   "evidence": [
+    {
+     "file": "apps/media-server/docker-compose.yml",
+     "line": 13,
+     "quote": "LIVEKIT_WEBHOOK_API_KEY: ${LIVEKIT_API_KEY:-devkey}"
+    }
+   ],
+   "review": {
+    "verdict": "supported"
+   },
+   "logic": {
+    "verdict": "sound",
+    "note": "docker-compose: LIVEKIT_KEYS và LIVEKIT_WEBHOOK_API_KEY lấy từ LIVEKIT_API_KEY; core-api đọc LIVEKIT_API_KEY/SECRET."
+   }
+  },
+  {
+   "id": "c52",
+   "with": "web",
+   "withKind": "client",
+   "direction": "both",
+   "mechanism": "sdk",
+   "endpoints": [
+    "e1",
+    "e2"
+   ],
+   "label": "nối thẳng LiveKit bằng token",
+   "what": "Web nhận {token, livekitUrl} từ REST join rồi connectMediaRoom(joined.token, joined.livekitUrl) bằng livekit-client để publish mic và phát audio của bên kia.",
+   "why": "Media không đi qua core-api; client phải tự mở kết nối WebRTC tới SFU bằng token ngắn hạn core-api cấp, và gọi lại join (token mới) khi rớt mạng vì call chưa ended.",
+   "ifMissing": "Không có luồng âm thanh: core-api chỉ giữ state, không relay audio.",
+   "evidence": [
+    {
+     "file": "apps/web/src/features/voice-match/hooks/use-call-room.ts",
+     "line": 94,
+     "quote": "connected = await connectMediaRoom(joined.token, joined.livekitUrl);"
+    }
+   ],
+   "review": {
+    "verdict": "supported"
+   },
+   "logic": {
+    "verdict": "sound",
+    "note": "connectMediaRoom(joined.token, joined.livekitUrl) xác nhận ở use-call-room.ts; core-api không relay audio."
+   }
+  },
+  {
+   "id": "c53",
+   "with": "web",
+   "withKind": "client",
+   "direction": "in",
+   "mechanism": "http",
+   "endpoints": [
+    "e3"
+   ],
+   "label": "poll trạng thái call",
+   "what": "useCall poll GET /calling/calls/:id (refetchInterval khi call còn active) để nhận status/endReason khi realtime call.ended không tới.",
+   "why": "Realtime best-effort nên REST polling là đường chắc chắn; chính GET này còn kích hoạt đối soát LiveKit nên client phải poll để call pending được chuyển active khi webhook mất.",
+   "ifMissing": "Mất socket hoặc webhook thì UI không biết call đã kết thúc hoặc đã active.",
+   "evidence": [
+    {
+     "file": "apps/web/src/features/voice-match/api.ts",
+     "line": 74,
+     "quote": "const res = await apiClient.GET('/api/v1/calling/calls/{id}', {"
+    }
+   ],
+   "review": {
+    "verdict": "supported"
+   },
+   "logic": {
+    "verdict": "sound",
+    "note": "GET /calling/calls/:id gọi reconcileCallWithLivekit nên poll thật sự kích hoạt đối soát; useCall có refetchInterval."
+   }
+  },
+  {
+   "id": "c54",
+   "with": "web",
+   "withKind": "client",
+   "direction": "out",
+   "mechanism": "socket",
+   "endpoints": [
+    "e8"
+   ],
+   "label": "call.ended dừng màn gọi",
+   "what": "Web nghe RealtimeEvents.CallEnded ở cả màn Voice Match (voice-call-room) lẫn màn friend call (friend-call-room); khi data.callId trùng call đang mở thì đóng phòng LiveKit và chuyển màn kết thúc.",
+   "why": "Bên còn lại không có request nào đang chờ khi đối phương/ticker/webhook kết thúc call, nên event call.ended là cách duy nhất để UI dừng ngay; payload chỉ có callId/matchSessionId/reason/durationSeconds nên client so callId rồi mới hành động, và vẫn có poll GET /calling/calls/:id làm fallback.",
+   "ifMissing": "Bên còn lại vẫn thấy đồng hồ và phòng audio chạy cho tới vòng poll kế tiếp, friend call (không có timer tự end) có thể treo UI lâu hơn.",
+   "evidence": [
+    {
+     "file": "apps/web/src/features/voice-match/components/voice-call-room.tsx",
+     "line": 200,
+     "quote": "useRealtimeEvent<CallEndedEventData>(RealtimeEvents.CallEnded, (data) => {"
+    },
+    {
+     "file": "apps/web/src/features/friend-chat/components/friend-call-room.tsx",
+     "line": 94,
+     "quote": "useRealtimeEvent<CallEndedEventData>(RealtimeEvents.CallEnded, (data) => {"
+    }
+   ],
+   "review": {
+    "verdict": "supported"
+   },
+   "logic": {
+    "verdict": "sound",
+    "note": "Cả hai màn so data.callId === callId rồi disconnect và invalidate query — đúng."
+   }
+  }
+ ],
+ "waivedEdges": [
+  {
+   "with": "redis",
+   "reason": "CALLING_REDIS chỉ là client để publish call.ended (đã mô tả ở edge signaling-gateway), không có key/queue/lock riêng của calling"
+  }
+ ],
+ "excludedRoutes": [],
+ "notes": [
+  "Doc là docs/services/calling-service.md (README map tên này; không có calling.md). Doc § 4 và comment trong call-ticker.service.ts vẫn nói 'hai người đã mutual like có thể gọi lại lâu dài', nhưng code (commit ca0067f) và chính § 6 của doc yêu cầu ProfileSocialService.canCall = không block + follow hai chiều; mutual like KHÔNG còn đủ để gọi friend call.",
+  "Doc § 2 mô tả upsert 'ON CONFLICT (match_session_id)'; code thực tế là callRepo.save rồi bắt isUniqueViolation và đọc lại row của bên thắng race (cùng hiệu ứng, khác cách làm).",
+  "Calling KHÔNG tự tạo room LiveKit: LivekitRoomPort của calling chỉ có mintJoinToken/deleteRoom/listParticipantIdentities/receiveWebhook; LivekitSdkClient.createRoom (common/livekit/livekit-sdk.client.ts:74) tồn tại nhưng chỉ party-room dùng (spec gọi với \"party-1\"). media-server/livekit.yaml không có khối room: nào (không tắt auto_create), nên room được tạo khi participant đầu tiên connect bằng token theo mặc định của LiveKit server (suy luận từ mặc định của LiveKit, không có dòng code hay doc của repo nói thẳng). Calling chỉ xoá room ở cleanupEndedCall.",
+  "Không có thông báo 'đang gọi/ringing' hay web push cho bên kia trong module calling: commit ca0067f (web push) chỉ đổi điều kiện joinFriendCall sang canCall và thêm trang friend-call phía web; người nhận chỉ biết cuộc gọi qua UI/chat, và call.ended là realtime event duy nhất của module.",
+  "Friend call không đi qua free timer nhưng vẫn bị ticker sweepPending (pending quá CALLING_PENDING_TIMEOUT_SECONDS) và sweepReconnectTimeouts end; chỉ nhánh free_limit bị giới hạn call_kind = 'voice_match'.",
+  "CALLING_REDIS chỉ được dùng để publish call.ended (calling-redis.provider.ts) và đóng khi shutdown; không có Redis key/queue/lock riêng của calling. Ticker dùng pg_try_advisory_xact_lock (qua ManagedInterval clusterSingleton) trên Postgres, không phải Redis.",
+  "cleanupEndedCall (calling.service.ts:684-713) chạy tuần tự endVoiceSessionForCall -> deleteRoom (lỗi bị nuốt) -> publish call.ended, và chỉ được gọi từ nhánh justEnded (:477-480), tức đúng 1 lần/call. endVoiceSessionForCall KHÔNG được bọc try/catch và có thể ném lỗi (lỗi DB, hoặc \"Call members không khớp Voice Match session ... dữ liệu hỏng\" ở matching.service.ts:604). Khi ném, CallSession đã ended trong DB nhưng room SFU không bị xoá, call.ended không được publish và không có lần thử lại (lần end sau thấy call đã ended nên justEnded=false); client chỉ còn poll GET /calling/calls/:id và LiveKit tự dọn room rỗng. Comment \"cả 2 đều best-effort\" chỉ đúng cho deleteRoom và publish, không đúng cho bước chốt MatchSession.",
+  "media-server/livekit.yaml đăng ký CẢ HAI webhook url (/api/v1/calling/webhooks/livekit và /api/v1/party/webhooks/livekit): mọi sự kiện của mọi room đều được POST tới cả hai controller, mỗi module tự lọc theo prefix room (call-* / party-*) sau khi verify chữ ký. Lệch prefix API_GLOBAL_PREFIX làm LiveKit POST 404 âm thầm (comment trong livekit.yaml, UX audit 2026-07-14)."
+ ],
+ "techniques": [
+  {
+   "slug": "jwt-bearer",
+   "name": "JWT bearer (access token không trạng thái)",
+   "model": "JWT bearer",
+   "how": "Client gửi access token (JWT) trong header Authorization; guard xác minh chữ ký và hạn rồi gắn user vào request, server không giữ phiên.",
+   "why": "Không trạng thái nên scale ngang dễ và không phải tra DB mỗi request; đánh đổi là không thu hồi tức thì trước khi token hết hạn.",
+   "alternative": "Session phía server (cookie + kho phiên) thu hồi được tức thì nhưng cần kho phiên dùng chung.",
+   "endpoints": [
+    "e1",
+    "e2",
+    "e3",
+    "e4",
+    "e5",
+    "e6"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/app/app.module.ts",
+     "line": 117,
+     "quote": "{ provide: APP_GUARD, useClass: JwtAuthGuard },"
+    }
+   ],
+   "auto": true,
+   "count": 6,
+   "id": "t1",
+   "local": "Các endpoint join/end/like/get của calling đi qua JwtAuthGuard là APP_GUARD toàn cục."
+  },
+  {
+   "slug": "webhook-signature",
+   "name": "Xác thực chữ ký/token của webhook",
+   "model": "Chữ ký webhook",
+   "how": "Webhook phải được xác minh chữ ký/token của nhà cung cấp trên body gốc trước khi xử lý.",
+   "why": "Endpoint webhook công khai nên chữ ký là cách duy nhất chứng minh nguồn gửi.",
+   "endpoints": [
+    "e7"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/calling/webhooks/livekit-webhook.controller.ts",
+     "line": 51,
+     "quote": "event = await this.livekit.receiveWebhook(rawBody, authHeader);"
+    }
+   ],
+   "auto": true,
+   "count": 2,
+   "id": "t2",
+   "local": "Webhook LiveKit gọi livekit.receiveWebhook(rawBody, authHeader) để xác thực chữ ký/token; lỗi thì ném DomainException CallingErrors.WEBHOOK_INVALID."
+  },
+  {
+   "slug": "rebac-relationship",
+   "name": "Kiểm tra theo quan hệ (bạn bè, block, thành viên phòng)",
+   "model": "ReBAC",
+   "how": "Cho phép hoặc chặn dựa trên quan hệ giữa hai người: bạn bè, block, cùng phòng.",
+   "why": "Quyền trong mạng xã hội phụ thuộc quan hệ động chứ không phải vai trò cố định.",
+   "endpoints": [
+    "e3",
+    "e4",
+    "e6"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/calling/calling.service.ts",
+     "line": 297,
+     "quote": "const matched = await this.friendService.areFriends(user.userId, partnerId);"
+    }
+   ],
+   "auto": true,
+   "count": 3,
+   "id": "t3",
+   "local": "Sau khi like, CallingService gọi friendService.areFriends(user.userId, partnerId) để trả cờ matched, cho biết hai bên đã thành bạn hay chưa."
+  },
+  {
+   "id": "t4",
+   "slug": "server-authoritative",
+   "name": "Server là nguồn sự thật về giá/quyền (client không quyết)",
+   "model": "Server quyết định",
+   "how": "Giá, số dư, trạng thái và quyền do server tính; client chỉ gửi ý định.",
+   "why": "Client có thể bị sửa nên mọi thứ liên quan tiền hoặc quyền phải do server quyết.",
+   "endpoints": [
+    "e4",
+    "e7",
+    "e9"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/calling/calling.service.ts",
+     "line": 465,
+     "quote": "// durationSeconds theo giờ server core-api — nguồn sự thật thời lượng (spec § 1)"
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "local": "durationSeconds và mốc startedAt tính theo giờ server core-api (có trừ thời gian reconnect), không tin client hay LiveKit; ticker enforce 7 phút ở server.",
+   "addedByLogicReview": true
+  },
+  {
+   "slug": "capability-token",
+   "name": "Capability token ngắn hạn (grant của LiveKit)",
+   "model": "Capability token",
+   "how": "Cấp token ngắn hạn mang sẵn quyền cụ thể (publish, subscribe) cho đúng phòng.",
+   "why": "Quyền được enforce ngay ở hệ thống media chứ không tin client.",
+   "endpoints": [
+    "e1",
+    "e2"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/calling/calling.service.ts",
+     "line": 191,
+     "quote": "const token = await this.livekit.mintJoinToken("
+    },
+    {
+     "file": "apps/core-api/src/modules/calling/clients/livekit-room.adapter.ts",
+     "line": 16,
+     "quote": "mintJoinToken("
+    },
+    {
+     "file": "apps/core-api/src/modules/calling/ports/livekit-room.ts",
+     "line": 14,
+     "quote": "abstract mintJoinToken("
+    }
+   ],
+   "auto": true,
+   "count": 6,
+   "id": "t5",
+   "local": "Join call gọi livekit.mintJoinToken(roomName, userId, CALLING_TOKEN_TTL_SECONDS) để cấp token LiveKit ngắn hạn làm quyền vào phòng."
+  },
+  {
+   "slug": "global-guard-public-optout",
+   "name": "Guard toàn cục + @Public() để mở",
+   "model": "Mặc định đóng",
+   "how": "Guard JWT đăng ký toàn cục; route nào muốn mở phải gắn @Public() tường minh.",
+   "why": "An toàn theo mặc định: quên cấu hình thì bị chặn chứ không bị mở.",
+   "alternative": "Gắn guard từng controller: dễ sót route.",
+   "endpoints": [
+    "e7"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/calling/webhooks/livekit-webhook.controller.ts",
+     "line": 34,
+     "quote": "@Public()"
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "id": "t6",
+   "local": "LivekitWebhookController.handle gắn @Public() để mở khỏi JwtAuthGuard toàn cục vì LiveKit gọi bằng chữ ký riêng, không có bearer."
+  },
+  {
+   "slug": "db-transaction",
+   "name": "Transaction DB (một đơn vị công việc)",
+   "model": "Transaction",
+   "how": "Gói nhiều thao tác ghi vào một transaction: cùng commit hoặc cùng rollback.",
+   "why": "Tránh trạng thái nửa vời khi lỗi giữa chừng.",
+   "endpoints": [
+    "e6",
+    "e1",
+    "e3",
+    "e4",
+    "e5",
+    "e9",
+    "e7"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/calling/calling.service.ts",
+     "line": 356,
+     "quote": "return await this.dataSource.transaction(async (manager) => {"
+    }
+   ],
+   "auto": true,
+   "count": 5,
+   "id": "t7",
+   "local": "CallingService chạy dataSource.transaction(async (manager) => ...) khi like/kết thúc call, đọc CallSession trong transaction."
+  },
+  {
+   "slug": "pessimistic-lock",
+   "name": "Khoá bi quan (SELECT … FOR UPDATE)",
+   "model": "Khoá bi quan",
+   "how": "SELECT … FOR UPDATE khoá hàng đang xử lý để giao dịch khác phải chờ.",
+   "why": "Chặn hai request song song cùng đọc rồi cùng ghi (race) trên số dư, ticket, session.",
+   "alternative": "Khoá lạc quan (version) ít chờ hơn nhưng phải retry khi xung đột.",
+   "endpoints": [
+    "e6",
+    "e1",
+    "e3",
+    "e4",
+    "e5",
+    "e9",
+    "e7"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/calling/calling.service.ts",
+     "line": 359,
+     "quote": "lock: { mode: 'pessimistic_write' },"
+    }
+   ],
+   "auto": true,
+   "count": 5,
+   "id": "t8",
+   "local": "Trong transaction like/end, manager.findOne(CallSession, { lock: { mode: 'pessimistic_write' } }) khoá dòng call để tránh đua giữa end, webhook và ticker."
+  },
+  {
+   "slug": "unique-constraint-guard",
+   "name": "Ràng buộc unique ở DB làm chốt chặn cuối",
+   "model": "Ràng buộc DB",
+   "how": "Ràng buộc unique hoặc index duy nhất ở DB là chốt chặn cuối cho trùng lặp.",
+   "why": "Check-rồi-insert ở tầng code vẫn dính race; DB mới bảo đảm tuyệt đối.",
+   "endpoints": [
+    "e1",
+    "e2",
+    "e6"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/calling/calling.service.ts",
+     "line": 159,
+     "quote": "if (!isUniqueViolation(err)) throw err;"
+    },
+    {
+     "file": "apps/core-api/src/modules/calling/entities/call-session.entity.ts",
+     "line": 36,
+     "quote": "@Index('uq_call_sessions_match_session', ['matchSessionId'], { unique: true })"
+    },
+    {
+     "file": "apps/core-api/src/modules/calling/entities/voice-match-reaction.entity.ts",
+     "line": 12,
+     "quote": "unique: true,"
+    }
+   ],
+   "auto": true,
+   "count": 5,
+   "id": "t9",
+   "local": "Index uq_call_sessions_match_session unique trên matchSessionId; hai bên join đồng thời thì bên thua bắt isUniqueViolation và lấy call đã tạo."
+  },
+  {
+   "id": "t10",
+   "slug": "state-machine",
+   "name": "Máy trạng thái tường minh",
+   "model": "State machine",
+   "how": "Trạng thái và các bước chuyển hợp lệ được định nghĩa tường minh.",
+   "why": "Chặn chuyển trạng thái sai thứ tự và dễ kiểm thử.",
+   "endpoints": [
+    "e4",
+    "e7",
+    "e9"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/calling/calling.service.ts",
+     "line": 619,
+     "quote": "call.status = CallSessionStatus.Active;"
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "local": "CallSession đi pending->active (markJoined khi cả hai identity joined) ->ended (endById); trạng thái ended terminal, mọi nguồn end đều đi qua một transition có khoá.",
+   "addedByLogicReview": true
+  },
+  {
+   "id": "t11",
+   "slug": "publish-after-commit",
+   "name": "Chỉ publish sau khi commit",
+   "model": "Sau commit",
+   "how": "Chỉ phát realtime sau khi transaction commit.",
+   "why": "Không bắn sự kiện của giao dịch bị rollback.",
+   "endpoints": [
+    "e4",
+    "e5",
+    "e7",
+    "e8",
+    "e9"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/calling/calling.service.ts",
+     "line": 480,
+     "quote": "await this.cleanupEndedCall(result.call);"
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "local": "endById commit transaction rồi mới cleanupEndedCall (chốt MatchSession, deleteRoom, publish call.ended); chỉ lần justEnded mới dọn nên retry không bắn call.ended đôi.",
+   "addedByLogicReview": true
+  },
+  {
+   "id": "t12",
+   "slug": "polling-fallback",
+   "name": "REST polling làm fallback cho realtime best-effort",
+   "model": "Polling dự phòng",
+   "how": "Client vẫn đọc trạng thái qua REST khi realtime rớt.",
+   "why": "Realtime best-effort nên cần đường dự phòng đúng đắn.",
+   "endpoints": [
+    "e3",
+    "e8"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/calling/calling.service.ts",
+     "line": 264,
+     "quote": "/** Poll fallback của realtime `call.ended` — chỉ member (gộp 404, chống oracle). */"
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "local": "GET /calling/calls/:id là fallback của call.ended và còn reconcileCallWithLivekit để đưa pending sang active hoặc chốt ended khi webhook mất.",
+   "addedByLogicReview": true
+  },
+  {
+   "id": "t13",
+   "slug": "grace-timer",
+   "name": "Timer ân hạn trước khi đóng/kết thúc",
+   "model": "Timer ân hạn",
+   "how": "Hẹn giờ ân hạn trước khi đóng hoặc kết thúc (ví dụ host rớt mạng).",
+   "why": "Tránh đóng phòng vì mất kết nối thoáng qua.",
+   "endpoints": [
+    "e7",
+    "e9"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/calling/jobs/call-ticker.service.ts",
+     "line": 96,
+     "quote": "'CALLING_RECONNECT_WINDOW_SECONDS',"
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "local": "Rớt kết nối mở reconnectStartedAt; sweepReconnectTimeouts end call sau CALLING_RECONNECT_WINDOW_SECONDS, còn quay lại đủ hai bên thì dời startedAt bù thời gian gián đoạn.",
+   "addedByLogicReview": true
+  },
+  {
+   "id": "t14",
+   "slug": "singleton-worker-lock",
+   "name": "Worker singleton nhờ advisory lock",
+   "model": "Singleton",
+   "how": "Advisory lock bảo đảm chỉ một replica chạy worker tại một thời điểm.",
+   "why": "Tránh chạy trùng khi scale nhiều pod.",
+   "endpoints": [
+    "e9"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/calling/jobs/call-ticker.service.ts",
+     "line": 57,
+     "quote": "clusterSingleton: { dataSource: this.dataSource },"
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "local": "CallTickerService khởi động ManagedInterval với clusterSingleton dataSource nên pg_try_advisory_xact_lock chỉ cho một replica chạy tick tại một thời điểm.",
+   "addedByLogicReview": true
+  },
+  {
+   "slug": "interval-worker",
+   "name": "Worker lặp (interval / ManagedInterval)",
+   "model": "Worker lặp",
+   "how": "Vòng lặp theo chu kỳ trong process (ManagedInterval).",
+   "why": "Worker nền đơn giản, không cần hạ tầng queue riêng.",
+   "endpoints": [],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/calling/jobs/call-ticker.service.ts",
+     "line": 39,
+     "quote": "private readonly job = new ManagedInterval();"
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "id": "t15",
+   "local": "CallTickerService dùng ManagedInterval (clusterSingleton) chạy sweepPending, sweepReconnectTimeouts và processActiveCalls (free_limit) mỗi CALLING_TICKER_INTERVAL_MS, phục vụ endpoint job e9."
+  },
+  {
+   "slug": "rate-limit-throttler",
+   "name": "Rate limit (@nestjs/throttler)",
+   "model": "Rate limit",
+   "how": "@Throttle giới hạn số request theo khoảng thời gian cho từng route.",
+   "why": "Chặn spam và dò quét bằng cách giới hạn số request theo thời gian, trước khi request tới logic nghiệp vụ.",
+   "endpoints": [
+    "e1",
+    "e2",
+    "e3",
+    "e4",
+    "e5",
+    "e6",
+    "e7"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/calling/calling.controller.ts",
+     "line": 33,
+     "quote": "@Throttle({ default: { limit: 20, ttl: minutes(1) } })"
+    },
+    {
+     "file": "apps/core-api/src/app/app.module.ts",
+     "line": 116,
+     "quote": "{ provide: APP_GUARD, useClass: ThrottlerGuard },"
+    }
+   ],
+   "auto": true,
+   "count": 9,
+   "id": "t16",
+   "local": "Chỉ join match-session (e1) và join friend (e2) có @Throttle riêng 20 mỗi phút trên nền ThrottlerGuard toàn cục; các endpoint end/like/get/webhook dùng throttle mặc định."
+  },
+  {
+   "slug": "best-effort-degrade",
+   "name": "Best-effort: lỗi phụ không phá nghiệp vụ chính",
+   "model": "Best-effort",
+   "how": "Việc phụ (push, realtime) lỗi chỉ ghi log, không phá nghiệp vụ chính.",
+   "why": "Nghiệp vụ đã commit không nên hỏng vì kênh phụ.",
+   "endpoints": [
+    "e8"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/calling/calling.metrics.ts",
+     "line": 26,
+     "quote": "* publish realtime) — best-effort bắt buộc (cùng nguyên tắc `publishRealtimeEvent`,"
+    },
+    {
+     "file": "apps/core-api/src/modules/calling/calling.service.ts",
+     "line": 683,
+     "quote": "/** Sau khi end: dọn room SFU (chống leak) + báo realtime — cả 2 đều best-effort. */"
+    },
+    {
+     "file": "apps/core-api/src/modules/calling/ports/livekit-room.ts",
+     "line": 20,
+     "quote": "/** Đóng room trên SFU — caller gọi best-effort ở MỌI nhánh end (chống leak, docs/10 § Calling). */"
+    }
+   ],
+   "auto": true,
+   "count": 3,
+   "id": "t17",
+   "local": "deleteRoom bắt lỗi chỉ log debug và publishRealtimeEvent nuốt lỗi (client có poll GET); NGOẠI LỆ: endVoiceSessionForCall chạy trước và không bắt lỗi, nếu ném thì deleteRoom và call.ended bị bỏ qua."
+  },
+  {
+   "slug": "openapi-contract",
+   "name": "Hợp đồng OpenAPI + client sinh tự động",
+   "model": "OpenAPI",
+   "how": "OpenAPI sinh từ code và client TypeScript sinh tự động.",
+   "why": "Client và server không lệch hợp đồng.",
+   "endpoints": [
+    "e1",
+    "e2",
+    "e3",
+    "e4",
+    "e5",
+    "e6"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/calling/calling.controller.ts",
+     "line": 34,
+     "quote": "@ApiOperation({"
+    }
+   ],
+   "auto": true,
+   "count": 6,
+   "id": "t18",
+   "local": "CallingController khai báo @ApiOperation/summary cho join, end, like, get call để sinh hợp đồng OpenAPI."
+  },
+  {
+   "id": "t19",
+   "slug": "anti-enumeration",
+   "name": "Chống dò tài khoản",
+   "model": "Chống dò",
+   "how": "Phản hồi đồng nhất để không dò được tài khoản có tồn tại hay không.",
+   "why": "Chống thu thập người dùng.",
+   "endpoints": [
+    "e3"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/calling/calling.service.ts",
+     "line": 264,
+     "quote": "/** Poll fallback của realtime `call.ended` — chỉ member (gộp 404, chống oracle). */"
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "local": "getCall trả CALL_NOT_FOUND 404 gộp cho cả call không tồn tại lẫn người không phải member nên không dò được callId của người khác.",
+   "addedByLogicReview": true
+  }
+ ]
+}

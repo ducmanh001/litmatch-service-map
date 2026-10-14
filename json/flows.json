@@ -1,0 +1,1048 @@
+[
+ {
+  "id": "admin-ban-and-refund",
+  "title": "Admin khoá tài khoản và hoàn giao dịch",
+  "group": "Vận hành (admin)",
+  "services": [
+   "admin",
+   "user",
+   "economy"
+  ],
+  "covers": [
+   "admin|POST /api/v1/admin/users/:id/ban",
+   "admin|POST /api/v1/admin/economy/transactions/:id/refund"
+  ]
+ },
+ {
+  "id": "admin-broadcast-notification",
+  "title": "Admin gửi thông báo hàng loạt",
+  "group": "Vận hành (admin)",
+  "services": [
+   "admin",
+   "user",
+   "economy",
+   "notification"
+  ],
+  "covers": [
+   "admin|POST /api/v1/admin/notifications/broadcast"
+  ]
+ },
+ {
+  "id": "admin-dashboard",
+  "title": "Bảng điều khiển admin",
+  "group": "Vận hành (admin)",
+  "services": [
+   "admin",
+   "user",
+   "economy",
+   "party-room"
+  ],
+  "covers": [
+   "admin|GET /api/v1/admin/dashboard"
+  ]
+ },
+ {
+  "id": "admin-economy-inspect-and-config",
+  "title": "Admin xem ví, giao dịch và chỉnh cấu hình kinh tế",
+  "group": "Vận hành (admin)",
+  "services": [
+   "admin",
+   "economy"
+  ],
+  "covers": [
+   "admin|GET /api/v1/admin/economy/wallet/:userId",
+   "admin|GET /api/v1/admin/economy/users/:userId/transactions",
+   "admin|GET /api/v1/admin/config/economy-catalog",
+   "admin|PATCH /api/v1/admin/config/iap-products/:productId",
+   "admin|PATCH /api/v1/admin/config/vip-plans/:id"
+  ]
+ },
+ {
+  "id": "admin-gift-catalog",
+  "title": "Admin quản lý danh mục quà",
+  "group": "Vận hành (admin)",
+  "services": [
+   "admin",
+   "gift"
+  ],
+  "covers": [
+   "gift|GET /api/v1/gifts",
+   "admin|GET /api/v1/admin/gifts",
+   "admin|POST /api/v1/admin/gifts",
+   "admin|PATCH /api/v1/admin/gifts/:id"
+  ]
+ },
+ {
+  "id": "admin-report-resolution",
+  "title": "Admin xử lý báo cáo vi phạm",
+  "group": "Vận hành (admin)",
+  "services": [
+   "admin",
+   "safety"
+  ],
+  "covers": [
+   "admin|GET /api/v1/admin/reports",
+   "admin|POST /api/v1/admin/reports/:id/resolve",
+   "admin|POST /api/v1/admin/reports/:id/dismiss"
+  ]
+ },
+ {
+  "id": "admin-room-management",
+  "title": "Admin xem và đóng phòng party",
+  "group": "Vận hành (admin)",
+  "services": [
+   "admin",
+   "party-room",
+   "media-server",
+   "signaling-gateway"
+  ],
+  "covers": [
+   "admin|POST /api/v1/admin/rooms/:id/close",
+   "admin|GET /api/v1/admin/rooms"
+  ]
+ },
+ {
+  "id": "admin-staff-and-permissions",
+  "title": "Admin quản lý nhân sự và ma trận quyền",
+  "group": "Vận hành (admin)",
+  "services": [
+   "admin",
+   "user"
+  ],
+  "covers": [
+   "admin|GET /api/v1/admin/permissions",
+   "admin|PATCH /api/v1/admin/permissions/:role/:permission",
+   "admin|GET /api/v1/admin/staff",
+   "admin|PATCH /api/v1/admin/staff/:id/role"
+  ]
+ },
+ {
+  "id": "admin-support-tickets",
+  "title": "Người dùng gửi ticket hỗ trợ, admin xử lý",
+  "group": "Vận hành (admin)",
+  "services": [
+   "support",
+   "admin"
+  ],
+  "covers": [
+   "support|POST /api/v1/support/tickets",
+   "support|GET /api/v1/support/tickets/me",
+   "admin|GET /api/v1/admin/support/tickets",
+   "admin|PATCH /api/v1/admin/support/tickets/:id"
+  ]
+ },
+ {
+  "id": "admin-user-lookup-and-unban",
+  "title": "Admin tra cứu người dùng và mở khoá",
+  "group": "Vận hành (admin)",
+  "services": [
+   "admin",
+   "user"
+  ],
+  "covers": [
+   "admin|GET /api/v1/admin/users",
+   "admin|GET /api/v1/admin/users/:id",
+   "admin|POST /api/v1/admin/users/:id/unban"
+  ]
+ },
+ {
+  "id": "admin-video-moderation-queue",
+  "title": "Admin duyệt hàng chờ video",
+  "group": "Vận hành (admin)",
+  "services": [
+   "admin",
+   "short-video"
+  ],
+  "covers": [
+   "admin|GET /api/v1/admin/videos/pending",
+   "admin|GET /api/v1/admin/videos/published",
+   "admin|POST /api/v1/admin/videos/:id/reject",
+   "admin|POST /api/v1/admin/videos/:id/remove"
+  ]
+ },
+ {
+  "id": "app-shell-health-and-readiness",
+  "title": "Kiểm tra sẵn sàng của core-api (readiness)",
+  "group": "Vận hành (admin)",
+  "services": [
+   "app-shell"
+  ],
+  "covers": [
+   "app-shell|GET /health/ready"
+  ]
+ },
+ {
+  "id": "auth-guest-login-and-socket",
+  "title": "Đăng nhập khách rồi mở kết nối realtime",
+  "group": "Danh tính",
+  "services": [
+   "auth",
+   "user",
+   "signaling-gateway"
+  ],
+  "covers": [
+   "auth|POST /api/v1/auth/guest"
+  ]
+ },
+ {
+  "id": "auth-guest-upgrade",
+  "title": "Nâng cấp tài khoản khách thành tài khoản thật",
+  "group": "Danh tính",
+  "services": [
+   "auth",
+   "user"
+  ],
+  "covers": [
+   "auth|POST /api/v1/auth/upgrade/otp",
+   "auth|POST /api/v1/auth/upgrade/social"
+  ]
+ },
+ {
+  "id": "auth-otp-login",
+  "title": "Đăng nhập bằng OTP điện thoại",
+  "group": "Danh tính",
+  "services": [
+   "auth",
+   "user"
+  ],
+  "covers": [
+   "auth|POST /api/v1/auth/otp/request",
+   "auth|POST /api/v1/auth/otp/verify"
+  ]
+ },
+ {
+  "id": "auth-refresh-and-logout",
+  "title": "Làm mới phiên và đăng xuất (cookie httpOnly + CSRF)",
+  "group": "Danh tính",
+  "services": [
+   "auth",
+   "user"
+  ],
+  "covers": [
+   "auth|POST /api/v1/auth/refresh",
+   "auth|POST /api/v1/auth/logout"
+  ]
+ },
+ {
+  "id": "auth-search-by-phone",
+  "title": "Tìm người theo số điện thoại",
+  "group": "Danh tính",
+  "services": [
+   "auth",
+   "user"
+  ],
+  "covers": [
+   "auth|GET /api/v1/auth/search-by-phone"
+  ]
+ },
+ {
+  "id": "auth-social-login",
+  "title": "Đăng nhập bằng Apple, Google hoặc Facebook",
+  "group": "Danh tính",
+  "services": [
+   "auth",
+   "user"
+  ],
+  "covers": [
+   "auth|POST /api/v1/auth/social"
+  ]
+ },
+ {
+  "id": "avatar-buy-item",
+  "title": "Mua vật phẩm avatar bằng kim cương",
+  "group": "Tiền tệ & quà",
+  "services": [
+   "avatar",
+   "economy"
+  ],
+  "covers": [
+   "avatar|POST /api/v1/avatar/items/:assetId/claim",
+   "avatar|POST /api/v1/avatar/items/:assetId/buy",
+   "avatar|PUT /api/v1/avatar/me/equip"
+  ]
+ },
+ {
+  "id": "calling-end-and-ticker",
+  "title": "Kết thúc cuộc gọi và đồng hồ cuộc gọi",
+  "group": "Ghép đôi & gọi",
+  "services": [
+   "calling",
+   "matching",
+   "signaling-gateway",
+   "external:livekit"
+  ],
+  "covers": [
+   "calling|GET /api/v1/calling/calls/:id",
+   "calling|POST /api/v1/calling/match-sessions/:matchSessionId/end",
+   "calling|CallTickerService.onApplicationBootstrap"
+  ]
+ },
+ {
+  "id": "calling-like-after-call",
+  "title": "Like sau cuộc gọi để thành bạn",
+  "group": "Ghép đôi & gọi",
+  "services": [
+   "calling",
+   "external:livekit",
+   "matching",
+   "friend",
+   "signaling-gateway"
+  ],
+  "covers": [
+   "calling|POST /api/v1/calling/calls/:id/like"
+  ]
+ },
+ {
+  "id": "discovery-browse-and-nearby",
+  "title": "Khám phá người dùng và gần đây",
+  "group": "Ghép đôi & gọi",
+  "services": [
+   "discovery",
+   "safety",
+   "user"
+  ],
+  "covers": [
+   "discovery|GET /api/v1/discovery/browse",
+   "discovery|PUT /api/v1/discovery/nearby/location",
+   "discovery|PUT /api/v1/discovery/nearby/visible",
+   "discovery|GET /api/v1/discovery/nearby"
+  ]
+ },
+ {
+  "id": "economy-outbox-relay",
+  "title": "Relay outbox của Economy ra Kafka",
+  "group": "Tiền tệ & quà",
+  "services": [
+   "economy"
+  ],
+  "covers": [
+   "economy|OutboxRelayService.onApplicationBootstrap"
+  ]
+ },
+ {
+  "id": "economy-reconciliation-and-startup-guards",
+  "title": "Đối soát sổ cái và guard khởi động của verifier",
+  "group": "Tiền tệ & quà",
+  "services": [
+   "economy"
+  ],
+  "covers": [
+   "economy|ReconciliationService.onApplicationBootstrap",
+   "economy|DevIapVerifier.onApplicationBootstrap",
+   "economy|DevAppleNotificationVerifier.onApplicationBootstrap",
+   "economy|DevGoogleRtdnVerifier.onApplicationBootstrap"
+  ]
+ },
+ {
+  "id": "feed-comment-with-notification",
+  "title": "Bình luận bài kèm thông báo",
+  "group": "Xã hội & nội dung",
+  "services": [
+   "feed",
+   "safety",
+   "friend",
+   "user",
+   "notification"
+  ],
+  "covers": [
+   "feed|POST /api/v1/feed/posts/:postId/comments",
+   "feed|GET /api/v1/feed/posts/:postId/comments"
+  ]
+ },
+ {
+  "id": "feed-delete-post",
+  "title": "Xoá bài và bình luận",
+  "group": "Xã hội & nội dung",
+  "services": [
+   "feed",
+   "safety",
+   "friend",
+   "user"
+  ],
+  "covers": [
+   "feed|DELETE /api/v1/feed/posts/:postId",
+   "feed|DELETE /api/v1/feed/comments/:commentId"
+  ]
+ },
+ {
+  "id": "feed-post-with-image",
+  "title": "Đăng bài kèm ảnh: upload presigned rồi gắn asset",
+  "group": "Xã hội & nội dung",
+  "services": [
+   "media",
+   "feed",
+   "user"
+  ],
+  "covers": [
+   "media|POST /api/v1/media/images/upload-intent",
+   "feed|POST /api/v1/feed/posts"
+  ]
+ },
+ {
+  "id": "feed-reaction-with-notification",
+  "title": "Reaction bài kèm thông báo",
+  "group": "Xã hội & nội dung",
+  "services": [
+   "feed",
+   "safety",
+   "friend",
+   "user",
+   "notification"
+  ],
+  "covers": [
+   "feed|POST /api/v1/feed/posts/:postId/reactions",
+   "feed|DELETE /api/v1/feed/posts/:postId/reactions",
+   "feed|GET /api/v1/feed/posts/:postId/reactions"
+  ]
+ },
+ {
+  "id": "feed-read-posts",
+  "title": "Đọc feed và bài đăng",
+  "group": "Xã hội & nội dung",
+  "services": [
+   "feed",
+   "safety",
+   "user",
+   "friend"
+  ],
+  "covers": [
+   "feed|GET /api/v1/feed/posts",
+   "feed|GET /api/v1/feed/users/:userId/posts",
+   "feed|GET /api/v1/feed/posts/:postId"
+  ]
+ },
+ {
+  "id": "friend-direct-call",
+  "title": "Gọi trực tiếp cho bạn bè",
+  "group": "Ghép đôi & gọi",
+  "services": [
+   "calling",
+   "friend",
+   "safety",
+   "user"
+  ],
+  "covers": [
+   "calling|POST /api/v1/calling/friends/:friendUserId/join"
+  ]
+ },
+ {
+  "id": "friend-follow-lists-and-connections",
+  "title": "Danh sách follower/following và danh sách bạn bè",
+  "group": "Xã hội & nội dung",
+  "services": [
+   "friend",
+   "safety",
+   "user"
+  ],
+  "covers": [
+   "friend|GET /api/v1/profiles/:profileUserId/follow-counts",
+   "friend|GET /api/v1/profiles/:profileUserId/followers",
+   "friend|GET /api/v1/profiles/:profileUserId/following",
+   "friend|GET /api/v1/friends/connections"
+  ]
+ },
+ {
+  "id": "friend-list-and-conversation-reads",
+  "title": "Danh sách bạn, đọc tin và streak",
+  "group": "Xã hội & nội dung",
+  "services": [
+   "friend",
+   "user"
+  ],
+  "covers": [
+   "friend|GET /api/v1/friends",
+   "friend|GET /api/v1/conversations/:id/messages",
+   "friend|GET /api/v1/conversations/:id/streak",
+   "friend|POST /api/v1/conversations/:id/read",
+   "friend|POST /api/v1/conversations/:id/mute"
+  ]
+ },
+ {
+  "id": "friend-open-conversation-from-profile",
+  "title": "Mở chat từ hồ sơ trước khi là bạn",
+  "group": "Xã hội & nội dung",
+  "services": [
+   "friend",
+   "user",
+   "safety"
+  ],
+  "covers": [
+   "friend|POST /api/v1/profiles/:profileUserId/conversation",
+   "friend|GET /api/v1/friends/:friendUserId/conversation"
+  ]
+ },
+ {
+  "id": "friend-profile-follow-and-actions",
+  "title": "Theo dõi và xem hành động khả dụng trên hồ sơ",
+  "group": "Xã hội & nội dung",
+  "services": [
+   "friend",
+   "user",
+   "safety"
+  ],
+  "covers": [
+   "friend|GET /api/v1/profiles/:profileUserId/actions",
+   "friend|POST /api/v1/profiles/:profileUserId/follow",
+   "friend|DELETE /api/v1/profiles/:profileUserId/follow"
+  ]
+ },
+ {
+  "id": "friend-streak-warning-job",
+  "title": "Job cảnh báo streak sắp mất",
+  "group": "Xã hội & nội dung",
+  "services": [
+   "friend",
+   "signaling-gateway",
+   "notification"
+  ],
+  "covers": [
+   "friend|StreakWarningJob.onApplicationBootstrap"
+  ]
+ },
+ {
+  "id": "gift-in-party-room",
+  "title": "Tặng quà trong phòng party",
+  "group": "Tiền tệ & quà",
+  "services": [
+   "gift",
+   "party-room",
+   "economy",
+   "notification",
+   "signaling-gateway"
+  ],
+  "covers": [
+   "gift|POST /api/v1/party/rooms/:roomId/gifts"
+  ]
+ },
+ {
+  "id": "gift-on-video",
+  "title": "Tặng quà cho tác giả video",
+  "group": "Tiền tệ & quà",
+  "services": [
+   "gift",
+   "short-video",
+   "user",
+   "economy",
+   "notification"
+  ],
+  "covers": [
+   "gift|POST /api/v1/videos/:videoId/gifts"
+  ]
+ },
+ {
+  "id": "gift-to-profile-chat-gate",
+  "title": "Tặng quà từ hồ sơ để mở chat (cổng quà)",
+  "group": "Tiền tệ & quà",
+  "services": [
+   "gift",
+   "friend",
+   "user",
+   "economy",
+   "notification"
+  ],
+  "covers": [
+   "gift|POST /api/v1/profiles/:profileUserId/gifts"
+  ]
+ },
+ {
+  "id": "iap-store-notifications-and-refund-poll",
+  "title": "Hoàn tiền IAP: webhook Apple/Google và job quét refund",
+  "group": "Tiền tệ & quà",
+  "services": [
+   "economy"
+  ],
+  "covers": [
+   "economy|POST /api/v1/economy/webhooks/apple",
+   "economy|POST /api/v1/economy/webhooks/google/rtdn",
+   "economy|IapRefundPollService.onApplicationBootstrap"
+  ]
+ },
+ {
+  "id": "matching-invite-accept",
+  "title": "Chấp nhận lời mời và tạo phiên ghép",
+  "group": "Ghép đôi & gọi",
+  "services": [
+   "matching",
+   "safety",
+   "user",
+   "signaling-gateway"
+  ],
+  "covers": [
+   "matching|POST /api/v1/matching/invites/:id/accept"
+  ]
+ },
+ {
+  "id": "matching-invite-create",
+  "title": "Mời chơi có chủ đích: tạo và xem lời mời",
+  "group": "Ghép đôi & gọi",
+  "services": [
+   "matching",
+   "safety",
+   "user",
+   "notification"
+  ],
+  "covers": [
+   "matching|POST /api/v1/matching/invites",
+   "matching|GET /api/v1/matching/invites",
+   "matching|GET /api/v1/matching/invites/:id"
+  ]
+ },
+ {
+  "id": "matching-invite-decline-cancel",
+  "title": "Từ chối hoặc huỷ lời mời",
+  "group": "Ghép đôi & gọi",
+  "services": [
+   "matching",
+   "user"
+  ],
+  "covers": [
+   "matching|POST /api/v1/matching/invites/:id/decline",
+   "matching|POST /api/v1/matching/invites/:id/cancel"
+  ]
+ },
+ {
+  "id": "matching-sweeper-jobs",
+  "title": "Job dọn lời mời và vé ghép đôi hết hạn",
+  "group": "Ghép đôi & gọi",
+  "services": [
+   "matching"
+  ],
+  "covers": [
+   "matching|InviteSweeperService.onApplicationBootstrap",
+   "matching|TicketSweeperService.onApplicationBootstrap"
+  ]
+ },
+ {
+  "id": "matching-ticket-status-cancel-speedup",
+  "title": "Xem, huỷ và tăng tốc vé ghép đôi",
+  "group": "Ghép đôi & gọi",
+  "services": [
+   "matching",
+   "economy"
+  ],
+  "covers": [
+   "matching|GET /api/v1/matching/tickets/current",
+   "matching|GET /api/v1/matching/tickets/:id",
+   "matching|DELETE /api/v1/matching/tickets/:id",
+   "matching|POST /api/v1/matching/tickets/:id/speedup"
+  ]
+ },
+ {
+  "id": "matching-to-call",
+  "title": "Từ hàng đợi ghép đôi đến cuộc gọi thoại",
+  "group": "Ghép đôi & gọi",
+  "services": [
+   "matching",
+   "economy",
+   "calling",
+   "signaling-gateway",
+   "media-server"
+  ],
+  "covers": [
+   "matching|POST /api/v1/matching/tickets",
+   "matching|MatcherWorkerService.onApplicationBootstrap",
+   "matching|POST /api/v1/matching/tickets/:id/confirm",
+   "calling|POST /api/v1/calling/match-sessions/:matchSessionId/join",
+   "calling|POST /api/v1/calling/webhooks/livekit",
+   "calling|POST /api/v1/calling/calls/:id/end"
+  ]
+ },
+ {
+  "id": "message-push-notification",
+  "title": "Tin nhắn bạn bè: realtime và Web Push",
+  "group": "Xã hội & nội dung",
+  "services": [
+   "friend",
+   "safety",
+   "notification",
+   "signaling-gateway"
+  ],
+  "covers": [
+   "friend|POST /api/v1/conversations/:id/messages",
+   "notification|POST /api/v1/notifications/web-push/subscription"
+  ]
+ },
+ {
+  "id": "mini-game-session",
+  "title": "Mini game giữa hai bạn bè",
+  "group": "Ghép đôi & gọi",
+  "services": [
+   "mini-game",
+   "friend",
+   "signaling-gateway"
+  ],
+  "covers": [
+   "mini-game|POST /api/v1/mini-game/sessions",
+   "mini-game|POST /api/v1/mini-game/sessions/:id/moves"
+  ]
+ },
+ {
+  "id": "mood-status-visibility",
+  "title": "Trạng thái tâm trạng và quyền xem",
+  "group": "Ghép đôi & gọi",
+  "services": [
+   "mood",
+   "safety"
+  ],
+  "covers": [
+   "mood|GET /api/v1/mood/presets",
+   "mood|GET /api/v1/mood/status/me",
+   "mood|GET /api/v1/mood/status/:userId",
+   "mood|POST /api/v1/mood/status",
+   "mood|DELETE /api/v1/mood/status"
+  ]
+ },
+ {
+  "id": "movie-match-anon-chat-finish-reactions",
+  "title": "Xem phim ẩn danh: chat, reaction và kết thúc",
+  "group": "Ghép đôi & gọi",
+  "services": [
+   "movie-match",
+   "signaling-gateway"
+  ],
+  "covers": [
+   "movie-match|GET /api/v1/movie-match/anon/current",
+   "movie-match|DELETE /api/v1/movie-match/anon/current",
+   "movie-match|POST /api/v1/movie-match/anon/sessions/:id/finish",
+   "movie-match|POST /api/v1/movie-match/anon/sessions/:id/messages",
+   "movie-match|GET /api/v1/movie-match/anon/sessions/:id/messages",
+   "movie-match|POST /api/v1/movie-match/anon/sessions/:id/reactions"
+  ]
+ },
+ {
+  "id": "movie-match-anonymous",
+  "title": "Xem phim chung ẩn danh: hàng đợi, đồng bộ playback, rating",
+  "group": "Ghép đôi & gọi",
+  "services": [
+   "movie-match",
+   "safety",
+   "friend",
+   "signaling-gateway"
+  ],
+  "covers": [
+   "movie-match|POST /api/v1/movie-match/anon/queue",
+   "movie-match|PATCH /api/v1/movie-match/anon/sessions/:id/state",
+   "movie-match|POST /api/v1/movie-match/anon/sessions/:id/rating"
+  ]
+ },
+ {
+  "id": "movie-match-friend-session",
+  "title": "Xem phim chung giữa bạn bè",
+  "group": "Ghép đôi & gọi",
+  "services": [
+   "movie-match",
+   "friend",
+   "signaling-gateway"
+  ],
+  "covers": [
+   "movie-match|POST /api/v1/movie-match/sessions",
+   "movie-match|PATCH /api/v1/movie-match/sessions/:id/state",
+   "movie-match|POST /api/v1/movie-match/sessions/:id/end",
+   "movie-match|GET /api/v1/movie-match/sessions/:id"
+  ]
+ },
+ {
+  "id": "palm-match-queue-and-rating",
+  "title": "Palm Match: vào hàng, lật và đánh giá",
+  "group": "Ghép đôi & gọi",
+  "services": [
+   "palm-match",
+   "safety",
+   "friend"
+  ],
+  "covers": [
+   "palm-match|GET /api/v1/palm-match/reading",
+   "palm-match|POST /api/v1/palm-match/queue",
+   "palm-match|GET /api/v1/palm-match/current",
+   "palm-match|POST /api/v1/palm-match/sessions/:id/flip",
+   "palm-match|POST /api/v1/palm-match/sessions/:id/rating",
+   "palm-match|DELETE /api/v1/palm-match/current"
+  ]
+ },
+ {
+  "id": "party-room-detail-and-comments",
+  "title": "Xem phòng party và bình luận trong phòng",
+  "group": "Phòng party & an toàn",
+  "services": [
+   "party-room",
+   "user",
+   "signaling-gateway"
+  ],
+  "covers": [
+   "party-room|GET /api/v1/party/rooms",
+   "party-room|GET /api/v1/party/rooms/:id",
+   "party-room|GET /api/v1/party/rooms/:id/comments",
+   "party-room|POST /api/v1/party/rooms/:id/comments"
+  ]
+ },
+ {
+  "id": "party-room-leave-and-role-change",
+  "title": "Rời phòng và đổi vai trò thành viên",
+  "group": "Phòng party & an toàn",
+  "services": [
+   "party-room",
+   "media-server",
+   "signaling-gateway"
+  ],
+  "covers": [
+   "party-room|POST /api/v1/party/rooms/:id/leave",
+   "party-room|POST /api/v1/party/rooms/:id/members/:userId/role"
+  ]
+ },
+ {
+  "id": "party-room-lifecycle",
+  "title": "Vòng đời phòng party với LiveKit",
+  "group": "Phòng party & an toàn",
+  "services": [
+   "party-room",
+   "user",
+   "media-server",
+   "signaling-gateway"
+  ],
+  "covers": [
+   "party-room|POST /api/v1/party/rooms",
+   "party-room|POST /api/v1/party/rooms/:id/join",
+   "party-room|POST /api/v1/party/webhooks/livekit",
+   "party-room|PartyRoomSweeperService.onApplicationBootstrap"
+  ]
+ },
+ {
+  "id": "party-room-speaker-invite",
+  "title": "Mời lên nói và phản hồi lời mời",
+  "group": "Phòng party & an toàn",
+  "services": [
+   "party-room",
+   "signaling-gateway",
+   "media-server"
+  ],
+  "covers": [
+   "party-room|POST /api/v1/party/rooms/:id/members/:userId/speaker-invite",
+   "party-room|POST /api/v1/party/rooms/:id/speaker-invite/accept",
+   "party-room|POST /api/v1/party/rooms/:id/speaker-invite/decline"
+  ]
+ },
+ {
+  "id": "payos-topup-webhook",
+  "title": "Nạp kim cương qua PayOS và webhook",
+  "group": "Tiền tệ & quà",
+  "services": [
+   "economy",
+   "external:payos"
+  ],
+  "covers": [
+   "economy|POST /api/v1/economy/payos/orders",
+   "economy|POST /api/v1/economy/webhooks/payos",
+   "economy|GET /api/v1/economy/payos/orders/:orderId"
+  ]
+ },
+ {
+  "id": "safety-block-and-unblock",
+  "title": "Chặn và bỏ chặn người dùng",
+  "group": "Phòng party & an toàn",
+  "services": [
+   "safety",
+   "user"
+  ],
+  "covers": [
+   "safety|POST /api/v1/safety/blocks/:targetUserId",
+   "safety|DELETE /api/v1/safety/blocks/:targetUserId",
+   "safety|GET /api/v1/safety/blocks/:targetUserId"
+  ]
+ },
+ {
+  "id": "safety-report-and-trust-score",
+  "title": "Báo cáo người dùng và trừ điểm tin cậy",
+  "group": "Phòng party & an toàn",
+  "services": [
+   "safety",
+   "user"
+  ],
+  "covers": [
+   "safety|POST /api/v1/safety/reports"
+  ]
+ },
+ {
+  "id": "short-video-browse-and-detail",
+  "title": "Duyệt video ngắn, xem chi tiết, view và reaction",
+  "group": "Xã hội & nội dung",
+  "services": [
+   "short-video",
+   "friend",
+   "user"
+  ],
+  "covers": [
+   "short-video|GET /api/v1/videos",
+   "short-video|GET /api/v1/videos/:id",
+   "short-video|POST /api/v1/videos/:id/views",
+   "short-video|POST /api/v1/videos/:id/reactions",
+   "short-video|DELETE /api/v1/videos/:id/reactions"
+  ]
+ },
+ {
+  "id": "short-video-comments",
+  "title": "Bình luận video ngắn",
+  "group": "Xã hội & nội dung",
+  "services": [
+   "short-video",
+   "user"
+  ],
+  "covers": [
+   "short-video|POST /api/v1/videos/:id/comments",
+   "short-video|GET /api/v1/videos/:id/comments",
+   "short-video|DELETE /api/v1/videos/:id/comments/:commentId"
+  ]
+ },
+ {
+  "id": "short-video-publish-moderation",
+  "title": "Đăng video ngắn và duyệt bởi admin",
+  "group": "Xã hội & nội dung",
+  "services": [
+   "short-video",
+   "admin",
+   "user"
+  ],
+  "covers": [
+   "short-video|POST /api/v1/videos/upload-intent",
+   "short-video|POST /api/v1/videos/:id/finalize",
+   "admin|POST /api/v1/admin/videos/:id/approve"
+  ]
+ },
+ {
+  "id": "short-video-ranking-and-sweeper-jobs",
+  "title": "Job tính điểm xếp hạng và dọn video lỗi",
+  "group": "Xã hội & nội dung",
+  "services": [
+   "short-video"
+  ],
+  "covers": [
+   "short-video|VideoRankingService.onApplicationBootstrap",
+   "short-video|VideoSweeperService.onApplicationBootstrap"
+  ]
+ },
+ {
+  "id": "short-video-report",
+  "title": "Báo cáo video vi phạm",
+  "group": "Xã hội & nội dung",
+  "services": [
+   "short-video",
+   "safety"
+  ],
+  "covers": [
+   "short-video|POST /api/v1/videos/:id/report"
+  ]
+ },
+ {
+  "id": "soul-match-room-reads-and-reveal",
+  "title": "Đọc phòng Soul Match và lộ hồ sơ sau mutual-like",
+  "group": "Ghép đôi & gọi",
+  "services": [
+   "soul-match",
+   "matching",
+   "friend",
+   "user"
+  ],
+  "covers": [
+   "soul-match|GET /api/v1/soul-match/sessions/:id",
+   "soul-match|GET /api/v1/soul-match/sessions/:id/messages",
+   "soul-match|GET /api/v1/soul-match/sessions/:id/partner"
+  ]
+ },
+ {
+  "id": "soul-match-send-message",
+  "title": "Gửi tin nhắn ẩn danh trong phòng Soul Match",
+  "group": "Ghép đôi & gọi",
+  "services": [
+   "soul-match",
+   "matching",
+   "friend",
+   "user",
+   "signaling-gateway"
+  ],
+  "covers": [
+   "soul-match|POST /api/v1/soul-match/sessions/:id/messages"
+  ]
+ },
+ {
+  "id": "soul-match-session",
+  "title": "Phòng chat ẩn danh Soul Match và mutual-like",
+  "group": "Ghép đôi & gọi",
+  "services": [
+   "soul-match",
+   "matching",
+   "friend",
+   "signaling-gateway"
+  ],
+  "covers": [
+   "soul-match|POST /api/v1/soul-match/sessions/:id/rating",
+   "soul-match|POST /api/v1/soul-match/sessions/:id/end"
+  ]
+ },
+ {
+  "id": "story-create-with-image",
+  "title": "Đăng story kèm ảnh và dọn story hết hạn",
+  "group": "Xã hội & nội dung",
+  "services": [
+   "feed",
+   "media"
+  ],
+  "covers": [
+   "feed|POST /api/v1/stories",
+   "feed|StorySweeperService.onApplicationBootstrap"
+  ]
+ },
+ {
+  "id": "story-reply-to-dm",
+  "title": "Trả lời story thành tin nhắn",
+  "group": "Xã hội & nội dung",
+  "services": [
+   "feed",
+   "safety",
+   "user",
+   "friend",
+   "signaling-gateway"
+  ],
+  "covers": [
+   "feed|POST /api/v1/stories/:storyId/reply"
+  ]
+ },
+ {
+  "id": "story-ring-view-and-viewers",
+  "title": "Vòng story, xem story và người đã xem",
+  "group": "Xã hội & nội dung",
+  "services": [
+   "feed",
+   "friend",
+   "safety",
+   "user"
+  ],
+  "covers": [
+   "feed|GET /api/v1/stories/ring",
+   "feed|GET /api/v1/stories/:storyId",
+   "feed|GET /api/v1/stories/:storyId/viewers"
+  ]
+ },
+ {
+  "id": "user-presence-read",
+  "title": "Xem trạng thái online của người dùng",
+  "group": "Danh tính",
+  "services": [
+   "user",
+   "signaling-gateway"
+  ],
+  "covers": [
+   "user|GET /api/v1/users/:id/presence"
+  ]
+ },
+ {
+  "id": "vip-purchase-iap",
+  "title": "Mua VIP và xác minh biên nhận IAP",
+  "group": "Tiền tệ & quà",
+  "services": [
+   "economy"
+  ],
+  "covers": [
+   "economy|POST /api/v1/economy/vip/purchase",
+   "economy|POST /api/v1/economy/iap/verify"
+  ]
+ }
+]

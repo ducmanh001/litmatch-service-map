@@ -1,0 +1,365 @@
+{
+ "id": "soul-match-session",
+ "title": "Phòng chat ẩn danh Soul Match và mutual-like",
+ "summary": "Hai người đã được Matching ghép đôi chat ẩn danh rồi đánh giá lẫn nhau; khi cả hai like thì Soul Match phải nhờ Friend mở Friendship và nhập lịch sử chat, đồng thời khoá hàng MatchSession của Matching để hai rater không bỏ lỡ nhau.",
+ "caption": "Luồng POST /soul-match/sessions/:id/rating: kiểm tra phòng, khoá session, ghi rating, mở Friendship trong cùng transaction rồi đẩy sự kiện realtime; và POST /soul-match/sessions/:id/end: Matching kết thúc session trong transaction rồi Soul Match đẩy soul.ended cho cả hai.",
+ "participants": [
+  {
+   "id": "web",
+   "label": "Web client",
+   "kind": "client"
+  },
+  {
+   "id": "soul-match",
+   "label": "Soul Match",
+   "kind": "service"
+  },
+  {
+   "id": "matching",
+   "label": "Matching",
+   "kind": "service"
+  },
+  {
+   "id": "friend",
+   "label": "Friend",
+   "kind": "service"
+  },
+  {
+   "id": "postgres",
+   "label": "PostgreSQL",
+   "kind": "infra"
+  },
+  {
+   "id": "redis",
+   "label": "Redis pub/sub",
+   "kind": "infra"
+  },
+  {
+   "id": "signaling-gateway",
+   "label": "Signaling gateway",
+   "kind": "service"
+  }
+ ],
+ "steps": [
+  {
+   "from": "web",
+   "to": "soul-match",
+   "label": "POST /soul-match/sessions/:id/rating gửi verdict rude|boring|like",
+   "kind": "call",
+   "mechanism": "http"
+  },
+  {
+   "from": "soul-match",
+   "to": "matching",
+   "label": "Lấy MatchSession để xác định phòng và pha hiện tại",
+   "kind": "call",
+   "mechanism": "di-call",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/soul-match/soul-match.service.ts",
+     "line": 434,
+     "quote": "const session = await this.matchingService.findSessionById(sessionId);"
+    }
+   ]
+  },
+  {
+   "from": "soul-match",
+   "to": "friend",
+   "label": "Kiểm tra hai người đã là bạn chưa (matched)",
+   "kind": "call",
+   "mechanism": "di-call",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/soul-match/soul-match.service.ts",
+     "line": 474,
+     "quote": "const matched = await this.friendService.areFriends("
+    }
+   ]
+  },
+  {
+   "from": "soul-match",
+   "to": "postgres",
+   "label": "Mở transaction, khoá pessimistic_write hàng match_sessions (chỉ khoá, không ghi)",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "note": "Bảng match_sessions thuộc Matching; Soul Match chỉ khoá để tuần tự hoá hai rater.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/soul-match/soul-match.service.ts",
+     "line": 311,
+     "quote": "await manager.findOne(MatchSession, {"
+    }
+   ]
+  },
+  {
+   "from": "soul-match",
+   "to": "postgres",
+   "label": "Đọc rating cũ rồi lưu SoulMatchRating của người đánh giá",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/soul-match/soul-match.service.ts",
+     "line": 331,
+     "quote": "await manager.save("
+    }
+   ]
+  },
+  {
+   "from": "soul-match",
+   "to": "postgres",
+   "label": "Nếu là like: đọc rating của đối phương và toàn bộ tin nhắn ẩn danh",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/soul-match/soul-match.service.ts",
+     "line": 345,
+     "quote": "const partnerRating = await manager.findOneBy(SoulMatchRating, {"
+    }
+   ]
+  },
+  {
+   "from": "soul-match",
+   "to": "friend",
+   "label": "Cả hai like: ensureFriendship(manager, ...) kèm lịch sử chat làm seed",
+   "kind": "call",
+   "mechanism": "di-call",
+   "note": "EntityManager của transaction được truyền sang Friend.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/soul-match/soul-match.service.ts",
+     "line": 362,
+     "quote": "const { created } = await this.friendService.ensureFriendship("
+    }
+   ]
+  },
+  {
+   "from": "friend",
+   "to": "soul-match",
+   "label": "Trả created (Friendship mới hay đã có) rồi transaction commit",
+   "kind": "return",
+   "mechanism": "di-call"
+  },
+  {
+   "from": "soul-match",
+   "to": "redis",
+   "label": "Sau commit, nếu Friendship mới: publish soul.matched cho cả hai user",
+   "kind": "async",
+   "mechanism": "redis-pubsub",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/common/realtime/redis-realtime-publisher.adapter.ts",
+     "line": 11,
+     "quote": "return this.redis.publish(channel, payload);"
+    },
+    {
+     "file": "apps/core-api/src/modules/soul-match/soul-match.service.ts",
+     "line": 398,
+     "quote": "publishRealtimeEvent(this.redis, this.logger, uid, envelope),"
+    }
+   ]
+  },
+  {
+   "from": "redis",
+   "to": "signaling-gateway",
+   "label": "Gateway PSUBSCRIBE realtime:user:* nhận envelope",
+   "kind": "async",
+   "mechanism": "redis-pubsub",
+   "evidence": [
+    {
+     "file": "apps/signaling-gateway/src/app/signaling.gateway.ts",
+     "line": 332,
+     "quote": "this.server.local.to(userRoom(userId)).emit(envelope.event, envelope.data);"
+    }
+   ]
+  },
+  {
+   "from": "signaling-gateway",
+   "to": "web",
+   "label": "Relay envelope xuống socket trong room user:{userId}",
+   "kind": "async",
+   "mechanism": "socket",
+   "evidence": [
+    {
+     "file": "apps/signaling-gateway/src/app/signaling.gateway.ts",
+     "line": 346,
+     "quote": ".psubscribe(REALTIME_USER_CHANNEL_PATTERN)"
+    }
+   ]
+  },
+  {
+   "from": "soul-match",
+   "to": "web",
+   "label": "Trả RateResult { verdict, matched }",
+   "kind": "return",
+   "mechanism": "http"
+  },
+  {
+   "from": "web",
+   "to": "soul-match",
+   "label": "POST /soul-match/sessions/:id/end rời phòng Soul Match",
+   "kind": "call",
+   "mechanism": "http",
+   "note": "Route trả 204 No Content; chỉ người trong phiên mới đóng được vì Matching kiểm lại thành viên.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/soul-match/soul-match.controller.ts",
+     "line": 125,
+     "quote": "@Post('sessions/:id/end')"
+    }
+   ]
+  },
+  {
+   "from": "soul-match",
+   "to": "matching",
+   "label": "Nhờ Matching kết thúc MatchSession Soul của người gọi",
+   "kind": "call",
+   "mechanism": "di-call",
+   "note": "Soul Match không tự ghi match_sessions: bảng này thuộc Matching, nên endSession gọi endSoulSession rồi mới publish.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/soul-match/soul-match.service.ts",
+     "line": 105,
+     "quote": "const session = await this.matchingService.endSoulSession(user, sessionId);"
+    }
+   ]
+  },
+  {
+   "from": "matching",
+   "to": "postgres",
+   "label": "Trong transaction: khoá hàng session, đặt Ended và endedAt",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "note": "Phiên đã Ended thì trả lại nguyên trạng; không thuộc phiên, sai loại Soul hoặc không ở Confirmed thì ném lỗi 404/409 và không có gì được publish.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/matching/matching.service.ts",
+     "line": 568,
+     "quote": "if (session.status === MatchSessionStatus.Ended) return session;"
+    },
+    {
+     "file": "apps/core-api/src/modules/matching/matching.service.ts",
+     "line": 576,
+     "quote": "session.status = MatchSessionStatus.Ended;"
+    }
+   ]
+  },
+  {
+   "from": "soul-match",
+   "to": "redis",
+   "label": "Sau commit: publish soul.ended (reason member_left) cho cả hai user",
+   "kind": "async",
+   "mechanism": "redis-pubsub",
+   "note": "Realtime chỉ là tín hiệu để UI đóng ngay; việc kết thúc đã bền trong DB trước đó. Publish chạy cho cả hai user qua Promise.all, kể cả khi phiên đã Ended từ trước.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/soul-match/soul-match.service.ts",
+     "line": 107,
+     "quote": "event: RealtimeEvents.SoulEnded,"
+    },
+    {
+     "file": "apps/core-api/src/common/realtime/redis-realtime-publisher.adapter.ts",
+     "line": 11,
+     "quote": "return this.redis.publish(channel, payload);"
+    }
+   ]
+  },
+  {
+   "from": "redis",
+   "to": "signaling-gateway",
+   "label": "Gateway PSUBSCRIBE realtime:user:* nhận envelope",
+   "kind": "async",
+   "mechanism": "redis-pubsub",
+   "evidence": [
+    {
+     "file": "apps/signaling-gateway/src/app/signaling.gateway.ts",
+     "line": 346,
+     "quote": ".psubscribe(REALTIME_USER_CHANNEL_PATTERN)"
+    }
+   ]
+  },
+  {
+   "from": "signaling-gateway",
+   "to": "web",
+   "label": "Relay soul.ended xuống socket room user:{userId} của hai bên",
+   "kind": "async",
+   "mechanism": "socket",
+   "evidence": [
+    {
+     "file": "apps/signaling-gateway/src/app/signaling.gateway.ts",
+     "line": 332,
+     "quote": "this.server.local.to(userRoom(userId)).emit(envelope.event, envelope.data);"
+    }
+   ]
+  },
+  {
+   "from": "soul-match",
+   "to": "web",
+   "label": "Trả 204 No Content",
+   "kind": "return",
+   "mechanism": "http"
+  }
+ ],
+ "groups": [
+  {
+   "from": 4,
+   "to": 8,
+   "label": "Một transaction: khoá session, ghi rating, mở Friendship",
+   "kind": "transaction"
+  },
+  {
+   "from": 9,
+   "to": 11,
+   "label": "Realtime sau commit, lỗi publish chỉ ghi log",
+   "kind": "besteffort"
+  },
+  {
+   "from": 15,
+   "to": 15,
+   "label": "Transaction của Matching: khoá và kết thúc session",
+   "kind": "transaction"
+  },
+  {
+   "from": 16,
+   "to": 18,
+   "label": "Realtime sau commit, lỗi publish chỉ ghi log",
+   "kind": "besteffort"
+  }
+ ],
+ "invariants": [
+  "Soul Match khoá hàng match_sessions (FOR UPDATE) trước khi ghi rating để hai rater chạy song song nhìn thấy nhau; không khoá thì hai like có thể cùng kết luận chưa đủ hai like.",
+  "Kiểm tra mutual-like và ensureFriendship nằm CÙNG transaction với insert rating, nên không có trạng thái rating đã ghi mà Friendship chưa mở khi cả hai like.",
+  "Matching là nơi duy nhất ghi match_sessions; Soul Match chỉ khoá hàng này, còn Friendship và lịch sử chat do Friend ghi qua ensureFriendship.",
+  "Realtime chỉ được publish sau khi transaction commit và chỉ khi newlyMatched, nên replay rating không bắn lại soul.matched.",
+  "Rời phòng là transition bền do Matching ghi trong transaction có khoá; soul.ended chỉ là tín hiệu đóng UI, được publish sau khi Matching đã commit."
+ ],
+ "failureModes": [
+  {
+   "when": "Publish Redis soul.matched thất bại",
+   "effect": "publishRealtimeEvent bắt lỗi và chỉ ghi logger.warn; Friendship đã commit, client dựa vào polling fallback."
+  },
+  {
+   "when": "Hai lần submit song song cùng một user vi phạm unique (session, rater)",
+   "effect": "Nhờ khoá pessimistic_write trên match_sessions, lần gửi thứ hai thường thấy rating đã có và replay/assertSameVerdict; nếu vẫn dính unique (session, rater) thì catch isUniqueViolation đọc lại rating ngoài transaction: cùng verdict trả kết quả replay, khác verdict bị assertSameVerdict từ chối."
+  },
+  {
+   "when": "Lỗi trong transaction (ví dụ ensureFriendship ném lỗi)",
+   "effect": "Transaction rollback, rating không được lưu và không có sự kiện realtime nào."
+  },
+  {
+   "when": "Người dùng gửi rating khi phòng đã Closed",
+   "effect": "Ném RATING_NOT_OPEN (409) trước khi mở transaction."
+  },
+  {
+   "when": "Người gọi không thuộc phiên, phiên không phải Soul hoặc chưa ở trạng thái Confirmed khi gọi end",
+   "effect": "Matching ném DomainException (404 SESSION_NOT_FOUND hoặc 409 SESSION_NOT_CALLABLE / SESSION_NOT_PENDING), transaction không ghi gì và không publish soul.ended."
+  },
+  {
+   "when": "Gọi end lần nữa khi phiên đã Ended",
+   "effect": "endSoulSession trả lại session nguyên trạng nhưng endSession không có nhánh chặn, nên soul.ended được publish lại cho cả hai user."
+  }
+ ],
+ "dataIssues": [],
+ "uncertain": []
+}

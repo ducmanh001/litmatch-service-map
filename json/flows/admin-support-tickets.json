@@ -1,0 +1,63 @@
+{
+ "id": "admin-support-tickets",
+ "title": "Người dùng gửi ticket hỗ trợ, admin xử lý",
+ "summary": "Người dùng gửi ticket kèm Idempotency-Key để không bị tạo trùng khi gọi lại, rồi xem lại ticket của mình. Support chỉ có endpoint cho người dùng, nên staff xử lý qua module Admin: Admin kiểm quyền, gọi Support đổi trạng thái và ghi audit log cùng một transaction.",
+ "caption": "Ticket được tạo idempotent ở Support, còn việc admin liệt kê và đổi trạng thái đi qua Admin để kiểm quyền và ghi audit atomically.",
+ "participants": [
+  {"id": "web", "label": "Web client", "kind": "client"},
+  {"id": "admin-console", "label": "Admin console", "kind": "client"},
+  {"id": "support", "label": "Support", "kind": "service"},
+  {"id": "admin", "label": "Admin", "kind": "service"},
+  {"id": "postgres", "label": "PostgreSQL", "kind": "infra"}
+ ],
+ "steps": [
+  {"from": "web", "to": "support", "label": "POST /support/tickets kèm header Idempotency-Key", "kind": "call", "mechanism": "http",
+   "note": "Mọi route REST đều qua JwtAuthGuard nên userId lấy từ token.",
+   "evidence": [{"file": "apps/core-api/src/modules/support/support.controller.ts", "line": 48, "quote": "@IdempotencyKey() idempotencyKey: string,"}]},
+  {"from": "support", "to": "postgres", "label": "Lưu support_tickets với status open và idempotencyKey", "kind": "call", "mechanism": "shared-db",
+   "note": "Nếu vi phạm ràng buộc unique uq_support_ticket_user_idempotency thì đọc lại ticket cũ (findOneByOrFail) và trả lại bản đó; nếu category hoặc message khác thì ném IDEMPOTENCY_CONFLICT (409).",
+   "evidence": [{"file": "apps/core-api/src/modules/support/support.service.ts", "line": 36, "quote": "return await this.ticketRepo.save("}]},
+  {"from": "support", "to": "web", "label": "Trả 201 với ticket vừa tạo (hoặc bản replay)", "kind": "return", "mechanism": "http"},
+  {"from": "web", "to": "support", "label": "GET /support/tickets/me để theo dõi ticket của mình", "kind": "call", "mechanism": "http",
+   "evidence": [{"file": "apps/core-api/src/modules/support/support.controller.ts", "line": 63, "quote": "const page = await this.supportService.listMine("}]},
+  {"from": "support", "to": "postgres", "label": "Query ticket theo userId, phân trang cursor", "kind": "call", "mechanism": "shared-db",
+   "evidence": [{"file": "apps/core-api/src/modules/support/support.service.ts", "line": 111, "quote": "const qb = this.ticketRepo"}]},
+  {"from": "support", "to": "web", "label": "Trả trang ticket của người dùng", "kind": "return", "mechanism": "http"},
+  {"from": "admin-console", "to": "admin", "label": "GET /admin/support/tickets (lọc status, cursor)", "kind": "call", "mechanism": "http",
+   "note": "Endpoint yêu cầu quyền ManageSupport.",
+   "evidence": [{"file": "apps/core-api/src/modules/admin/admin.controller.ts", "line": 321, "quote": "@RequireAdminPermission(AdminPermission.ManageSupport)"}]},
+  {"from": "admin", "to": "support", "label": "Gọi SupportService.listAll(limit, cursor, status)", "kind": "call", "mechanism": "di-call",
+   "evidence": [{"file": "apps/core-api/src/modules/admin/admin.service.ts", "line": 242, "quote": "return this.supportService.listAll(limit, cursor, status);"}]},
+  {"from": "support", "to": "postgres", "label": "Query mọi ticket, lọc theo status nếu có", "kind": "call", "mechanism": "shared-db",
+   "evidence": [{"file": "apps/core-api/src/modules/support/support.service.ts", "line": 111, "quote": "const qb = this.ticketRepo"}]},
+  {"from": "admin", "to": "admin-console", "label": "Trả trang ticket cho moderator", "kind": "return", "mechanism": "http"},
+  {"from": "admin-console", "to": "admin", "label": "PATCH /admin/support/tickets/:id đổi status, staffResponse", "kind": "call", "mechanism": "http",
+   "evidence": [{"file": "apps/core-api/src/modules/admin/admin.controller.ts", "line": 340, "quote": "@RequireAdminPermission(AdminPermission.ManageSupport)"}]},
+  {"from": "admin", "to": "postgres", "label": "Mở transaction cho cập nhật ticket", "kind": "call", "mechanism": "shared-db",
+   "evidence": [{"file": "apps/core-api/src/modules/admin/admin.service.ts", "line": 250, "quote": "return this.dataSource.transaction(async (manager) => {"}]},
+  {"from": "admin", "to": "support", "label": "Gọi SupportService.setStatusWithManager(manager, ...)", "kind": "call", "mechanism": "di-call",
+   "evidence": [{"file": "apps/core-api/src/modules/admin/admin.service.ts", "line": 251, "quote": "const ticket = await this.supportService.setStatusWithManager("}]},
+  {"from": "support", "to": "postgres", "label": "Khóa dòng ticket, kiểm tra chuyển trạng thái, lưu status mới", "kind": "call", "mechanism": "shared-db",
+   "note": "Không tìm thấy ticket thì TICKET_NOT_FOUND (404); chuyển trạng thái không hợp lệ thì INVALID_TRANSITION (409).",
+   "evidence": [{"file": "apps/core-api/src/modules/support/support.service.ts", "line": 83, "quote": "lock: { mode: 'pessimistic_write' },"}]},
+  {"from": "admin", "to": "postgres", "label": "Ghi admin_audit_logs support.ticket.updated cùng manager", "kind": "call", "mechanism": "shared-db",
+   "evidence": [{"file": "apps/core-api/src/modules/admin/admin.service.ts", "line": 256, "quote": "await this.auditLogService.record("}]},
+  {"from": "admin", "to": "admin-console", "label": "Trả ticket đã cập nhật sau khi commit", "kind": "return", "mechanism": "http"}
+ ],
+ "groups": [
+  {"from": 12, "to": 15, "label": "Cập nhật ticket + audit cùng transaction", "kind": "transaction"}
+ ],
+ "invariants": [
+  "Idempotency-Key được ràng buộc unique theo (userId, key) ở bảng support_tickets, nên gọi lại cùng key trả lại ticket cũ thay vì tạo trùng.",
+  "Support không có endpoint cho staff; mọi thao tác admin phải đi qua AdminService để kiểm quyền ManageSupport và để audit log nằm cùng transaction với việc đổi trạng thái.",
+  "setStatusWithManager nhận manager từ Admin và khóa dòng ticket (pessimistic_write), nên hai admin đổi trạng thái đồng thời được tuần tự hóa."
+ ],
+ "failureModes": [
+  {"when": "Gọi lại với cùng Idempotency-Key nhưng category hoặc message khác", "effect": "Support ném IDEMPOTENCY_CONFLICT với HTTP 409, không tạo ticket mới."},
+  {"when": "Chuyển trạng thái không hợp lệ (ví dụ từ resolved về open)", "effect": "Support ném INVALID_TRANSITION (409), transaction rollback nên không có audit log."},
+  {"when": "Ghi audit log thất bại trong transaction", "effect": "Lỗi nổi lên từ callback nên transaction rollback và trạng thái ticket không đổi."},
+  {"when": "Không tìm thấy ticket theo id", "effect": "Support ném TICKET_NOT_FOUND (404)."}
+ ],
+ "dataIssues": [],
+ "uncertain": []
+}

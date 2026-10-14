@@ -1,0 +1,289 @@
+{
+ "id": "auth-guest-login-and-socket",
+ "title": "Đăng nhập khách rồi mở kết nối realtime",
+ "summary": "Người dùng mới lấy phiên khách từ core-api (auth + user + PostgreSQL), rồi mở Socket.IO tới signaling-gateway bằng chính access token đó; gateway tự verify token, giữ quota kết nối và presence trong Redis.",
+ "caption": "Hai chặng nối tiếp: core-api cấp access token khách, sau đó signaling-gateway verify token đó và giữ lease kết nối trong Redis.",
+ "participants": [
+  {
+   "id": "web",
+   "label": "Web client",
+   "kind": "client"
+  },
+  {
+   "id": "auth",
+   "label": "auth (core-api)",
+   "kind": "service"
+  },
+  {
+   "id": "user",
+   "label": "user (core-api)",
+   "kind": "service"
+  },
+  {
+   "id": "postgres",
+   "label": "PostgreSQL",
+   "kind": "infra"
+  },
+  {
+   "id": "signaling-gateway",
+   "label": "signaling-gateway",
+   "kind": "service"
+  },
+  {
+   "id": "redis",
+   "label": "Redis",
+   "kind": "infra"
+  }
+ ],
+ "steps": [
+  {
+   "from": "web",
+   "to": "auth",
+   "label": "POST /auth/guest với deviceId",
+   "kind": "call",
+   "mechanism": "http"
+  },
+  {
+   "from": "auth",
+   "to": "postgres",
+   "label": "Tìm AuthIdentity của thiết bị khách",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/auth/auth.service.ts",
+     "line": 156,
+     "quote": "const existing = await this.identityRepo.findOneBy({"
+    }
+   ]
+  },
+  {
+   "from": "auth",
+   "to": "user",
+   "label": "Nếu identity đã có: lấy user hiện tại",
+   "kind": "call",
+   "mechanism": "di-call",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/auth/auth.service.ts",
+     "line": 162,
+     "quote": "await this.userService.getByIdOrThrow(existing.userId),"
+    }
+   ],
+   "note": "Cũng gọi assertActive: user bị khoá thì ném USER_BANNED (403); identity guest mà user đã nâng cấp (isGuest=false) thì ném GUEST_IDENTITY_RETIRED (401)."
+  },
+  {
+   "from": "auth",
+   "to": "user",
+   "label": "Nếu chưa có: tạo user khách trong transaction",
+   "kind": "call",
+   "mechanism": "di-call",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/auth/auth.service.ts",
+     "line": 170,
+     "quote": "const user = await this.userService.createWithManager(manager, {"
+    }
+   ]
+  },
+  {
+   "from": "auth",
+   "to": "postgres",
+   "label": "Lưu AuthIdentity cùng transaction",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/auth/auth.service.ts",
+     "line": 174,
+     "quote": "await manager.save("
+    }
+   ]
+  },
+  {
+   "from": "auth",
+   "to": "postgres",
+   "label": "Nhánh race: unique violation thì đọc lại identity của request thắng",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/auth/auth.service.ts",
+     "line": 185,
+     "quote": "const identity = await this.identityRepo.findOneByOrFail({"
+    }
+   ],
+   "note": "Chỉ chạy trong catch khi transaction tạo user + identity dính unique violation (hai request song song cùng deviceId); luồng thường không đọc lại sau commit."
+  },
+  {
+   "from": "auth",
+   "to": "user",
+   "label": "Nhánh race: lấy user của identity thắng rồi kiểm tra active/guest",
+   "kind": "call",
+   "mechanism": "di-call",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/auth/auth.service.ts",
+     "line": 192,
+     "quote": "await this.userService.getByIdOrThrow(identity.userId),"
+    }
+   ]
+  },
+  {
+   "from": "auth",
+   "to": "auth",
+   "label": "Ký access JWT (sub = userId, kèm isGuest, role, jti)",
+   "kind": "call",
+   "mechanism": "di-call",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/auth/services/token.service.ts",
+     "line": 47,
+     "quote": "const accessToken = await this.jwtService.signAsync(payload, { expiresIn });"
+    }
+   ],
+   "note": "TokenService.issueForUser ký access JWT bằng jwtService.signAsync; refresh token ngẫu nhiên được hash rồi lưu ở bước kế tiếp."
+  },
+  {
+   "from": "auth",
+   "to": "postgres",
+   "label": "Lưu hash refresh token (RefreshSessionPort.issue) vào refresh_tokens",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/auth/repositories/typeorm-refresh-session.adapter.ts",
+     "line": 18,
+     "quote": "await this.dataSource.getRepository(RefreshToken).insert({"
+    }
+   ]
+  },
+  {
+   "from": "auth",
+   "to": "web",
+   "label": "Trả accessToken, csrfToken, guestDeviceToken; refresh token đi qua cookie",
+   "kind": "return",
+   "mechanism": "http",
+   "note": "finalizeSession set cookie (refresh token httpOnly, csrf) qua setAuthCookies; body JSON gồm accessToken, csrfToken, expiresIn, userId, isGuest, guestDeviceToken, không chứa refreshToken. guestDeviceToken do GuestDeviceTokenService.issue tạo sau khi đăng nhập."
+  },
+  {
+   "from": "web",
+   "to": "signaling-gateway",
+   "label": "Handshake Socket.IO kèm handshake.auth.token",
+   "kind": "call",
+   "mechanism": "socket",
+   "evidence": [
+    {
+     "file": "apps/signaling-gateway/src/app/signaling.gateway.ts",
+     "line": 209,
+     "quote": "const token = (client.handshake.auth as { token?: unknown }).token;"
+    }
+   ]
+  },
+  {
+   "from": "signaling-gateway",
+   "to": "signaling-gateway",
+   "label": "Tự verify JWT, gán userId = payload.sub",
+   "kind": "call",
+   "mechanism": "di-call",
+   "evidence": [
+    {
+     "file": "apps/signaling-gateway/src/app/signaling.gateway.ts",
+     "line": 214,
+     "quote": "await verifyJwtWithRotation<AccessTokenPayload>("
+    }
+   ]
+  },
+  {
+   "from": "signaling-gateway",
+   "to": "redis",
+   "label": "Acquire lease quota và ghi presence (script Lua)",
+   "kind": "call",
+   "mechanism": "redis-state",
+   "evidence": [
+    {
+     "file": "apps/signaling-gateway/src/app/connection-quota.service.ts",
+     "line": 126,
+     "quote": "const result = await this.redis.eval("
+    }
+   ]
+  },
+  {
+   "from": "redis",
+   "to": "signaling-gateway",
+   "label": "Kết quả 1 = nhận kết nối, 0 = vượt giới hạn",
+   "kind": "return",
+   "mechanism": "redis-state"
+  },
+  {
+   "from": "signaling-gateway",
+   "to": "web",
+   "label": "Kết nối được nhận, socket vào room user:{userId}",
+   "kind": "return",
+   "mechanism": "socket",
+   "evidence": [
+    {
+     "file": "apps/signaling-gateway/src/app/signaling.gateway.ts",
+     "line": 173,
+     "quote": "void client.join(userRoom(userId));"
+    }
+   ]
+  },
+  {
+   "from": "signaling-gateway",
+   "to": "redis",
+   "label": "Định kỳ gia hạn lease (leaseMs/3), thất bại thì ngắt socket",
+   "kind": "async",
+   "mechanism": "redis-state",
+   "evidence": [
+    {
+     "file": "apps/signaling-gateway/src/app/signaling.gateway.ts",
+     "line": 290,
+     "quote": ".refresh(userId, leaseId)"
+    }
+   ]
+  }
+ ],
+ "groups": [
+  {
+   "from": 4,
+   "to": 5,
+   "label": "Transaction tạo user khách và identity",
+   "kind": "transaction"
+  }
+ ],
+ "invariants": [
+  "Access token phải được auth ký xong trước khi mở socket vì gateway chỉ chấp nhận handshake có handshake.auth.token verify được bằng JwtService; không có token hợp lệ thì handshake bị từ chối trước khi thành socket.",
+  "Tạo user và AuthIdentity nằm cùng một dataSource.transaction (manager.save, createWithManager) để không sinh user khách mà thiếu identity.",
+  "Gateway lấy userId từ payload.sub của token, không từ client, rồi tự join socket vào room user:{userId}; client không chọn room.",
+  "Lease quota được acquire trong middleware handshake, trước khi socket được tạo; quota và presence cập nhật chung trong một script Lua trên Redis."
+ ],
+ "failureModes": [
+  {
+   "when": "Token thiếu, rỗng, sai chữ ký hoặc thiếu sub",
+   "effect": "authenticate ném lỗi Unauthorized, handshake bị từ chối"
+  },
+  {
+   "when": "Acquire lease trả 0 (vượt số kết nối cho phép)",
+   "effect": "admitConnection trả false, middleware ném CONNECTION_LIMIT_ERROR"
+  },
+  {
+   "when": "Redis lỗi lúc acquire",
+   "effect": "Gateway thử release lease, báo Sentry và từ chối bằng CONNECTION_QUOTA_UNAVAILABLE_ERROR"
+  },
+  {
+   "when": "Refresh lease trả false hoặc lỗi",
+   "effect": "Gateway ngắt socket (fail closed)"
+  }
+ ],
+ "dataIssues": [],
+ "uncertain": [],
+ "resolved": [
+  {
+   "id": "auth-guest-login-and-socket#V16",
+   "status": "confirmed",
+   "finding": "maxConnections = WS_MAX_CONNECTIONS_PER_USER default 3, lease WS_CONNECTION_LEASE_MS default 90000 (k8s base/hosted cùng giá trị). JWT_SECRET min 32 bắt buộc ở cả hai; compose production dùng chung ${JWT_SECRET:?required}, k8s yêu cầu secret giống nhau (secret.yaml), dev qua .env. Giá trị production thật không biết được từ repo.",
+   "original": "Giá trị maxConnections, WS_CONNECTION_LEASE_MS và việc gateway dùng cùng secret JWT với core-api phụ thuộc cấu hình runtime, không quyết định được từ code."
+  }
+ ]
+}

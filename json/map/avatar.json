@@ -1,0 +1,492 @@
+{
+ "id": "avatar",
+ "title": "Avatar",
+ "tagline": "Catalog, sở hữu và trang bị avatar",
+ "deployable": "core-api",
+ "role": "Sở hữu catalog layer avatar (avatar_assets, giá là DATA), quyền sở hữu item (user_avatar_items) và cấu hình đang trang bị (user_avatar_configs, 5 slot). Mua item trả phí là việc của Economy (Avatar chỉ gọi spendDiamond), Avatar không ghi ví/sổ cái và không đụng User.avatarId.",
+ "owns": [
+  "bảng avatar_assets (slot, code, imageUrl, zIndex, priceDiamond, active)",
+  "bảng user_avatar_items (unique userId+avatarAssetId = nguồn sự thật 'đã sở hữu')",
+  "bảng user_avatar_configs (1 dòng/user, 5 cột asset id đang trang bị, lazy-init)"
+ ],
+ "confidence": "high",
+ "endpoints": [
+  {
+   "id": "e1",
+   "kind": "rest",
+   "method": "GET",
+   "path": "/api/v1/avatar/catalog",
+   "purpose": "Liệt kê catalog item đang bật, lọc theo slot tuỳ chọn, sắp theo sortOrder/code; giá do server quyết định. Cần JWT (JwtAuthGuard toàn cục, không @Public).",
+   "auth": "jwt",
+   "file": "apps/core-api/src/modules/avatar/avatar.controller.ts",
+   "line": 49,
+   "quote": "@Get('catalog')"
+  },
+  {
+   "id": "e2",
+   "kind": "rest",
+   "method": "GET",
+   "path": "/api/v1/avatar/me/items",
+   "purpose": "Liệt kê các item avatar user hiện tại đã sở hữu (join user_avatar_items với avatar_assets).",
+   "auth": "jwt",
+   "file": "apps/core-api/src/modules/avatar/avatar.controller.ts",
+   "line": 62,
+   "quote": "@Get('me/items')"
+  },
+  {
+   "id": "e3",
+   "kind": "rest",
+   "method": "POST",
+   "path": "/api/v1/avatar/items/:assetId/claim",
+   "purpose": "Nhận item miễn phí (priceDiamond = 0): ghi sở hữu idempotent ON CONFLICT DO NOTHING, không đi qua Economy; item có giá bị 400 ASSET_REQUIRES_PURCHASE. Trả 204.",
+   "auth": "jwt",
+   "file": "apps/core-api/src/modules/avatar/avatar.controller.ts",
+   "line": 73,
+   "quote": "@Post('items/:assetId/claim')"
+  },
+  {
+   "id": "e4",
+   "kind": "rest",
+   "method": "POST",
+   "path": "/api/v1/avatar/items/:assetId/buy",
+   "purpose": "Mua item trả phí: bắt buộc Idempotency-Key, Economy.spendDiamond trừ DIA (TransactionType.AvatarPurchase) rồi mới ghi sở hữu idempotent; item miễn phí bị 400 ASSET_IS_FREE; replay không trừ tiền lần hai.",
+   "auth": "jwt",
+   "file": "apps/core-api/src/modules/avatar/avatar.controller.ts",
+   "line": 83,
+   "quote": "@Post('items/:assetId/buy')"
+  },
+  {
+   "id": "e5",
+   "kind": "rest",
+   "method": "PUT",
+   "path": "/api/v1/avatar/me/equip",
+   "purpose": "Trang bị item vào slot: chống IDOR bằng 3 check (asset active, đúng slot, user đã sở hữu) rồi cập nhật cột slot trên user_avatar_configs, lazy-init config nếu chưa có; trả layer đã resolve.",
+   "auth": "jwt",
+   "file": "apps/core-api/src/modules/avatar/avatar.controller.ts",
+   "line": 96,
+   "quote": "@Put('me/equip')"
+  },
+  {
+   "id": "e6",
+   "kind": "rest",
+   "method": "GET",
+   "path": "/api/v1/avatar/me",
+   "purpose": "Avatar của chính mình: config + danh sách layer đầy đủ để client ghép theo zIndex; lazy-init config mặc định ở lần gọi đầu.",
+   "auth": "jwt",
+   "file": "apps/core-api/src/modules/avatar/avatar.controller.ts",
+   "line": 113,
+   "quote": "@Get('me')"
+  },
+  {
+   "id": "e7",
+   "kind": "rest",
+   "method": "GET",
+   "path": "/api/v1/avatar/users/:userId",
+   "purpose": "Xem avatar người khác: chỉ đọc, không cần là bạn bè (avatar là thông tin hiển thị công khai), chưa có config thì trả layers rỗng; vẫn cần JWT.",
+   "auth": "jwt",
+   "file": "apps/core-api/src/modules/avatar/avatar.controller.ts",
+   "line": 127,
+   "quote": "@Get('users/:userId')"
+  }
+ ],
+ "collaborators": [
+  {
+   "id": "c1",
+   "label": "trừ DIA mua item",
+   "what": "EconomyService.spendDiamond(userId, TransactionType.AvatarPurchase, asset.priceDiamond, avatar:buy idempotency key, {avatarAssetId, assetCode}) ghi ledger Nợ user_wallet / Có system_revenue và trả {transactionId, replayed}.",
+   "why": "Ví và LedgerEntry chỉ Economy được ghi; check đủ số dư và khoá ví FOR UPDATE nằm trong ledger.record. Idempotency key unique ở Transaction là thứ cho phép retry an toàn: vì spendDiamond và ghi sở hữu là hai bước tách rời, replay cùng key không trừ lần 2 mà vẫn cho Avatar hoàn tất grantOwnership.",
+   "ifMissing": "Avatar phải tự trừ ví (vi phạm 'Economy là nguồn sự thật'), hoặc item được cấp không trả tiền; retry sau crash sẽ trừ DIA hai lần.",
+   "with": "economy",
+   "withKind": "service",
+   "direction": "out",
+   "mechanism": "di-call",
+   "endpoints": [
+    "e4"
+   ],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/avatar/avatar.service.ts",
+     "line": 85,
+     "quote": "const { replayed } = await this.economy.spendDiamond("
+    }
+   ],
+   "basis": "ast",
+   "logic": {
+    "verdict": "sound",
+    "note": "applyWalletDeltas kiểm số dư tại thời điểm trừ sau lockWallet FOR UPDATE; buy gọi spendDiamond rồi grantOwnership (avatar.service:85-92)."
+   }
+  },
+  {
+   "id": "c2",
+   "label": "catalog / sở hữu / config",
+   "what": "Đọc avatar_assets (active, theo slot; giá đọc lại lúc mua), ghi user_avatar_items qua INSERT ... ON CONFLICT DO NOTHING và cập nhật user_avatar_configs theo slot.",
+   "why": "Unique (userId, avatarAssetId) là nguồn sự thật 'đã sở hữu' và là thứ làm grantOwnership idempotent sau spendDiamond; equip phải đọc bảng này để chặn trang bị item của người khác/chưa mua (IDOR). Giá nằm trong DB nên server không tin giá client.",
+   "ifMissing": "Không chứng minh được quyền sở hữu khi equip (ai cũng đeo được item trả phí), và retry buy có thể tạo bản ghi sở hữu trùng.",
+   "with": "postgres",
+   "withKind": "infra",
+   "direction": "out",
+   "mechanism": "shared-db",
+   "endpoints": [
+    "e1",
+    "e2",
+    "e3",
+    "e4",
+    "e5",
+    "e6",
+    "e7"
+   ],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/avatar/entities/avatar-asset.entity.ts",
+     "line": 16,
+     "quote": "@Entity({ name: 'avatar_assets' })"
+    },
+    {
+     "file": "apps/core-api/src/modules/avatar/entities/user-avatar-config.entity.ts",
+     "line": 8,
+     "quote": "@Entity({ name: 'user_avatar_configs' })"
+    },
+    {
+     "file": "apps/core-api/src/modules/avatar/entities/user-avatar-item.entity.ts",
+     "line": 13,
+     "quote": "@Entity({ name: 'user_avatar_items' })"
+    }
+   ],
+   "review": {
+    "verdict": "supported"
+   },
+   "logic": {
+    "verdict": "sound",
+    "note": "Index unique uq_user_avatar_items_pair (userId, avatarAssetId) và grantOwnership dùng orIgnore; equip kiểm owned bằng itemRepo.exists."
+   }
+  },
+  {
+   "id": "c50",
+   "with": "web",
+   "withKind": "client",
+   "direction": "both",
+   "mechanism": "http",
+   "endpoints": [
+    "e3",
+    "e4",
+    "e5",
+    "e6"
+   ],
+   "label": "Idempotency-Key, equip",
+   "what": "Web gọi POST /avatar/items/{assetId}/buy với header Idempotency-Key sinh theo intent (giữ qua retry), claim item free rồi PUT /avatar/me/equip, sau đó ghép các layer theo zIndex server đã sắp.",
+   "why": "Buy và grant sở hữu không cùng transaction nên Idempotency-Key ổn định của client là cơ chế duy nhất để retry sau lỗi mạng/crash mà không trừ DIA hai lần; mua và trang bị là hai call riêng nên client phải gọi equip sau khi buy/claim thành công.",
+   "ifMissing": "Retry mạng trừ DIA lần nữa (hoặc bị từ chối do thiếu header), và item đã mua không hiện trên avatar vì không có bước equip.",
+   "evidence": [
+    {
+     "file": "apps/web/src/features/avatar/api.ts",
+     "line": 73,
+     "quote": "header: { 'Idempotency-Key': input.idempotencyKey },"
+    },
+    {
+     "file": "apps/web/src/features/avatar/components/avatar-builder.tsx",
+     "line": 64,
+     "quote": "* free → claim rồi trang bị; item trả phí → xác nhận, mua qua Economy (Idempotency-Key) rồi"
+    }
+   ],
+   "review": {
+    "verdict": "supported"
+   },
+   "logic": {
+    "verdict": "sound",
+    "note": "Web gửi Idempotency-Key cho buy, claim rồi equip tách call; buy và grant không cùng transaction đúng như avatar.service."
+   }
+  },
+  {
+   "id": "c51",
+   "with": "web",
+   "withKind": "client",
+   "direction": "in",
+   "mechanism": "config",
+   "endpoints": [
+    "e1",
+    "e6",
+    "e7"
+   ],
+   "label": "imageUrl trỏ static /avatar",
+   "what": "avatar_assets.image_url được seed bằng path tương đối '/avatar/<code>.svg' trỏ tới file tĩnh apps/web/public/avatar; client render mỗi layer bằng <img src={layer.imageUrl}> với zIndex từ server.",
+   "why": "Suy luận: Avatar chỉ lưu URL layer chứ không phục vụ file, nên asset phải được deploy cùng web đúng path trùng với seed; thêm item mới cần thêm cả dòng DB lẫn file SVG tương ứng ở web.",
+   "ifMissing": "Dòng catalog tồn tại nhưng ảnh 404: layer đã mua/trang bị hiển thị trống trên avatar.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/database/migrations/1757300000000-avatar-public-assets.ts",
+     "line": 6,
+     "quote": "['base-default', '/avatar/base-default.svg'],"
+    },
+    {
+     "file": "apps/web/src/features/avatar/components/avatar-builder.tsx",
+     "line": 47,
+     "quote": "src={layer.imageUrl}"
+    }
+   ],
+   "review": {
+    "verdict": "supported"
+   },
+   "logic": {
+    "verdict": "sound",
+    "note": "Migration seed 8 path /avatar/*.svg và apps/web/public/avatar có đúng 8 file SVG tương ứng."
+   }
+  }
+ ],
+ "waivedEdges": [],
+ "excludedRoutes": [],
+ "notes": [
+  "Khác Gift: buy() KHÔNG atomic với ledger. EconomyService.spendDiamond tự mở transaction riêng rồi AvatarService.grantOwnership (ON CONFLICT DO NOTHING) chạy SAU, ngoài transaction đó (avatar.service.ts:85-92). Nếu crash giữa hai bước thì tiền đã trừ mà chưa có item cho đến khi client retry cùng Idempotency-Key (replay không trừ lần 2, rồi ghi sở hữu). Doc avatar-service.md § 2 ghi đúng thiết kế này; không có job đối soát nào tự sửa trường hợp client không retry.",
+  "Economy có spendDiamondInTransaction(manager, ...) cho phép cùng transaction (Matching dùng), nhưng Avatar vẫn dùng spendDiamond generic; hệ quả là cửa sổ lệch nói trên là chủ ý theo doc, không phải thiếu sót của doc.",
+  "AvatarModule exports: [] và dossier không thấy module nào gọi vào Avatar; admin cũng không có route quản lý avatar_assets (catalog chỉ đổi bằng migration/seed), khác Gift có AdminModule.",
+  "Không có realtime/job/event nào ở Avatar: người khác thấy avatar mới chỉ khi tự GET /avatar/users/:userId.",
+  "imageUrl trong seed là path tương đối '/avatar/*.svg' (migration 1757300000000) trỏ vào static của apps/web/public/avatar, không phải object storage/CDN.",
+  "Đã xác minh grantOwnership chạy vô điều kiện sau spendDiamond kể cả khi replayed=true (avatar.service.ts:85-92) và unique uq_user_avatar_items_pair (userId, avatarAssetId) làm nó idempotent, nên retry cùng Idempotency-Key luôn hoàn tất việc cấp item. Ngược lại với Matching speed-up, nơi boost bị bỏ qua khi replayed=true (xem economy)."
+ ],
+ "techniques": [
+  {
+   "id": "t1",
+   "slug": "other:lazy-init-config",
+   "name": "Khởi tạo cấu hình lazy",
+   "how": "getMyAvatar và equip tạo user_avatar_configs mặc định ở lần đầu qua initDefaultConfig; PK userId chặn race, thua unique thì đọc lại dòng bên thắng.",
+   "why": "getMyAvatar và equip tạo user_avatar_configs mặc định ở lần đầu qua initDefaultConfig; PK userId chặn race, thua unique thì đọc lại dòng bên thắng.",
+   "endpoints": [
+    "e5",
+    "e6"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/avatar/avatar.service.ts",
+     "line": 134,
+     "quote": "(await this.initDefaultConfig(userId));"
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "local": "getMyAvatar và equip tạo user_avatar_configs mặc định ở lần đầu qua initDefaultConfig; PK userId chặn race, thua unique thì đọc lại dòng bên thắng.",
+   "addedByLogicReview": true
+  },
+  {
+   "slug": "jwt-bearer",
+   "name": "JWT bearer (access token không trạng thái)",
+   "model": "JWT bearer",
+   "how": "Client gửi access token (JWT) trong header Authorization; guard xác minh chữ ký và hạn rồi gắn user vào request, server không giữ phiên.",
+   "why": "Không trạng thái nên scale ngang dễ và không phải tra DB mỗi request; đánh đổi là không thu hồi tức thì trước khi token hết hạn.",
+   "alternative": "Session phía server (cookie + kho phiên) thu hồi được tức thì nhưng cần kho phiên dùng chung.",
+   "endpoints": [
+    "e1",
+    "e2",
+    "e3",
+    "e4",
+    "e5",
+    "e6",
+    "e7"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/app/app.module.ts",
+     "line": 117,
+     "quote": "{ provide: APP_GUARD, useClass: JwtAuthGuard },"
+    }
+   ],
+   "auto": true,
+   "count": 7,
+   "id": "t2",
+   "local": "Mọi endpoint của service được bảo vệ bởi `JwtAuthGuard` đăng ký qua `APP_GUARD` toàn cục trong app.module.ts, nên cần bearer JWT hợp lệ mới vào được controller."
+  },
+  {
+   "id": "t3",
+   "slug": "server-authoritative",
+   "name": "Server là nguồn sự thật về giá/quyền (client không quyết)",
+   "model": "Server quyết định",
+   "how": "Giá, số dư, trạng thái và quyền do server tính; client chỉ gửi ý định.",
+   "why": "Client có thể bị sửa nên mọi thứ liên quan tiền hoặc quyền phải do server quyết.",
+   "endpoints": [
+    "e3",
+    "e4"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/avatar/avatar.service.ts",
+     "line": 88,
+     "quote": "asset.priceDiamond,"
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "local": "Giá lấy từ asset.priceDiamond trong DB lúc claim/buy; claim chỉ cho giá 0 và buy chỉ cho giá khác 0, client không gửi giá.",
+   "addedByLogicReview": true
+  },
+  {
+   "id": "t4",
+   "slug": "ownership-check",
+   "name": "Kiểm tra quyền sở hữu tài nguyên",
+   "model": "Kiểm tra chủ sở hữu",
+   "how": "So userId của tài nguyên với userId người gọi trước khi đọc hoặc sửa.",
+   "why": "Ngăn IDOR: không thao tác được trên tài nguyên của người khác bằng cách đoán id.",
+   "endpoints": [
+    "e5"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/avatar/avatar.service.ts",
+     "line": 110,
+     "quote": "const owned = await this.itemRepo.exists({"
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "local": "equip chỉ cho trang bị item user đã sở hữu (itemRepo.exists theo userId và avatarAssetId) và đúng slot, trả ITEM_NOT_OWNED 403, chống IDOR trang bị item trả phí chưa mua.",
+   "addedByLogicReview": true
+  },
+  {
+   "slug": "idempotency-key",
+   "name": "Idempotency-Key (client sinh, server khử trùng)",
+   "model": "Idempotency-Key",
+   "how": "Client gửi khoá duy nhất cho mỗi thao tác; server lưu khoá (unique) và trả lại kết quả cũ khi gặp lại.",
+   "why": "Retry mạng không tạo bản ghi hoặc trừ tiền hai lần.",
+   "endpoints": [
+    "e4"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/avatar/avatar.constants.ts",
+     "line": 7,
+     "quote": "export function avatarBuyIdempotencyKey("
+    },
+    {
+     "file": "apps/core-api/src/modules/avatar/avatar.controller.ts",
+     "line": 30,
+     "quote": "ApiIdempotencyKeyHeader,"
+    },
+    {
+     "file": "apps/core-api/src/modules/avatar/avatar.service.ts",
+     "line": 75,
+     "quote": "idempotencyKey: string,"
+    }
+   ],
+   "auto": true,
+   "count": 8,
+   "id": "t5",
+   "local": "Chỉ POST /avatar/items/:assetId/buy (e4) dùng @IdempotencyKey và avatarBuyIdempotencyKey = avatar:buy:{userId}:{key}; unique idempotency_key của Transaction ở Economy chặn trừ DIA hai lần."
+  },
+  {
+   "slug": "unique-constraint-guard",
+   "name": "Ràng buộc unique ở DB làm chốt chặn cuối",
+   "model": "Ràng buộc DB",
+   "how": "Ràng buộc unique hoặc index duy nhất ở DB là chốt chặn cuối cho trùng lặp.",
+   "why": "Check-rồi-insert ở tầng code vẫn dính race; DB mới bảo đảm tuyệt đối.",
+   "endpoints": [
+    "e3",
+    "e4",
+    "e5",
+    "e6"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/avatar/avatar.service.ts",
+     "line": 181,
+     "quote": ".orIgnore()"
+    },
+    {
+     "file": "apps/core-api/src/modules/avatar/entities/avatar-asset.entity.ts",
+     "line": 25,
+     "quote": "@Column({ length: 64, unique: true })"
+    },
+    {
+     "file": "apps/core-api/src/modules/avatar/entities/user-avatar-item.entity.ts",
+     "line": 15,
+     "quote": "unique: true,"
+    }
+   ],
+   "auto": true,
+   "count": 4,
+   "id": "t6",
+   "local": "grantOwnership dùng insert orIgnore trên unique uq_user_avatar_items_pair nên claim/buy lặp không lỗi; AvatarAsset.code unique; PK userId của user_avatar_configs chặn race lazy-init."
+  },
+  {
+   "slug": "db-transaction",
+   "name": "Transaction DB (một đơn vị công việc)",
+   "model": "Transaction",
+   "how": "Gói nhiều thao tác ghi vào một transaction: cùng commit hoặc cùng rollback.",
+   "why": "Tránh trạng thái nửa vời khi lỗi giữa chừng.",
+   "endpoints": [
+    "e5",
+    "e6"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/avatar/avatar.service.ts",
+     "line": 234,
+     "quote": "return await this.dataSource.transaction(async (manager) => {"
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "id": "t7",
+   "local": "Chỉ initDefaultConfig (lazy-init ở e5, e6) chạy trong dataSource.transaction ghi sở hữu item free và config; bước equip cập nhật cột slot bằng configRepo.update ngoài transaction."
+  },
+  {
+   "slug": "rate-limit-throttler",
+   "name": "Rate limit (@nestjs/throttler)",
+   "model": "Rate limit",
+   "how": "@Throttle giới hạn số request theo khoảng thời gian cho từng route.",
+   "why": "Chặn spam và dò quét bằng cách giới hạn số request theo thời gian, trước khi request tới logic nghiệp vụ.",
+   "endpoints": [
+    "e1",
+    "e2",
+    "e3",
+    "e4",
+    "e5",
+    "e6",
+    "e7"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/app/app.module.ts",
+     "line": 116,
+     "quote": "{ provide: APP_GUARD, useClass: ThrottlerGuard },"
+    }
+   ],
+   "auto": true,
+   "count": 7,
+   "id": "t8",
+   "local": "Giới hạn tốc độ qua `ThrottlerGuard` đăng ký `APP_GUARD` toàn cục, chạy trước JwtAuthGuard; áp cho mọi route của service."
+  },
+  {
+   "slug": "openapi-contract",
+   "name": "Hợp đồng OpenAPI + client sinh tự động",
+   "model": "OpenAPI",
+   "how": "OpenAPI sinh từ code và client TypeScript sinh tự động.",
+   "why": "Client và server không lệch hợp đồng.",
+   "endpoints": [
+    "e1",
+    "e2",
+    "e3",
+    "e4",
+    "e5",
+    "e6",
+    "e7"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/avatar/avatar.controller.ts",
+     "line": 50,
+     "quote": "@ApiOperation({"
+    }
+   ],
+   "auto": true,
+   "count": 7,
+   "id": "t9",
+   "local": "`@ApiOperation` (vd catalog 'giá server là nguồn sự thật') và `@ApiOkResponse` mô tả hợp đồng OpenAPI của route avatar."
+  }
+ ]
+}

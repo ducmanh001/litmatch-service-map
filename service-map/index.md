@@ -1,0 +1,67 @@
+# Index of service-map files
+
+id: service-map:index
+
+- [service-map:admin](admin.md): API back-office: RBAC, audit, điều phối module
+- [techniques:admin](admin-techniques.md): 17 technique cards.
+- [service-map:app-shell](app-shell.md): Health probe và hợp đồng capabilities
+- [techniques:app-shell](app-shell-techniques.md): 7 technique cards.
+- [service-map:auth](auth.md): Đăng nhập, phiên refresh và nâng cấp guest
+- [techniques:auth](auth-techniques.md): 23 technique cards.
+- [service-map:avatar](avatar.md): Catalog, sở hữu và trang bị avatar
+- [techniques:avatar](avatar-techniques.md): 9 technique cards.
+- [service-map:calling](calling.md): Vòng đời CallSession voice 2 người trên LiveKit
+- [techniques:calling](calling-techniques.md): 19 technique cards.
+- [service-map:discovery](discovery.md): Duyệt người dùng và Nearby ẩn vị trí
+- [techniques:discovery](discovery-techniques.md): 14 technique cards.
+- [service-map:economy](economy.md): Sổ cái kép, ví diamond, VIP, nạp tiền
+- [techniques:economy](economy-techniques.md): 29 technique cards.
+- [service-map:feed](feed.md): Bài đăng, bình luận, thả tim và Stories 24h
+- [techniques:feed](feed-techniques.md): 18 technique cards.
+- [service-map:friend](friend.md): Bạn bè, chat 1-1, streak, follow và mở chat từ profile
+- [techniques:friend](friend-techniques.md): 22 technique cards.
+- [service-map:gift](gift.md): Catalog quà và luồng tặng quà
+- [techniques:gift](gift-techniques.md): 12 technique cards.
+- [service-map:matching](matching.md): Hàng đợi ghép cặp, ticket, invite, MatchSession
+- [techniques:matching](matching-techniques.md): 31 technique cards.
+- [service-map:media-server](media-server.md): LiveKit SFU: cấu hình và deploy, không logic
+- [techniques:media-server](media-server-techniques.md): 6 technique cards.
+- [service-map:media](media.md): Presigned upload ảnh, xác thực asset
+- [techniques:media](media-techniques.md): 9 technique cards.
+- [service-map:mini-game](mini-game.md): Oẳn tù tì 2 người giữa bạn bè, move ẩn
+- [techniques:mini-game](mini-game-techniques.md): 13 technique cards.
+- [service-map:mood](mood.md): Trạng thái tâm trạng preset, hết hạn theo TTL
+- [techniques:mood](mood-techniques.md): 9 technique cards.
+- [service-map:movie-match](movie-match.md): Phiên xem chung 2 người, playback state
+- [techniques:movie-match](movie-match-techniques.md): 21 technique cards.
+- [service-map:notification](notification.md): Thông báo in-app và Web Push
+- [techniques:notification](notification-techniques.md): 14 technique cards.
+- [service-map:palm-match](palm-match.md): Ghép đôi ẩn danh theo hàng đợi, bói bài
+- [techniques:palm-match](palm-match-techniques.md): 14 technique cards.
+- [service-map:party-room](party-room.md): Phòng audio nhiều người, role và grace rớt mạng
+- [techniques:party-room](party-room-techniques.md): 28 technique cards.
+- [service-map:safety](safety.md): Report, block và luật ẩn người dùng
+- [techniques:safety](safety-techniques.md): 15 technique cards.
+- [service-map:short-video](short-video.md): Video ngắn: upload, duyệt, xem, tim, bình luận
+- [techniques:short-video](short-video-techniques.md): 18 technique cards.
+- [service-map:signaling-gateway](signaling-gateway.md): Fanout Socket.IO, quota kết nối, presence
+- [techniques:signaling-gateway](signaling-gateway-techniques.md): 22 technique cards.
+- [service-map:soul-match](soul-match.md): Phòng chat ẩn danh, rating, mutual-like
+- [techniques:soul-match](soul-match-techniques.md): 19 technique cards.
+- [service-map:support](support.md): Phiếu hỗ trợ và vòng đời xử lý
+- [techniques:support](support-techniques.md): 10 technique cards.
+- [service-map:user](user.md): Hồ sơ người dùng, quyền riêng tư, trạng thái
+- [techniques:user](user-techniques.md): 13 technique cards.
+- [qa:authn-model](qa-authn-model.md): JWT bearer không trạng thái, kiểm bằng JwtAuthGuard đăng ký toàn cục: route nào muốn mở phải gắn @Public(). Có ba đường vào (khách kèm toke…
+- [qa:authz-model](qa-authz-model.md): Kết hợp nhiều lớp và không có policy engine (không CASL, Casbin hay OPA trong package.json): RBAC cho vai trò (RolesGuard toàn cục + ma trậ…
+- [qa:token-lifecycle](qa-token-lifecycle.md): Access token ngắn hạn kèm refresh token xoay vòng: mỗi lần refresh phát token mới, dùng lại token cũ bị coi là bị lộ và thu hồi cả họ token…
+- [qa:webhook-security](qa-webhook-security.md): Mọi webhook công khai đều tự xác minh nguồn gửi trước khi làm gì: PayOS bằng HMAC-SHA256, Apple bằng JWS (kiểm chuỗi chứng chỉ x5c lên Appl…
+- [qa:media-access](qa-media-access.md): Quyền vào phòng media là capability token ngắn hạn do core-api ký (LiveKit grants theo vai trò); đổi vai trò giữa chừng thì core-api đẩy qu…
+- [qa:realtime-delivery](qa-realtime-delivery.md): Redis pub/sub fanout, at-most-once, không lưu và không replay, chỉ publish sau khi commit. Không dùng Redis Streams hay hàng đợi cho realti…
+- [qa:queues-and-workers](qa-queues-and-workers.md): Không có thư viện job queue chung (không BullMQ, Agenda hay pg-boss trong package.json). Ghép đôi dùng Redis sorted set chia shard (ZADD/ZP…
+- [qa:consistency-concurrency](qa-consistency-concurrency.md): Một PostgreSQL chung nên atomicity xuyên module dùng chung một transaction (truyền EntityManager), không saga hay 2PC. Race được chặn bằng …
+- [qa:idempotency](qa-idempotency.md): Hai lớp: client gửi Idempotency-Key (decorator @IdempotencyKey) và DB giữ chốt cuối bằng unique trên cột idempotency_key, nên retry mạng nh…
+- [qa:rate-limit-abuse](qa-rate-limit-abuse.md): Nhiều lớp: ThrottlerGuard toàn cục đứng trước JWT và @Throttle riêng cho route nhạy cảm; rate limit nghiệp vụ bằng Redis (Lua) dùng chung n…
+- [qa:api-contract](qa-api-contract.md): Hợp đồng REST sinh từ chính controller (OpenAPI) rồi sinh client TypeScript; DTO validate bằng class-validator; phân trang bằng cursor; sch…
+- [qa:observability](qa-observability.md): Metrics và tracing qua OpenTelemetry, log JSON bằng pino, probe liveness/readiness cho Kubernetes và audit log cho hành động nhạy cảm của a…
+- [service-map:findings](findings.md): 13 observations with status.

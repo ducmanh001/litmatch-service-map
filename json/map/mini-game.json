@@ -1,0 +1,523 @@
+{
+ "id": "mini-game",
+ "title": "Mini Game",
+ "tagline": "Oẳn tù tì 2 người giữa bạn bè, move ẩn",
+ "deployable": "core-api",
+ "role": "Sở hữu phiên oẳn tù tì giữa 2 người đã là bạn (mini_game_sessions + bảng participant giữ bất biến 1 ván chờ move/user) và logic thắng thua. Không sở hữu quan hệ bạn bè (Friend), không chạm Economy, không tích hợp tin nhắn chat; chỉ publish 2 event realtime sau khi commit.",
+ "owns": [
+  "mini_game_sessions (userLowId/userHighId canonical, lowMove/highMove, status, winnerUserId)",
+  "mini_game_active_participants (PK userId: 1 user chỉ có 1 ván waiting_moves)",
+  "ioredis client riêng MINI_GAME_REDIS (chỉ để publish realtime)"
+ ],
+ "confidence": "high",
+ "endpoints": [
+  {
+   "id": "e1",
+   "kind": "rest",
+   "method": "POST",
+   "path": "/api/v1/mini-game/sessions",
+   "purpose": "Tạo ván oẳn tù tì với một người bạn (404 nếu không phải bạn), idempotent theo cặp, 409 ALREADY_WAITING nếu user đang chờ move ở cặp khác; publish minigame.session.started cho cả hai.",
+   "auth": "jwt",
+   "file": "apps/core-api/src/modules/mini-game/mini-game.controller.ts",
+   "line": 34,
+   "quote": "@Post('sessions')"
+  },
+  {
+   "id": "e2",
+   "kind": "rest",
+   "method": "POST",
+   "path": "/api/v1/mini-game/sessions/:id/moves",
+   "purpose": "Nộp move rock/paper/scissors bằng UPDATE có điều kiện (move IS NULL AND status=waiting_moves); đủ 2 move thì resolve trong cùng transaction và publish minigame.session.resolved kèm cả 2 move.",
+   "auth": "jwt",
+   "file": "apps/core-api/src/modules/mini-game/mini-game.controller.ts",
+   "line": 53,
+   "quote": "@Post('sessions/:id/moves')"
+  },
+  {
+   "id": "e3",
+   "kind": "rest",
+   "method": "POST",
+   "path": "/api/v1/mini-game/sessions/:id/cancel",
+   "purpose": "Một trong hai participant huỷ ván đang chờ move (idempotent nếu đã cancelled, 409 nếu đã resolved), giải phóng slot participant.",
+   "auth": "jwt",
+   "file": "apps/core-api/src/modules/mini-game/mini-game.controller.ts",
+   "line": 73,
+   "quote": "@Post('sessions/:id/cancel')"
+  },
+  {
+   "id": "e4",
+   "kind": "rest",
+   "method": "GET",
+   "path": "/api/v1/mini-game/sessions/:id",
+   "purpose": "Đọc ván (chỉ participant, 404 gộp nếu không tồn tại/không phải thành viên); là fallback polling khi realtime không tới.",
+   "auth": "jwt",
+   "file": "apps/core-api/src/modules/mini-game/mini-game.controller.ts",
+   "line": 87,
+   "quote": "@Get('sessions/:id')"
+  },
+  {
+   "id": "e5",
+   "kind": "socket-emit",
+   "method": "EMIT",
+   "path": "minigame.session.resolved",
+   "purpose": "Event minigame.session.resolved gửi cho CẢ HAI user sau khi cả hai nộp move: sessionId, lowMove, highMove, winnerUserId (null nếu hoà).",
+   "auth": "internal",
+   "file": "apps/core-api/src/modules/mini-game/mini-game.service.ts",
+   "line": 227,
+   "quote": "event: RealtimeEvents.MiniGameSessionResolved,"
+  },
+  {
+   "id": "e6",
+   "kind": "socket-emit",
+   "method": "EMIT",
+   "path": "minigame.session.started",
+   "purpose": "Event minigame.session.started gửi cho CẢ HAI user khi ván được tạo: sessionId, gameType, initiatorUserId.",
+   "auth": "internal",
+   "file": "apps/core-api/src/modules/mini-game/mini-game.service.ts",
+   "line": 121,
+   "quote": "event: RealtimeEvents.MiniGameSessionStarted,"
+  }
+ ],
+ "collaborators": [
+  {
+   "id": "c1",
+   "label": "xác minh là bạn bè",
+   "what": "createSession gọi FriendService.areFriends(userId, friendUserId) trước khi tạo MiniGameSession; không phải bạn thì trả 404 MINI_GAME_NOT_FRIEND.",
+   "why": "Mini game tái dùng quan hệ Friendship thay vì dựng khái niệm 'mời chơi' riêng (docs mini-game § 1); Friend là chủ sở hữu bảng friendships nên chỉ nó trả lời được 2 người có là bạn không. Dùng chung 404 cho 'không tồn tại' và 'không phải bạn' để không lộ quan hệ.",
+   "ifMissing": "Bất kỳ user nào cũng tạo được ván và đẩy event minigame.session.started tới người lạ biết userId của họ.",
+   "with": "friend",
+   "withKind": "service",
+   "direction": "out",
+   "mechanism": "di-call",
+   "endpoints": [
+    "e1"
+   ],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/mini-game/mini-game.service.ts",
+     "line": 71,
+     "quote": "if (!(await this.friendService.areFriends(userId, friendUserId))) {"
+    }
+   ],
+   "basis": "ast",
+   "logic": {
+    "verdict": "sound"
+   }
+  },
+  {
+   "id": "c2",
+   "label": "đẩy event minigame.*",
+   "what": "Sau transaction commit, publishRealtimeEvent đẩy envelope minigame.session.started (khi tạo) và minigame.session.resolved (kèm lowMove/highMove/winnerUserId) lên kênh realtime:user:{userId} của từng participant; signaling-gateway PSUBSCRIBE rồi relay xuống socket.",
+   "why": "Hai người chơi đồng thời nên người nộp move trước cần biết khi nào đối phương nộp xong và kết quả; core-api không giữ socket, chỉ gateway giữ nên phải qua Redis. Không có event trung gian 'một bên đã nộp' để channel khác không suy ra ai nộp trước; payload gửi cùng lúc cho cả hai.",
+   "ifMissing": "Client phải poll GET /mini-game/sessions/:id liên tục để thấy ván bắt đầu và kết quả; trải nghiệm chơi đồng thời bị trễ.",
+   "with": "signaling-gateway",
+   "withKind": "service",
+   "direction": "out",
+   "mechanism": "redis-pubsub",
+   "endpoints": [
+    "e5",
+    "e6"
+   ],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/mini-game/mini-game.service.ts",
+     "line": 130,
+     "quote": "publishRealtimeEvent(this.redis, this.logger, uid, envelope),"
+    },
+    {
+     "file": "apps/core-api/src/modules/mini-game/mini-game.service.ts",
+     "line": 232,
+     "quote": "publishRealtimeEvent(this.redis, this.logger, uid, envelope),"
+    }
+   ],
+   "basis": "ast",
+   "logic": {
+    "verdict": "sound"
+   }
+  },
+  {
+   "id": "c3",
+   "label": "client ioredis publish",
+   "what": "MiniGameModule tạo ioredis riêng MINI_GAME_REDIS từ REDIS_URL (createCoreRedisClient) để publish; đóng bằng closeCoreRedisClient khi onApplicationShutdown.",
+   "why": "Redis pub/sub là đường duy nhất core-api nói chuyện với signaling-gateway (gateway không có DB và không nhận HTTP từ core-api); client riêng được tạo và đóng theo vòng đời module để không rò kết nối khi tắt app.",
+   "ifMissing": "Không có kết nối Redis nên không publish được minigame.session.*; kết nối không được đóng gây treo shutdown/rò socket.",
+   "with": "redis",
+   "withKind": "infra",
+   "direction": "out",
+   "mechanism": "redis-pubsub",
+   "endpoints": [
+    "e1",
+    "e2"
+   ],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/mini-game/mini-game.module.ts",
+     "line": 35,
+     "quote": "await closeCoreRedisClient(this.redis);"
+    }
+   ],
+   "review": {
+    "verdict": "supported"
+   },
+   "logic": {
+    "verdict": "sound"
+   }
+  },
+  {
+   "id": "c4",
+   "label": "ván + slot participant",
+   "what": "Ghi mini_game_sessions (lowMove/highMove, status, winnerUserId) và mini_game_active_participants; submitMove dùng UPDATE ... WHERE move IS NULL AND status='waiting_moves' trong transaction rồi đọc lại để resolve.",
+   "why": "Hai request nộp move đồng thời và double-submit là tình huống chính của game 2 người; chỉ UPDATE có điều kiện ở DB mới chặn đổi move đã nộp, và PK userId của participant chặn một user có 2 ván chờ move cùng lúc, kể cả khi 2 instance core-api chạy song song.",
+   "ifMissing": "Người chơi sửa được move sau khi thấy đối phương, một user có nhiều ván song song, hoặc resolve 2 lần với kết quả khác nhau.",
+   "with": "postgres",
+   "withKind": "infra",
+   "direction": "out",
+   "mechanism": "shared-db",
+   "endpoints": [
+    "e1",
+    "e2",
+    "e3",
+    "e4"
+   ],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/mini-game/entities/mini-game-active-participant.entity.ts",
+     "line": 19,
+     "quote": "@Entity({ name: 'mini_game_active_participants' })"
+    },
+    {
+     "file": "apps/core-api/src/modules/mini-game/entities/mini-game-session.entity.ts",
+     "line": 25,
+     "quote": "@Entity({ name: 'mini_game_sessions' })"
+    }
+   ],
+   "review": {
+    "verdict": "supported"
+   },
+   "logic": {
+    "verdict": "sound"
+   }
+  }
+ ],
+ "waivedEdges": [],
+ "excludedRoutes": [],
+ "notes": [
+  "createSession chỉ kiểm tra FriendService.areFriends, không kiểm tra block: nếu Safety block mà Friendship vẫn còn thì vẫn tạo được ván (suy luận từ code: không có import SafetyModule trong luồng này). Doc cũng chỉ nói verify bạn bè.",
+  "submitMove/cancel/get chỉ kiểm tra caller là participant của session, không kiểm tra lại friendship; hợp lệ vì friendship được kiểm tra lúc tạo ván.",
+  "Không có timer hay job: ván waiting_moves bị bỏ dở giữ slot uq participant của cả 2 user cho đến khi một bên gọi POST /sessions/:id/cancel (đúng như doc § 6 nói 'chưa có hết hạn').",
+  "Không thấy client apps/web nghe minigame.session.* hoặc gọi /mini-game/* trong source (grep không có kết quả), nên không thêm collaborator client; fallback polling được thiết kế qua GET /sessions/:id.",
+  "Doc nói best-effort + fallback polling; code khớp: publishRealtimeEvent nuốt lỗi và log warn, và publish chạy SAU transaction commit."
+ ],
+ "techniques": [
+  {
+   "id": "t1",
+   "slug": "other:conditional-update-guard",
+   "name": "UPDATE có điều kiện làm chốt chặn",
+   "how": "submitMove dùng UPDATE ... WHERE id AND <move> IS NULL AND status=waiting_moves; affected=0 trả 409 MOVE_ALREADY_SUBMITTED nên move không đổi được dù double-submit/2 instance.",
+   "why": "submitMove dùng UPDATE ... WHERE id AND <move> IS NULL AND status=waiting_moves; affected=0 trả 409 MOVE_ALREADY_SUBMITTED nên move không đổi được dù double-submit/2 instance.",
+   "endpoints": [
+    "e2"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/mini-game/mini-game.service.ts",
+     "line": 160,
+     "quote": "IS NULL AND status = :status"
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "local": "submitMove dùng UPDATE ... WHERE id AND <move> IS NULL AND status=waiting_moves; affected=0 trả 409 MOVE_ALREADY_SUBMITTED nên move không đổi được dù double-submit/2 instance.",
+   "addedByLogicReview": true
+  },
+  {
+   "slug": "jwt-bearer",
+   "name": "JWT bearer (access token không trạng thái)",
+   "model": "JWT bearer",
+   "how": "Client gửi access token (JWT) trong header Authorization; guard xác minh chữ ký và hạn rồi gắn user vào request, server không giữ phiên.",
+   "why": "Không trạng thái nên scale ngang dễ và không phải tra DB mỗi request; đánh đổi là không thu hồi tức thì trước khi token hết hạn.",
+   "alternative": "Session phía server (cookie + kho phiên) thu hồi được tức thì nhưng cần kho phiên dùng chung.",
+   "endpoints": [
+    "e1",
+    "e2",
+    "e3",
+    "e4"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/app/app.module.ts",
+     "line": 117,
+     "quote": "{ provide: APP_GUARD, useClass: JwtAuthGuard },"
+    }
+   ],
+   "auto": true,
+   "count": 4,
+   "id": "t2",
+   "local": "Mọi endpoint của service được bảo vệ bởi `JwtAuthGuard` đăng ký qua `APP_GUARD` toàn cục trong app.module.ts, nên cần bearer JWT hợp lệ mới vào được controller."
+  },
+  {
+   "slug": "rebac-relationship",
+   "name": "Kiểm tra theo quan hệ (bạn bè, block, thành viên phòng)",
+   "model": "ReBAC",
+   "how": "Cho phép hoặc chặn dựa trên quan hệ giữa hai người: bạn bè, block, cùng phòng.",
+   "why": "Quyền trong mạng xã hội phụ thuộc quan hệ động chứ không phải vai trò cố định.",
+   "endpoints": [
+    "e1"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/mini-game/mini-game.service.ts",
+     "line": 71,
+     "quote": "if (!(await this.friendService.areFriends(userId, friendUserId))) {"
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "id": "t3",
+   "local": "Tạo ván oẳn tù tì chỉ với bạn bè: `friendService.areFriends(userId, friendUserId)` sai thì ném `MiniGameErrors.NOT_FRIEND`."
+  },
+  {
+   "slug": "db-transaction",
+   "name": "Transaction DB (một đơn vị công việc)",
+   "model": "Transaction",
+   "how": "Gói nhiều thao tác ghi vào một transaction: cùng commit hoặc cùng rollback.",
+   "why": "Tránh trạng thái nửa vời khi lỗi giữa chừng.",
+   "endpoints": [
+    "e1",
+    "e2",
+    "e3"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/mini-game/mini-game.service.ts",
+     "line": 86,
+     "quote": "created = await this.dataSource.transaction(async (manager) => {"
+    }
+   ],
+   "auto": true,
+   "count": 3,
+   "id": "t4",
+   "local": "Tạo ván chạy trong `this.dataSource.transaction(async (manager) => ...)` lưu `MiniGameSession` cùng một đơn vị công việc."
+  },
+  {
+   "id": "t5",
+   "slug": "state-machine",
+   "name": "Máy trạng thái tường minh",
+   "model": "State machine",
+   "how": "Trạng thái và các bước chuyển hợp lệ được định nghĩa tường minh.",
+   "why": "Chặn chuyển trạng thái sai thứ tự và dễ kiểm thử.",
+   "endpoints": [
+    "e2",
+    "e3"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/mini-game/mini-game.service.ts",
+     "line": 252,
+     "quote": "if (session.status === MiniGameSessionStatus.Resolved) {"
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "local": "MiniGameSession đi waiting_moves -> resolved|cancelled; submitMove chỉ UPDATE khi status=waiting_moves, cancel trả 409 nếu đã resolved, no-op nếu đã cancelled.",
+   "addedByLogicReview": true
+  },
+  {
+   "slug": "unique-constraint-guard",
+   "name": "Ràng buộc unique ở DB làm chốt chặn cuối",
+   "model": "Ràng buộc DB",
+   "how": "Ràng buộc unique hoặc index duy nhất ở DB là chốt chặn cuối cho trùng lặp.",
+   "why": "Check-rồi-insert ở tầng code vẫn dính race; DB mới bảo đảm tuyệt đối.",
+   "endpoints": [
+    "e1"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/mini-game/mini-game.service.ts",
+     "line": 108,
+     "quote": "if (!isUniqueViolation(err)) throw err;"
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "id": "t6",
+   "local": "Race tạo ván: bắt `isUniqueViolation(err)` rồi đọc lại `findWaitingByPair` để phân biệt replay idempotent với 409 cặp khác."
+  },
+  {
+   "id": "t7",
+   "slug": "redis-pubsub-fanout",
+   "name": "Redis pub/sub fanout (at-most-once, không replay)",
+   "model": "Pub/Sub",
+   "how": "core-api PUBLISH lên kênh realtime:user:{id}; gateway PSUBSCRIBE rồi đẩy xuống socket; không lưu, không replay.",
+   "why": "Sự kiện chỉ là gợi ý còn REST là nguồn sự thật nên at-most-once là đủ và rất rẻ.",
+   "alternative": "Redis Streams hoặc Kafka bền và replay được nhưng cần consumer group + ack: thừa với tin gợi ý.",
+   "endpoints": [
+    "e5",
+    "e6"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/mini-game/mini-game.service.ts",
+     "line": 130,
+     "quote": "publishRealtimeEvent(this.redis, this.logger, uid, envelope)"
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "local": "Event minigame.session.started/resolved được gửi cho cả hai user bằng `publishRealtimeEvent(this.redis, ...)` trong `Promise.all` qua Redis pub/sub."
+  },
+  {
+   "id": "t8",
+   "slug": "publish-after-commit",
+   "name": "Chỉ publish sau khi commit",
+   "model": "Sau commit",
+   "how": "Chỉ phát realtime sau khi transaction commit.",
+   "why": "Không bắn sự kiện của giao dịch bị rollback.",
+   "endpoints": [
+    "e5",
+    "e6"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/mini-game/mini-game.service.ts",
+     "line": 219,
+     "quote": "if (resolved) {"
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "local": "minigame.session.started publish sau transaction tạo ván; minigame.session.resolved chỉ publish khi submitMove trả resolved != null, sau khi transaction đã xong.",
+   "addedByLogicReview": true
+  },
+  {
+   "id": "t9",
+   "slug": "polling-fallback",
+   "name": "REST polling làm fallback cho realtime best-effort",
+   "model": "Polling dự phòng",
+   "how": "Client vẫn đọc trạng thái qua REST khi realtime rớt.",
+   "why": "Realtime best-effort nên cần đường dự phòng đúng đắn.",
+   "endpoints": [
+    "e4"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/mini-game/mini-game.service.ts",
+     "line": 287,
+     "quote": "Poll fallback — cùng payload dùng cho realtime"
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "local": "GET /mini-game/sessions/:id trả cùng payload realtime để client poll khi minigame.* không tới.",
+   "addedByLogicReview": true
+  },
+  {
+   "slug": "rate-limit-throttler",
+   "name": "Rate limit (@nestjs/throttler)",
+   "model": "Rate limit",
+   "how": "@Throttle giới hạn số request theo khoảng thời gian cho từng route.",
+   "why": "Chặn spam và dò quét bằng cách giới hạn số request theo thời gian, trước khi request tới logic nghiệp vụ.",
+   "endpoints": [
+    "e1",
+    "e2",
+    "e3",
+    "e4"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/app/app.module.ts",
+     "line": 116,
+     "quote": "{ provide: APP_GUARD, useClass: ThrottlerGuard },"
+    }
+   ],
+   "auto": true,
+   "count": 4,
+   "id": "t10",
+   "local": "Giới hạn tốc độ qua `ThrottlerGuard` đăng ký `APP_GUARD` toàn cục, chạy trước JwtAuthGuard; áp cho mọi route của service."
+  },
+  {
+   "slug": "openapi-contract",
+   "name": "Hợp đồng OpenAPI + client sinh tự động",
+   "model": "OpenAPI",
+   "how": "OpenAPI sinh từ code và client TypeScript sinh tự động.",
+   "why": "Client và server không lệch hợp đồng.",
+   "endpoints": [
+    "e1",
+    "e2",
+    "e3",
+    "e4"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/mini-game/mini-game.controller.ts",
+     "line": 36,
+     "quote": "@ApiOperation({"
+    }
+   ],
+   "auto": true,
+   "count": 4,
+   "id": "t11",
+   "local": "Controller dùng `@ApiOperation` mô tả mỗi route (vd POST sessions idempotent) làm hợp đồng OpenAPI."
+  },
+  {
+   "id": "t12",
+   "slug": "anti-enumeration",
+   "name": "Chống dò tài khoản",
+   "model": "Chống dò",
+   "how": "Phản hồi đồng nhất để không dò được tài khoản có tồn tại hay không.",
+   "why": "Chống thu thập người dùng.",
+   "endpoints": [
+    "e2",
+    "e3",
+    "e4"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/mini-game/mini-game.service.ts",
+     "line": 308,
+     "quote": "Tồn tại + caller là participant — gộp 404"
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "local": "getSessionForParticipant gộp ván không tồn tại và không phải thành viên thành 404 NOT_FOUND.",
+   "addedByLogicReview": true
+  },
+  {
+   "id": "t13",
+   "slug": "data-minimization",
+   "name": "Tối thiểu hoá dữ liệu trả về (ẩn danh, DTO công khai)",
+   "model": "Tối thiểu dữ liệu",
+   "how": "Chỉ trả trường cần thiết (DTO công khai, ẩn danh theo từng người nhận).",
+   "why": "Giảm rò rỉ dữ liệu: chỉ trả đúng các trường cần thiết cho người nhận thay vì cả bản ghi nội bộ.",
+   "endpoints": [
+    "e2",
+    "e5"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/mini-game/mini-game.service.ts",
+     "line": 142,
+     "quote": "tránh lộ trạng thái đối phương cho ai"
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "local": "Khi mới một bên nộp move, submitMove không resolve và không publish gì để không lộ trạng thái nộp của đối phương; chỉ resolved mới gửi lowMove/highMove cho cả hai.",
+   "addedByLogicReview": true
+  }
+ ]
+}

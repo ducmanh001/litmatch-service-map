@@ -1,0 +1,1438 @@
+{
+ "id": "admin",
+ "title": "Admin",
+ "tagline": "API back-office: RBAC, audit, điều phối module",
+ "deployable": "core-api",
+ "role": "AdminModule là lớp điều phối back-office cho apps/admin: kiểm quyền (role + permission theo bảng admin_role_permissions), gọi đúng service của module sở hữu dữ liệu và ghi admin_audit_logs CÙNG transaction với hành động. Nó chỉ sở hữu ma trận quyền; KHÔNG sở hữu user/ví/ledger/video/phòng/report/ticket/gift/notification và không tự ghi vào bảng của họ.",
+ "owns": [
+  "bảng admin_role_permissions (role x permission -> enabled)",
+  "điều phối ghi bảng admin_audit_logs qua common/audit (bảng thuộc AuditModule, append-only bằng DB trigger)"
+ ],
+ "confidence": "high",
+ "endpoints": [
+  {
+   "id": "e1",
+   "kind": "rest",
+   "method": "GET",
+   "path": "/api/v1/admin/dashboard",
+   "purpose": "Dashboard tổng hợp: thống kê user, doanh số diamond 7 ngày, số phòng đang mở và 10 hoạt động audit gần nhất. Cần permission view_users.",
+   "auth": "admin",
+   "file": "apps/core-api/src/modules/admin/admin.controller.ts",
+   "line": 104,
+   "quote": "@Get('dashboard')"
+  },
+  {
+   "id": "e2",
+   "kind": "rest",
+   "method": "GET",
+   "path": "/api/v1/admin/users",
+   "purpose": "Danh sách user lọc theo status/role/nickname, phân trang offset. Cần view_users.",
+   "auth": "admin",
+   "file": "apps/core-api/src/modules/admin/admin.controller.ts",
+   "line": 114,
+   "quote": "@Get('users')"
+  },
+  {
+   "id": "e3",
+   "kind": "rest",
+   "method": "GET",
+   "path": "/api/v1/admin/users/:id",
+   "purpose": "Xem hồ sơ nội bộ của một user (status + role). Cần view_users.",
+   "auth": "admin",
+   "file": "apps/core-api/src/modules/admin/admin.controller.ts",
+   "line": 131,
+   "quote": "@Get('users/:id')"
+  },
+  {
+   "id": "e4",
+   "kind": "rest",
+   "method": "POST",
+   "path": "/api/v1/admin/users/:id/ban",
+   "purpose": "Khoá tài khoản user và ghi audit user.banned trong cùng transaction; chặn tự ban chính mình (CANNOT_BAN_SELF). Cần ban_users.",
+   "auth": "admin",
+   "file": "apps/core-api/src/modules/admin/admin.controller.ts",
+   "line": 141,
+   "quote": "@Post('users/:id/ban')"
+  },
+  {
+   "id": "e5",
+   "kind": "rest",
+   "method": "POST",
+   "path": "/api/v1/admin/users/:id/unban",
+   "purpose": "Mở khoá tài khoản user và ghi audit user.unbanned cùng transaction. Cần ban_users.",
+   "auth": "admin",
+   "file": "apps/core-api/src/modules/admin/admin.controller.ts",
+   "line": 155,
+   "quote": "@Post('users/:id/unban')"
+  },
+  {
+   "id": "e6",
+   "kind": "rest",
+   "method": "GET",
+   "path": "/api/v1/admin/reports",
+   "purpose": "Danh sách báo cáo vi phạm (report) lọc và phân trang offset. Cần resolve_reports.",
+   "auth": "admin",
+   "file": "apps/core-api/src/modules/admin/admin.controller.ts",
+   "line": 169,
+   "quote": "@Get('reports')"
+  },
+  {
+   "id": "e7",
+   "kind": "rest",
+   "method": "POST",
+   "path": "/api/v1/admin/reports/:id/resolve",
+   "purpose": "Đánh dấu report là resolved + audit report.resolved cùng transaction. Cần resolve_reports.",
+   "auth": "admin",
+   "file": "apps/core-api/src/modules/admin/admin.controller.ts",
+   "line": 184,
+   "quote": "@Post('reports/:id/resolve')"
+  },
+  {
+   "id": "e8",
+   "kind": "rest",
+   "method": "POST",
+   "path": "/api/v1/admin/reports/:id/dismiss",
+   "purpose": "Bác bỏ report (dismissed) + audit cùng transaction. Cần resolve_reports.",
+   "auth": "admin",
+   "file": "apps/core-api/src/modules/admin/admin.controller.ts",
+   "line": 198,
+   "quote": "@Post('reports/:id/dismiss')"
+  },
+  {
+   "id": "e9",
+   "kind": "rest",
+   "method": "GET",
+   "path": "/api/v1/admin/videos/pending",
+   "purpose": "Danh sách video chờ duyệt (chế độ VIDEO_MODERATION_MODE=pre). Cần resolve_reports.",
+   "auth": "admin",
+   "file": "apps/core-api/src/modules/admin/admin.controller.ts",
+   "line": 212,
+   "quote": "@Get('videos/pending')"
+  },
+  {
+   "id": "e10",
+   "kind": "rest",
+   "method": "GET",
+   "path": "/api/v1/admin/videos/published",
+   "purpose": "Danh sách video đang published (mới nhất trước) để admin gỡ thủ công. Cần resolve_reports.",
+   "auth": "admin",
+   "file": "apps/core-api/src/modules/admin/admin.controller.ts",
+   "line": 228,
+   "quote": "@Get('videos/published')"
+  },
+  {
+   "id": "e11",
+   "kind": "rest",
+   "method": "POST",
+   "path": "/api/v1/admin/videos/:id/approve",
+   "purpose": "Duyệt video pending_review -> published + audit video.approved cùng transaction. Cần resolve_reports.",
+   "auth": "admin",
+   "file": "apps/core-api/src/modules/admin/admin.controller.ts",
+   "line": 244,
+   "quote": "@Post('videos/:id/approve')"
+  },
+  {
+   "id": "e12",
+   "kind": "rest",
+   "method": "POST",
+   "path": "/api/v1/admin/videos/:id/reject",
+   "purpose": "Từ chối video pending_review -> rejected + audit video.rejected cùng transaction. Cần resolve_reports.",
+   "auth": "admin",
+   "file": "apps/core-api/src/modules/admin/admin.controller.ts",
+   "line": 260,
+   "quote": "@Post('videos/:id/reject')"
+  },
+  {
+   "id": "e13",
+   "kind": "rest",
+   "method": "POST",
+   "path": "/api/v1/admin/videos/:id/remove",
+   "purpose": "Gỡ thủ công video published -> removed + audit video.removed, bổ sung cho auto-hide theo ngưỡng report. Cần resolve_reports.",
+   "auth": "admin",
+   "file": "apps/core-api/src/modules/admin/admin.controller.ts",
+   "line": 276,
+   "quote": "@Post('videos/:id/remove')"
+  },
+  {
+   "id": "e14",
+   "kind": "rest",
+   "method": "POST",
+   "path": "/api/v1/admin/rooms/:id/close",
+   "purpose": "Đóng cưỡng bức party room (reason AdminClosed) với audit trong cùng transaction đóng phòng; dọn LiveKit/realtime chạy sau commit trong party-room. Cần manage_rooms.",
+   "auth": "admin",
+   "file": "apps/core-api/src/modules/admin/admin.controller.ts",
+   "line": 293,
+   "quote": "@Post('rooms/:id/close')"
+  },
+  {
+   "id": "e15",
+   "kind": "rest",
+   "method": "GET",
+   "path": "/api/v1/admin/rooms",
+   "purpose": "Danh sách party room kèm số member, phân trang cursor. Cần manage_rooms.",
+   "auth": "admin",
+   "file": "apps/core-api/src/modules/admin/admin.controller.ts",
+   "line": 307,
+   "quote": "@Get('rooms')"
+  },
+  {
+   "id": "e16",
+   "kind": "rest",
+   "method": "GET",
+   "path": "/api/v1/admin/support/tickets",
+   "purpose": "Danh sách ticket hỗ trợ của mọi user, lọc status, phân trang cursor. Cần manage_support.",
+   "auth": "admin",
+   "file": "apps/core-api/src/modules/admin/admin.controller.ts",
+   "line": 320,
+   "quote": "@Get('support/tickets')"
+  },
+  {
+   "id": "e17",
+   "kind": "rest",
+   "method": "PATCH",
+   "path": "/api/v1/admin/support/tickets/:id",
+   "purpose": "Đổi trạng thái ticket (kiểm canTransition) và staffResponse + audit support.ticket.updated cùng transaction. Cần manage_support.",
+   "auth": "admin",
+   "file": "apps/core-api/src/modules/admin/admin.controller.ts",
+   "line": 339,
+   "quote": "@Patch('support/tickets/:id')"
+  },
+  {
+   "id": "e18",
+   "kind": "rest",
+   "method": "GET",
+   "path": "/api/v1/admin/gifts",
+   "purpose": "Xem toàn bộ catalog quà kể cả quà đã tắt. Cần manage_gifts.",
+   "auth": "admin",
+   "file": "apps/core-api/src/modules/admin/admin.controller.ts",
+   "line": 355,
+   "quote": "@Get('gifts')"
+  },
+  {
+   "id": "e19",
+   "kind": "rest",
+   "method": "POST",
+   "path": "/api/v1/admin/gifts",
+   "purpose": "Tạo quà mới (code unique uq_gifts_code) + audit gift.created cùng transaction. Cần manage_gifts.",
+   "auth": "admin",
+   "file": "apps/core-api/src/modules/admin/admin.controller.ts",
+   "line": 366,
+   "quote": "@Post('gifts')"
+  },
+  {
+   "id": "e20",
+   "kind": "rest",
+   "method": "PATCH",
+   "path": "/api/v1/admin/gifts/:id",
+   "purpose": "Sửa giá/tên/thứ tự/bật-tắt quà (không hard-delete) + audit gift.updated cùng transaction. Cần manage_gifts.",
+   "auth": "admin",
+   "file": "apps/core-api/src/modules/admin/admin.controller.ts",
+   "line": 379,
+   "quote": "@Patch('gifts/:id')"
+  },
+  {
+   "id": "e21",
+   "kind": "rest",
+   "method": "GET",
+   "path": "/api/v1/admin/economy/wallet/:userId",
+   "purpose": "Xem ví (balance snapshot + VIP) của một user, chỉ đọc. Cần refund_transaction.",
+   "auth": "admin",
+   "file": "apps/core-api/src/modules/admin/admin.controller.ts",
+   "line": 396,
+   "quote": "@Get('economy/wallet/:userId')"
+  },
+  {
+   "id": "e22",
+   "kind": "rest",
+   "method": "GET",
+   "path": "/api/v1/admin/economy/users/:userId/transactions",
+   "purpose": "Lịch sử giao dịch của user, phân trang cursor, actor-scoped. Cần refund_transaction.",
+   "auth": "admin",
+   "file": "apps/core-api/src/modules/admin/admin.controller.ts",
+   "line": 406,
+   "quote": "@Get('economy/users/:userId/transactions')"
+  },
+  {
+   "id": "e23",
+   "kind": "rest",
+   "method": "POST",
+   "path": "/api/v1/admin/economy/transactions/:id/refund",
+   "purpose": "Hoàn tiền thủ công một giao dịch bằng bút toán đảo (ledger.reverse), bắt buộc có reason, audit cùng transaction; không sửa/xoá giao dịch gốc. Cần refund_transaction.",
+   "auth": "admin",
+   "file": "apps/core-api/src/modules/admin/admin.controller.ts",
+   "line": 426,
+   "quote": "@Post('economy/transactions/:id/refund')"
+  },
+  {
+   "id": "e24",
+   "kind": "rest",
+   "method": "GET",
+   "path": "/api/v1/admin/config/economy-catalog",
+   "purpose": "Xem catalog kinh tế: gói IAP diamond và gói VIP kèm trạng thái active. Cần manage_config.",
+   "auth": "admin",
+   "file": "apps/core-api/src/modules/admin/admin.controller.ts",
+   "line": 442,
+   "quote": "@Get('config/economy-catalog')"
+  },
+  {
+   "id": "e25",
+   "kind": "rest",
+   "method": "PATCH",
+   "path": "/api/v1/admin/config/iap-products/:productId",
+   "purpose": "Bật/tắt một IAP product + audit economy.iap_product.updated cùng transaction. Cần manage_config.",
+   "auth": "admin",
+   "file": "apps/core-api/src/modules/admin/admin.controller.ts",
+   "line": 454,
+   "quote": "@Patch('config/iap-products/:productId')"
+  },
+  {
+   "id": "e26",
+   "kind": "rest",
+   "method": "PATCH",
+   "path": "/api/v1/admin/config/vip-plans/:id",
+   "purpose": "Bật/tắt một gói VIP + audit economy.vip_plan.updated cùng transaction. Cần manage_config.",
+   "auth": "admin",
+   "file": "apps/core-api/src/modules/admin/admin.controller.ts",
+   "line": 472,
+   "quote": "@Patch('config/vip-plans/:id')"
+  },
+  {
+   "id": "e27",
+   "kind": "rest",
+   "method": "POST",
+   "path": "/api/v1/admin/notifications/broadcast",
+   "purpose": "Gửi thông báo broadcast tới nhóm all/vip/non-vip: lưu in-app + audit trong một transaction, rồi push best-effort sau commit. Cần manage_config.",
+   "auth": "admin",
+   "file": "apps/core-api/src/modules/admin/admin.controller.ts",
+   "line": 490,
+   "quote": "@Post('notifications/broadcast')"
+  },
+  {
+   "id": "e28",
+   "kind": "rest",
+   "method": "GET",
+   "path": "/api/v1/admin/permissions",
+   "purpose": "Đọc ma trận quyền role (moderator/admin) x permission từ admin_role_permissions. Cần manage_permissions.",
+   "auth": "admin",
+   "file": "apps/core-api/src/modules/admin/admin.controller.ts",
+   "line": 505,
+   "quote": "@Get('permissions')"
+  },
+  {
+   "id": "e29",
+   "kind": "rest",
+   "method": "PATCH",
+   "path": "/api/v1/admin/permissions/:role/:permission",
+   "purpose": "Bật/tắt một permission cho role admin/moderator + audit; không cho tắt manage_permissions của admin (tránh tự khoá). Cần manage_permissions.",
+   "auth": "admin",
+   "file": "apps/core-api/src/modules/admin/admin.controller.ts",
+   "line": 520,
+   "quote": "@Patch('permissions/:role/:permission')"
+  },
+  {
+   "id": "e30",
+   "kind": "rest",
+   "method": "GET",
+   "path": "/api/v1/admin/staff",
+   "purpose": "Danh sách nhân sự (user có role admin/moderator). Cần manage_permissions.",
+   "auth": "admin",
+   "file": "apps/core-api/src/modules/admin/admin.controller.ts",
+   "line": 538,
+   "quote": "@Get('staff')"
+  },
+  {
+   "id": "e31",
+   "kind": "rest",
+   "method": "PATCH",
+   "path": "/api/v1/admin/staff/:id/role",
+   "purpose": "Đổi role nhân sự với khoá pessimistic để không hạ admin cuối cùng; chặn tự đổi role chính mình; audit cùng transaction. Cần manage_permissions.",
+   "auth": "admin",
+   "file": "apps/core-api/src/modules/admin/admin.controller.ts",
+   "line": 546,
+   "quote": "@Patch('staff/:id/role')"
+  }
+ ],
+ "collaborators": [
+  {
+   "id": "c1",
+   "label": "ví, hoàn tiền, catalog, VIP",
+   "what": "EconomyService: getWallet, listTransactions, adminRefundTransaction(transactionId, reason, actorUserId, withinTransaction), listCatalogForAdmin, setIapProductActive/setVipPlanActive(manager), listActiveVipUserIds, getAdminAnalytics.",
+   "why": "Economy là writer duy nhất của LedgerEntry/Wallet (double-entry append-only, balance cập nhật cùng transaction). Admin không được sửa ví hay xoá bút toán: hoàn tiền phải là reversal qua ledger.reverse với idempotency key tất định admin-refund:{id} và callback audit chạy chung DB transaction.",
+   "ifMissing": "Admin phải ghi thẳng bảng wallet/ledger: lệch sổ cái, refund đúp, mất dấu vết actor+reason. Catalog IAP/VIP và analytics cũng phải đọc bảng của Economy qua đường vòng.",
+   "with": "economy",
+   "withKind": "service",
+   "direction": "out",
+   "mechanism": "di-call",
+   "endpoints": [
+    "e1",
+    "e21",
+    "e22",
+    "e23",
+    "e24",
+    "e25",
+    "e26",
+    "e27"
+   ],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/admin/admin.service.ts",
+     "line": 313,
+     "quote": "return this.economyService.getWallet(userId);"
+    },
+    {
+     "file": "apps/core-api/src/modules/admin/admin.service.ts",
+     "line": 326,
+     "quote": "const page = await this.economyService.listTransactions("
+    },
+    {
+     "file": "apps/core-api/src/modules/admin/admin.service.ts",
+     "line": 344,
+     "quote": "return this.economyService.adminRefundTransaction("
+    }
+   ],
+   "basis": "ast",
+   "logic": {
+    "verdict": "sound",
+    "note": "Đã đối chiếu ledger.reverse: key admin-refund:{id}, callback withinTransaction chạy cùng manager, UPDATE có điều kiện status chặn double-reverse."
+   }
+  },
+  {
+   "id": "c2",
+   "label": "tạo/sửa Gift catalog",
+   "what": "GiftService.listAllForAdmin, createGift(manager, input), updateGift(manager, giftId, input); manager là EntityManager của transaction do AdminService mở.",
+   "why": "Bảng gifts thuộc module gift (code unique uq_gifts_code, gift_events tham chiếu FK nên cấm xoá cứng). Truyền cùng manager để việc đổi catalog và dòng audit commit/rollback cùng nhau.",
+   "ifMissing": "Admin tự ghi bảng gifts: bỏ qua kiểm tra trùng code và quy tắc 'tắt thay vì xoá', hoặc catalog đổi mà không có audit (hoặc ngược lại).",
+   "with": "gift",
+   "withKind": "service",
+   "direction": "out",
+   "mechanism": "di-call",
+   "endpoints": [
+    "e18",
+    "e19",
+    "e20"
+   ],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/admin/admin.service.ts",
+     "line": 271,
+     "quote": "return this.giftService.listAllForAdmin();"
+    },
+    {
+     "file": "apps/core-api/src/modules/admin/admin.service.ts",
+     "line": 276,
+     "quote": "const gift = await this.giftService.createGift(manager, input);"
+    },
+    {
+     "file": "apps/core-api/src/modules/admin/admin.service.ts",
+     "line": 297,
+     "quote": "const gift = await this.giftService.updateGift(manager, giftId, input);"
+    }
+   ],
+   "basis": "ast",
+   "logic": {
+    "verdict": "sound",
+    "note": "createGift bắt unique violation uq_gifts_code (migration party-room-gift), updateGift không hard-delete; cùng manager với audit."
+   }
+  },
+  {
+   "id": "c3",
+   "label": "broadcast + push",
+   "what": "NotificationService.createBroadcastWithManager(manager, userIds, {title, body}) tạo Notification type AdminBroadcast (chunk 500), rồi sendPush(notification) cho từng bản ghi sau commit; sendPush gọi provider di động rồi web-push và nuốt mọi lỗi (notification.service.ts:93-118).",
+   "why": "Notification là chủ bảng notifications và các kênh push (FCM/APNs/web-push). Ghi in-app trong CÙNG transaction với audit để broadcast không 'gửi 1 nửa'; push là best-effort sau commit (sendPush không bao giờ throw) nên lỗi provider không rollback broadcast đã ghi.",
+   "ifMissing": "Admin phải tự ghi notification và gọi provider push: lệch với quy tắc best-effort (push lỗi làm hỏng broadcast) và phá ranh giới sở hữu của notification.",
+   "with": "notification",
+   "withKind": "service",
+   "direction": "out",
+   "mechanism": "di-call",
+   "endpoints": [
+    "e27"
+   ],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/admin/admin.service.ts",
+     "line": 438,
+     "quote": "const created = await this.notificationService.createBroadcastWithManager("
+    },
+    {
+     "file": "apps/core-api/src/modules/admin/admin.service.ts",
+     "line": 463,
+     "quote": "this.notificationService.sendPush(notification),"
+    }
+   ],
+   "basis": "ast",
+   "logic": {
+    "verdict": "sound",
+    "note": "createBroadcastWithManager chunk 500 cùng manager; sendPush bọc try/catch nuốt lỗi; gọi sau transaction commit."
+   }
+  },
+  {
+   "id": "c4",
+   "label": "đóng phòng, đếm phòng",
+   "what": "PartyRoomService.closeRoomById(roomId, AdminClosed, undefined, onTransition) với hook ghi audit; listRoomsWithMemberCounts; countActiveRooms cho dashboard.",
+   "why": "Đóng phòng là transition có khoá pessimistic_write trên row room và idempotent; chỉ party-room biết dọn SFU (livekit.deleteRoom) và publish PartyRoomClosed sau commit. Audit được nhét vào hook onTransition để cùng transaction với việc đổi status phòng.",
+   "ifMissing": "Admin đổi status phòng trực tiếp: LiveKit room vẫn chạy, member không nhận PartyRoomClosed, và có race với host-leave/webhook/sweeper đóng cùng lúc.",
+   "with": "party-room",
+   "withKind": "service",
+   "direction": "out",
+   "mechanism": "di-call",
+   "endpoints": [
+    "e1",
+    "e14",
+    "e15"
+   ],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/admin/admin.service.ts",
+     "line": 214,
+     "quote": "const result = await this.partyRoomService.closeRoomById("
+    },
+    {
+     "file": "apps/core-api/src/modules/admin/admin.service.ts",
+     "line": 234,
+     "quote": "return this.partyRoomService.listRoomsWithMemberCounts(limit, cursor);"
+    },
+    {
+     "file": "apps/core-api/src/modules/admin/admin.service.ts",
+     "line": 637,
+     "quote": "this.partyRoomService.countActiveRooms(),"
+    }
+   ],
+   "basis": "ast",
+   "logic": {
+    "verdict": "sound",
+    "note": "closeRoomById khoá pessimistic_write, trả closed:false khi đã đóng, hook onTransition trong transaction; livekit.deleteRoom và publish sau commit."
+   }
+  },
+  {
+   "id": "c5",
+   "label": "đọc/đổi trạng thái report",
+   "what": "SafetyService.findReportsPage(filter, limit, offset) và setReportStatus(manager, reportId, status) với status resolved hoặc dismissed.",
+   "why": "Report thuộc module safety (trung lập, module khác như short-video ghi report qua nó). Chỉ status được phép đổi, các field khác bất biến; truyền manager để đổi status và audit report.{status} cùng commit.",
+   "ifMissing": "Admin sửa bảng reports tùy ý: có thể đổi nội dung báo cáo gốc hoặc đóng report mà không có dấu vết audit.",
+   "with": "safety",
+   "withKind": "service",
+   "direction": "out",
+   "mechanism": "di-call",
+   "endpoints": [
+    "e6",
+    "e7",
+    "e8"
+   ],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/admin/admin.service.ts",
+     "line": 112,
+     "quote": "return this.safetyService.findReportsPage(filter, limit, offset);"
+    },
+    {
+     "file": "apps/core-api/src/modules/admin/admin.service.ts",
+     "line": 129,
+     "quote": "const report = await this.safetyService.setReportStatus("
+    }
+   ],
+   "basis": "ast",
+   "logic": {
+    "verdict": "sound",
+    "note": "safety.setReportStatus chỉ gán report.status, cùng manager với audit report.{status}; lưu ý không có kiểm chuyển trạng thái hay khoá."
+   }
+  },
+  {
+   "id": "c6",
+   "label": "duyệt/gỡ video ngắn",
+   "what": "ShortVideoService.listPendingReview, listPublished({sort:'recent'}), adminApprove/adminReject/adminRemove(videoId, manager) thực hiện transition pending_review->published|rejected, published->removed.",
+   "why": "Vòng đời video (status machine, auto-hide theo ngưỡng report, VIDEO_MODERATION_MODE) thuộc short-video; transitionOrThrow chỉ cho phép chuyển từ đúng trạng thái nguồn. Admin đi qua đó và chung manager để audit và status commit cùng nhau.",
+   "ifMissing": "Admin ghi status video thẳng: phê duyệt/gỡ sai trạng thái nguồn (vd duyệt video đã removed) và không đồng bộ với logic auto-hide.",
+   "with": "short-video",
+   "withKind": "service",
+   "direction": "out",
+   "mechanism": "di-call",
+   "endpoints": [
+    "e9",
+    "e10",
+    "e11",
+    "e12",
+    "e13"
+   ],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/admin/admin.service.ts",
+     "line": 151,
+     "quote": "return this.shortVideoService.listPendingReview(query);"
+    },
+    {
+     "file": "apps/core-api/src/modules/admin/admin.service.ts",
+     "line": 157,
+     "quote": "return this.shortVideoService.listPublished({ ...query, sort: 'recent' });"
+    },
+    {
+     "file": "apps/core-api/src/modules/admin/admin.service.ts",
+     "line": 162,
+     "quote": "const video = await this.shortVideoService.adminApprove(videoId, manager);"
+    }
+   ],
+   "basis": "ast",
+   "logic": {
+    "verdict": "sound",
+    "note": "transitionOrThrow dùng UPDATE có điều kiện status=from (compare-and-set), ném VIDEO_INVALID_TRANSITION nếu sai nguồn."
+   }
+  },
+  {
+   "id": "c7",
+   "label": "danh sách/đổi status ticket",
+   "what": "SupportService.listAll(limit, cursor, status) và setStatusWithManager(manager, ticketId, {status, staffResponse}).",
+   "why": "Support giữ state machine ticket (canTransition, khoá pessimistic_write) và là chủ bảng ticket; admin chỉ đi qua đó, dùng chung manager để đổi trạng thái và audit support.ticket.updated atomic.",
+   "ifMissing": "Admin đổi status ticket bất kỳ (vd closed -> open) bỏ qua INVALID_TRANSITION, hoặc ticket đổi mà không có audit.",
+   "with": "support",
+   "withKind": "service",
+   "direction": "out",
+   "mechanism": "di-call",
+   "endpoints": [
+    "e16",
+    "e17"
+   ],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/admin/admin.service.ts",
+     "line": 242,
+     "quote": "return this.supportService.listAll(limit, cursor, status);"
+    },
+    {
+     "file": "apps/core-api/src/modules/admin/admin.service.ts",
+     "line": 251,
+     "quote": "const ticket = await this.supportService.setStatusWithManager("
+    }
+   ],
+   "basis": "ast",
+   "logic": {
+    "verdict": "sound",
+    "note": "support.service dùng pessimistic_write và canTransition (line 83, 92); admin chỉ gọi setStatusWithManager."
+   }
+  },
+  {
+   "id": "c8",
+   "label": "user, ban, role nhân sự",
+   "what": "UserService: getByIdOrThrow, findPage, banUser/unbanUser(manager), listActiveUserIds, listStaff, lockRoleAssignmentContext + setRoleWithManager, getAdminStats, findByIds. Guard AdminPermissionGuard cũng gọi getByIdOrThrow để đọc role hiện tại mỗi request.",
+   "why": "Bảng users và status/role thuộc module user. Đổi role cần khoá pessimistic_write toàn bộ admin + target trong cùng transaction để kiểm adminCount, tránh 2 admin hạ nhau đồng thời làm hệ thống không còn admin (CANNOT_DEMOTE_LAST_ADMIN). Ban + audit atomic.",
+   "ifMissing": "Admin sửa bảng users thẳng: race hạ quyền admin cuối cùng và ban không có audit. Nếu AdminPermissionGuard không đọc lại role từ DB (admin.service.ts:473) thì demote chỉ có hiệu lực khi access token cũ hết hạn, vì RolesGuard chỉ nhìn role trong JWT.",
+   "with": "user",
+   "withKind": "service",
+   "direction": "out",
+   "mechanism": "di-call",
+   "endpoints": [
+    "e1",
+    "e2",
+    "e3",
+    "e4",
+    "e5",
+    "e27",
+    "e30",
+    "e31"
+   ],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/admin/admin.service.ts",
+     "line": 53,
+     "quote": "return this.userService.getByIdOrThrow(userId);"
+    },
+    {
+     "file": "apps/core-api/src/modules/admin/admin.service.ts",
+     "line": 61,
+     "quote": "return this.userService.findPage(filter, limit, offset);"
+    },
+    {
+     "file": "apps/core-api/src/modules/admin/admin.service.ts",
+     "line": 77,
+     "quote": "const user = await this.userService.banUser(manager, targetUserId);"
+    }
+   ],
+   "basis": "ast",
+   "logic": {
+    "verdict": "sound",
+    "note": "lockRoleAssignmentContext khoá pessimistic_write mọi admin và target; AdminPermissionGuard gọi hasPermission rồi getByIdOrThrow mỗi request, RolesGuard chỉ đọc req.user.role từ JWT."
+   }
+  },
+  {
+   "id": "c9",
+   "label": "audit log + ma trận quyền",
+   "what": "AuditLogService.record({actorUserId, action, targetType, targetId, metadata}, manager) ghi admin_audit_logs (16 call site) và listRecent(10) cho dashboard; repo AdminRolePermission đọc/ghi admin_role_permissions.",
+   "why": "Hành động nhạy cảm không được thành công một nửa (docs/06): dòng audit phải nằm trong cùng DB transaction với thay đổi nghiệp vụ nên cần chung manager; audit chỉ INSERT, DB trigger chặn UPDATE/DELETE để không sửa được lịch sử. Ma trận quyền nằm DB để chỉnh quyền không cần deploy.",
+   "ifMissing": "Hành động admin không truy vết được, hoặc audit ghi ngoài transaction nên có thể có hành động mà thiếu log (hoặc ngược lại); đổi quyền phải sửa code và deploy.",
+   "with": "postgres",
+   "withKind": "infra",
+   "direction": "out",
+   "mechanism": "shared-db",
+   "endpoints": [
+    "e1",
+    "e4",
+    "e5",
+    "e7",
+    "e8",
+    "e11",
+    "e12",
+    "e13",
+    "e14",
+    "e17",
+    "e19",
+    "e20",
+    "e23",
+    "e25",
+    "e26",
+    "e27",
+    "e28",
+    "e29",
+    "e31"
+   ],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/admin/admin.service.ts",
+     "line": 78,
+     "quote": "await this.auditLogService.record("
+    },
+    {
+     "file": "apps/core-api/src/modules/admin/admin.service.ts",
+     "line": 94,
+     "quote": "await this.auditLogService.record("
+    },
+    {
+     "file": "apps/core-api/src/modules/admin/admin.service.ts",
+     "line": 134,
+     "quote": "await this.auditLogService.record("
+    }
+   ],
+   "review": {
+    "verdict": "supported"
+   },
+   "logic": {
+    "verdict": "sound",
+    "note": "Đếm được đúng 16 lời gọi auditLogService.record trong admin.service; trigger trg_admin_audit_logs_append_only có trong migration 1753700000000."
+   }
+  },
+  {
+   "id": "c50",
+   "with": "admin-console",
+   "withKind": "client",
+   "direction": "in",
+   "mechanism": "http",
+   "endpoints": [
+    "e1",
+    "e2",
+    "e3",
+    "e4",
+    "e5",
+    "e6",
+    "e7",
+    "e8",
+    "e9",
+    "e10",
+    "e11",
+    "e12",
+    "e13",
+    "e14",
+    "e15",
+    "e16",
+    "e17",
+    "e18",
+    "e19",
+    "e20",
+    "e21",
+    "e22",
+    "e23",
+    "e24",
+    "e25",
+    "e26",
+    "e27",
+    "e28",
+    "e29",
+    "e30",
+    "e31"
+   ],
+   "label": "REST + Bearer token admin",
+   "what": "apps/admin (Vite/React) gọi toàn bộ /api/v1/admin/* bằng apiClient sinh từ OpenAPI; mọi request kèm Authorization: Bearer, refresh token là cookie httpOnly + csrfToken lưu localStorage.",
+   "why": "Admin là SPA riêng, không có session server: quyền được quyết định hoàn toàn ở core-api (role + permission) nên client chỉ hiển thị. Phải gửi Bearer access token của tài khoản staff và xử lý 403 vì ma trận quyền đổi được lúc runtime.",
+   "ifMissing": "Không có console thao tác; hoặc client tin quyền ở phía UI và route nào quên guard sẽ bị lộ (hiện core-api deny route thiếu permission).",
+   "evidence": [
+    {
+     "file": "libs/api-client/src/lib/client.ts",
+     "line": 70,
+     "quote": "Gắn `Authorization: Bearer` cho mọi request"
+    },
+    {
+     "file": "apps/admin/src/features/economy/api.ts",
+     "line": 58,
+     "quote": "'/api/v1/admin/economy/transactions/{id}/refund',"
+    }
+   ],
+   "review": {
+    "verdict": "supported"
+   },
+   "logic": {
+    "verdict": "sound",
+    "note": "Client gắn Bearer, csrfToken lưu localStorage (token-store), controller deny route thiếu permission (AdminPermissionGuard)."
+   }
+  },
+  {
+   "id": "c51",
+   "with": "kafka",
+   "withKind": "infra",
+   "direction": "out",
+   "mechanism": "kafka",
+   "endpoints": [
+    "e23"
+   ],
+   "label": "outbox event refund",
+   "what": "Refund thủ công đi qua ledger.reverse với outboxEventTypeOverride 'economy.diamond.refunded'; Economy ghi OutboxEvent cùng transaction bút toán đảo, relay publish lên Kafka sau commit.",
+   "why": "Event outbox ghi CÙNG transaction với bút toán đảo (docs/03 § 3.6) nên không mất hoặc phát đôi khi commit lỗi; eventType riêng economy.diamond.refunded (outboxEventTypeOverride, truyền xuống applyWalletDeltas ở ledger.service.ts) tách refund khỏi ghi có/ghi nợ thường. Relay Kafka mặc định tắt (kể cả hosted) và không có consumer của topic trong apps/, nên hiện outbox_events chỉ tích lũy.",
+   "ifMissing": "Khi relay được bật, downstream không phân biệt được refund với ghi có thường hoặc không nhận được refund; hiện (relay tắt) chưa có tác động runtime.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/economy/economy.service.ts",
+     "line": 756,
+     "quote": "outboxEventTypeOverride: 'economy.diamond.refunded',"
+    }
+   ],
+   "review": {
+    "verdict": "supported"
+   },
+   "logic": {
+    "verdict": "sound",
+    "note": "Relay tắt mặc định và cả trong deploy/production, k8s, hosted; grep không thấy consumer topic litmatch.economy.events trong apps/."
+   }
+  }
+ ],
+ "waivedEdges": [],
+ "excludedRoutes": [],
+ "notes": [
+  "Không có doc riêng cho admin trong docs/services; controller trích docs/12 § 12.7 và docs/10. Code là nguồn chính.",
+  "Comment đầu AdminController còn ghi 'Task 0 ... endpoint tối thiểu' nhưng controller hiện có 31 route đủ các nhóm users/reports/videos/rooms/support/gifts/economy/config/permissions/staff.",
+  "Chuỗi guard thực tế: ThrottlerGuard, JwtAuthGuard, RolesGuard (APP_GUARD, app.module.ts) rồi @RequireRoles(Admin, Moderator) ở class và AdminPermissionGuard (@UseGuards ở class). Route nào thiếu @RequireAdminPermission bị deny (403), không mặc định mở.",
+  "JwtAuthGuard KHÔNG đọc DB và KHÔNG kiểm status banned mỗi request (chỉ verify chữ ký + TTL). AdminPermissionGuard đọc lại role từ DB nên hạ role có hiệu lực ngay, nhưng hasPermission không kiểm user.status: staff đã bị ban vẫn dùng được API admin tới khi access token hết hạn. Nghi vấn lỗ hổng cần xác nhận.",
+  "Quyền xem ví và lịch sử giao dịch (e21, e22) dùng permission refund_transaction (không có permission 'view economy' riêng); video ngắn dùng permission resolve_reports (nhãn 'Duyệt báo cáo & video ngắn').",
+  "resolve/dismiss report chỉ đổi Report.status, KHÔNG có state machine (Safety không chặn resolved->dismissed) và KHÔNG tự ban user/gỡ nội dung; ban và gỡ video là call riêng. Khác với support dùng canTransition.",
+  "e22 lịch sử giao dịch là actor-scoped (comment trong admin.service.ts): chưa thấy giao dịch user chỉ là người nhận quà; refund thủ công vì vậy chỉ tìm được từ phía người trả.",
+  "e27 broadcast đọc TOÀN BỘ id user active (listActiveUserIds) vào bộ nhớ, insert theo chunk 500 trong 1 transaction rồi sendPush Promise.all không giới hạn song song: rủi ro scale khi user nhiều. Danh sách recipient được đọc TRƯỚC transaction nên user mới/bị ban giữa chừng có thể lệch.",
+  "apps/admin còn gọi GET /api/v1/party/rooms (route không thuộc /admin) trong features/rooms/api.ts: client admin không chỉ dùng prefix /admin.",
+  "Cửa sổ staff bị ban: hasPermission (admin.service.ts:469-481) chỉ kiểm role và policy, không kiểm user.status; banUser không thu hồi refresh session và JwtAuthGuard không đọc DB, nên staff bị ban dùng được API admin tới khi access token hết hạn (mặc định JWT_ACCESS_TTL_SECONDS=900s), sau đó refresh bị chặn. Suy ra từ code, chưa chạy thử.",
+  "unbanUser (admin.service.ts:88-) không có kiểm tự-unban tương ứng CANNOT_BAN_SELF của ban. Kết hợp cửa sổ ở trên, staff vừa bị ban nhưng còn ban_users và token hợp lệ có thể tự mở khoá trong cửa sổ đó. Suy ra từ code, chưa chạy thử.",
+  "Outbox economy.diamond.refunded do refund thủ công ghi chỉ có ý nghĩa khi relay bật: ECONOMY_OUTBOX_RELAY_ENABLED mặc định false (env.validation.ts:349) và hosted cũng false (deploy/hosted/core-api.env.example:37); grep apps/ không thấy consumer của topic economy ngoài chính module economy."
+ ],
+ "techniques": [
+  {
+   "id": "t1",
+   "slug": "other:self-lockout-guard",
+   "name": "Chặn tự khoá quyền",
+   "how": "Chặn tự ban (CANNOT_BAN_SELF), tắt manage_permissions của admin (CANNOT_DISABLE_PERMISSION_CONTROL), tự đổi role (CANNOT_CHANGE_OWN_ROLE) và hạ admin cuối (CANNOT_DEMOTE_LAST_ADMIN).",
+   "why": "Chặn tự ban (CANNOT_BAN_SELF), tắt manage_permissions của admin (CANNOT_DISABLE_PERMISSION_CONTROL), tự đổi role (CANNOT_CHANGE_OWN_ROLE) và hạ admin cuối (CANNOT_DEMOTE_LAST_ADMIN).",
+   "endpoints": [
+    "e4",
+    "e29",
+    "e31"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/admin/admin.service.ts",
+     "line": 573,
+     "quote": "if (actorUserId === targetUserId) {"
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "local": "Chặn tự ban (CANNOT_BAN_SELF), tắt manage_permissions của admin (CANNOT_DISABLE_PERMISSION_CONTROL), tự đổi role (CANNOT_CHANGE_OWN_ROLE) và hạ admin cuối (CANNOT_DEMOTE_LAST_ADMIN).",
+   "addedByLogicReview": true
+  },
+  {
+   "slug": "rbac-permission-matrix",
+   "name": "RBAC có ma trận quyền chỉnh được lúc chạy",
+   "model": "RBAC + ma trận quyền",
+   "how": "Vai trò ánh xạ tới tập quyền chi tiết lưu trong DB; guard kiểm quyền cụ thể cho từng thao tác.",
+   "why": "Đổi quyền của một vai trò không cần deploy lại.",
+   "alternative": "Hard-code quyền theo vai trò: nhanh nhưng mỗi thay đổi phải sửa mã.",
+   "endpoints": [
+    "e1",
+    "e2",
+    "e3",
+    "e4",
+    "e5",
+    "e6",
+    "e7",
+    "e8",
+    "e9",
+    "e10",
+    "e11",
+    "e12",
+    "e13",
+    "e14",
+    "e15",
+    "e16",
+    "e17",
+    "e18",
+    "e19",
+    "e20",
+    "e21",
+    "e22",
+    "e23",
+    "e24",
+    "e25",
+    "e26",
+    "e27",
+    "e28",
+    "e29",
+    "e30",
+    "e31"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/admin/admin.controller.ts",
+     "line": 64,
+     "quote": "AdminRolePermissionDto,"
+    },
+    {
+     "file": "apps/core-api/src/modules/admin/admin.module.ts",
+     "line": 21,
+     "quote": "TypeOrmModule.forFeature([AdminRolePermission]),"
+    },
+    {
+     "file": "apps/core-api/src/modules/admin/admin.service.ts",
+     "line": 39,
+     "quote": "@InjectRepository(AdminRolePermission)"
+    }
+   ],
+   "auto": true,
+   "count": 46,
+   "id": "t2",
+   "local": "Route admin dùng @RequireAdminPermission(AdminPermission.*) với bảng AdminRolePermission trong DB, quyền chỉnh được qua PATCH /admin/permissions/:role/:permission."
+  },
+  {
+   "slug": "rbac-role-guard",
+   "name": "RBAC theo vai trò (@Roles + RolesGuard)",
+   "model": "RBAC",
+   "how": "Vai trò (role) nằm trong token/hồ sơ; @Roles(...) + RolesGuard cho phép hoặc chặn theo vai trò.",
+   "why": "Đơn giản, dễ kiểm toán khi số vai trò ít và ổn định (user/admin).",
+   "alternative": "ABAC hoặc policy engine linh hoạt hơn nhưng phức tạp khi chỉ có vài vai trò.",
+   "endpoints": [
+    "e1",
+    "e2",
+    "e3",
+    "e4",
+    "e5",
+    "e6",
+    "e7",
+    "e8",
+    "e9",
+    "e10",
+    "e11",
+    "e12",
+    "e13",
+    "e14",
+    "e15",
+    "e16",
+    "e17",
+    "e18",
+    "e19",
+    "e20",
+    "e21",
+    "e22",
+    "e23",
+    "e24",
+    "e25",
+    "e26",
+    "e27",
+    "e28",
+    "e29",
+    "e30",
+    "e31"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/admin/admin.controller.ts",
+     "line": 64,
+     "quote": "AdminRolePermissionDto,"
+    },
+    {
+     "file": "apps/core-api/src/modules/admin/admin.module.ts",
+     "line": 21,
+     "quote": "TypeOrmModule.forFeature([AdminRolePermission]),"
+    },
+    {
+     "file": "apps/core-api/src/modules/admin/admin.service.ts",
+     "line": 39,
+     "quote": "@InjectRepository(AdminRolePermission)"
+    }
+   ],
+   "auto": true,
+   "count": 31,
+   "id": "t3",
+   "local": "Controller admin bị giới hạn theo vai trò staff qua RolesGuard toàn cục và các endpoint quản lý role (/admin/staff/:id/role)."
+  },
+  {
+   "slug": "abac-attribute-policy",
+   "name": "ABAC theo thuộc tính (guest, ban, VIP, giới tính, tuổi…)",
+   "model": "ABAC",
+   "how": "Quyết định dựa trên thuộc tính của người dùng hoặc tài nguyên như guest, bị ban, hạng VIP, giới tính, tuổi.",
+   "why": "Nghiệp vụ có quy tắc theo ngữ cảnh mà vai trò đơn thuần không diễn đạt được.",
+   "alternative": "Policy engine (OPA/Casbin/CASL) tách chính sách khỏi mã nhưng thêm thành phần vận hành.",
+   "endpoints": [
+    "e27"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/admin/admin.service.ts",
+     "line": 432,
+     "quote": "const isVip = activeVipUserIds.has(userId);"
+    },
+    {
+     "file": "apps/core-api/src/modules/admin/dto/admin-config.dto.ts",
+     "line": 27,
+     "quote": "@ApiProperty({ enum: VipTier }) tier!: VipTier;"
+    },
+    {
+     "file": "apps/core-api/src/modules/admin/dto/admin-economy.dto.ts",
+     "line": 11,
+     "quote": "@ApiProperty({ enum: VipTier, nullable: true }) vipTier!: VipTier | null;"
+    }
+   ],
+   "auto": true,
+   "count": 6,
+   "id": "t4",
+   "local": "Broadcast thông báo lọc người nhận theo thuộc tính VIP (activeVipUserIds, BroadcastAudience.Vip/All) trong admin.service."
+  },
+  {
+   "slug": "db-transaction",
+   "name": "Transaction DB (một đơn vị công việc)",
+   "model": "Transaction",
+   "how": "Gói nhiều thao tác ghi vào một transaction: cùng commit hoặc cùng rollback.",
+   "why": "Tránh trạng thái nửa vời khi lỗi giữa chừng.",
+   "endpoints": [
+    "e4",
+    "e5",
+    "e7",
+    "e8",
+    "e11",
+    "e12",
+    "e13",
+    "e17",
+    "e19",
+    "e20",
+    "e25",
+    "e26",
+    "e27",
+    "e29",
+    "e31"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/admin/admin.service.ts",
+     "line": 76,
+     "quote": "return this.dataSource.transaction(async (manager) => {"
+    }
+   ],
+   "auto": true,
+   "count": 14,
+   "id": "t5",
+   "local": "Ban/unban, report, video, ticket, gift, config, broadcast, đổi role mở this.dataSource.transaction cùng auditLogService.record; hoàn tiền (e23) do ledger.reverse mở transaction riêng, audit qua callback withinTransaction."
+  },
+  {
+   "id": "t6",
+   "slug": "state-machine",
+   "name": "Máy trạng thái tường minh",
+   "model": "State machine",
+   "how": "Trạng thái và các bước chuyển hợp lệ được định nghĩa tường minh.",
+   "why": "Chặn chuyển trạng thái sai thứ tự và dễ kiểm thử.",
+   "endpoints": [
+    "e11",
+    "e12",
+    "e13",
+    "e17"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/short-video/short-video.service.ts",
+     "line": 543,
+     "quote": "{ id: videoId, status: from },"
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "local": "Video chuyển trạng thái bằng UPDATE có điều kiện status=from trong ShortVideoService.transitionOrThrow; ticket kiểm canTransition dưới pessimistic_write; sai trạng thái nguồn trả lỗi 409.",
+   "addedByLogicReview": true
+  },
+  {
+   "slug": "entity-manager-propagation",
+   "name": "Truyền EntityManager giữa module (chung một transaction)",
+   "model": "Chung transaction",
+   "how": "Module sở hữu dữ liệu nhận EntityManager của giao dịch đang chạy để việc của nó nằm trong cùng transaction.",
+   "why": "Nhiều module dùng chung DB nên atomicity xuyên module không cần saga hay 2PC.",
+   "alternative": "Saga/outbox xuyên service: cần khi tách deployable, thừa khi cùng process.",
+   "endpoints": [
+    "e17",
+    "e27",
+    "e31"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/admin/admin.service.ts",
+     "line": 251,
+     "quote": "const ticket = await this.supportService.setStatusWithManager("
+    }
+   ],
+   "auto": true,
+   "count": 3,
+   "id": "t7",
+   "local": "AdminService mở transaction rồi truyền manager vào supportService.setStatusWithManager và các service khác để chung một transaction."
+  },
+  {
+   "id": "t8",
+   "slug": "pessimistic-lock",
+   "name": "Khoá bi quan (SELECT … FOR UPDATE)",
+   "model": "Khoá bi quan",
+   "how": "SELECT … FOR UPDATE khoá hàng đang xử lý để giao dịch khác phải chờ.",
+   "why": "Chặn hai request song song cùng đọc rồi cùng ghi (race) trên số dư, ticket, session.",
+   "alternative": "Khoá lạc quan (version) ít chờ hơn nhưng phải retry khi xung đột.",
+   "endpoints": [
+    "e31"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/user/user.service.ts",
+     "line": 163,
+     "quote": ".setLock('pessimistic_write')"
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "local": "setStaffRole gọi UserService.lockRoleAssignmentContext khoá pessimistic_write mọi user role admin và target trong transaction để hai lần hạ quyền song song không xoá hết admin (CANNOT_DEMOTE_LAST_ADMIN).",
+   "addedByLogicReview": true
+  },
+  {
+   "id": "t9",
+   "slug": "idempotency-key",
+   "name": "Idempotency-Key (client sinh, server khử trùng)",
+   "model": "Idempotency-Key",
+   "how": "Client gửi khoá duy nhất cho mỗi thao tác; server lưu khoá (unique) và trả lại kết quả cũ khi gặp lại.",
+   "why": "Retry mạng không tạo bản ghi hoặc trừ tiền hai lần.",
+   "endpoints": [
+    "e23"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/economy/economy.service.ts",
+     "line": 752,
+     "quote": "`admin-refund:${transactionId}`,"
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "local": "Refund thủ công dùng key tất định admin-refund:{transactionId} nên bấm refund lại cùng giao dịch không sinh bút toán đảo thứ hai; double-reverse còn bị TRANSACTION_ALREADY_REVERSED chặn.",
+   "addedByLogicReview": true
+  },
+  {
+   "id": "t10",
+   "slug": "reversal-compensation",
+   "name": "Sửa sai bằng bút toán đảo (reversal), không sửa lịch sử",
+   "model": "Bút toán đảo",
+   "how": "Sửa sai bằng bút toán đảo mới thay vì sửa hoặc xoá lịch sử.",
+   "why": "Lịch sử luôn đầy đủ và truy vết được.",
+   "endpoints": [
+    "e23"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/economy/services/ledger.service.ts",
+     "line": 260,
+     "quote": "{ id: original.id, status: TransactionStatus.Completed },"
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "local": "adminRefundTransaction không sửa giao dịch gốc: ledger.reverse ghi bút toán đảo chiều trỏ reversalOf và đánh dấu gốc Reversed bằng UPDATE có điều kiện status Completed.",
+   "addedByLogicReview": true
+  },
+  {
+   "slug": "publish-after-commit",
+   "name": "Chỉ publish sau khi commit",
+   "model": "Sau commit",
+   "how": "Chỉ phát realtime sau khi transaction commit.",
+   "why": "Không bắn sự kiện của giao dịch bị rollback.",
+   "endpoints": [],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/admin/admin.service.ts",
+     "line": 209,
+     "quote": "/** Close room và audit cùng transaction; cleanup SFU/realtime chạy sau commit trong owner. */"
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "id": "t11",
+   "local": "closePartyRoom ghi audit trong hook onTransition cùng transaction đóng phòng; livekit.deleteRoom và publish PartyRoomClosed chạy sau commit trong closeRoomById (e14); push broadcast (e27) cũng sau commit."
+  },
+  {
+   "slug": "rate-limit-throttler",
+   "name": "Rate limit (@nestjs/throttler)",
+   "model": "Rate limit",
+   "how": "@Throttle giới hạn số request theo khoảng thời gian cho từng route.",
+   "why": "Chặn spam và dò quét bằng cách giới hạn số request theo thời gian, trước khi request tới logic nghiệp vụ.",
+   "endpoints": [
+    "e1",
+    "e2",
+    "e3",
+    "e4",
+    "e5",
+    "e6",
+    "e7",
+    "e8",
+    "e9",
+    "e10",
+    "e11",
+    "e12",
+    "e13",
+    "e14",
+    "e15",
+    "e16",
+    "e17",
+    "e18",
+    "e19",
+    "e20",
+    "e21",
+    "e22",
+    "e23",
+    "e24",
+    "e25",
+    "e26",
+    "e27",
+    "e28",
+    "e29",
+    "e30",
+    "e31"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/app/app.module.ts",
+     "line": 116,
+     "quote": "{ provide: APP_GUARD, useClass: ThrottlerGuard },"
+    }
+   ],
+   "auto": true,
+   "count": 31,
+   "id": "t12",
+   "local": "ThrottlerGuard toàn cục áp giới hạn mặc định cho mọi route /admin/*."
+  },
+  {
+   "id": "t13",
+   "slug": "fail-closed",
+   "name": "Lỗi thì chặn (fail closed)",
+   "model": "Fail closed",
+   "how": "Khi thành phần kiểm tra lỗi thì từ chối thay vì cho qua.",
+   "why": "An toàn hơn khi mất Redis hoặc quota.",
+   "endpoints": [
+    "e1",
+    "e2",
+    "e3",
+    "e4",
+    "e5",
+    "e6",
+    "e7",
+    "e8",
+    "e9",
+    "e10",
+    "e11",
+    "e12",
+    "e13",
+    "e14",
+    "e15",
+    "e16",
+    "e17",
+    "e18",
+    "e19",
+    "e20",
+    "e21",
+    "e22",
+    "e23",
+    "e24",
+    "e25",
+    "e26",
+    "e27",
+    "e28",
+    "e29",
+    "e30",
+    "e31"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/admin/services/admin-permission.guard.ts",
+     "line": 41,
+     "quote": "permission === undefined ||"
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "local": "AdminPermissionGuard ném PERMISSION_FORBIDDEN khi route thiếu metadata @RequireAdminPermission hoặc không có request.user, nên route admin mới quên khai quyền bị deny mặc định.",
+   "addedByLogicReview": true
+  },
+  {
+   "slug": "best-effort-degrade",
+   "name": "Best-effort: lỗi phụ không phá nghiệp vụ chính",
+   "model": "Best-effort",
+   "how": "Việc phụ (push, realtime) lỗi chỉ ghi log, không phá nghiệp vụ chính.",
+   "why": "Nghiệp vụ đã commit không nên hỏng vì kênh phụ.",
+   "endpoints": [
+    "e27"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/admin/admin.controller.ts",
+     "line": 495,
+     "quote": "'Gửi thông báo in-app + push best-effort theo audience — chỉ admin',"
+    },
+    {
+     "file": "apps/core-api/src/modules/admin/admin.service.ts",
+     "line": 460,
+     "quote": "// In-app đã commit; push là best-effort và không được rollback broadcast đã ghi."
+    }
+   ],
+   "auto": true,
+   "count": 2,
+   "id": "t14",
+   "local": "broadcastNotification đã commit in-app trước, push qua notificationService.sendPush là best-effort, lỗi không rollback broadcast."
+  },
+  {
+   "slug": "openapi-contract",
+   "name": "Hợp đồng OpenAPI + client sinh tự động",
+   "model": "OpenAPI",
+   "how": "OpenAPI sinh từ code và client TypeScript sinh tự động.",
+   "why": "Client và server không lệch hợp đồng.",
+   "endpoints": [
+    "e1",
+    "e2",
+    "e3",
+    "e4",
+    "e5",
+    "e6",
+    "e7",
+    "e8",
+    "e9",
+    "e10",
+    "e11",
+    "e12",
+    "e13",
+    "e14",
+    "e15",
+    "e16",
+    "e17",
+    "e18",
+    "e19",
+    "e20",
+    "e21",
+    "e22",
+    "e23",
+    "e24",
+    "e25",
+    "e26",
+    "e27",
+    "e28",
+    "e29",
+    "e30",
+    "e31"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/admin/admin.controller.ts",
+     "line": 106,
+     "quote": "@ApiOperation({"
+    }
+   ],
+   "auto": true,
+   "count": 31,
+   "id": "t15",
+   "local": "Mỗi route admin có @ApiOperation và @ApiOkResponse với DTO riêng (ví dụ AdminDashboardDto) cho hợp đồng OpenAPI."
+  },
+  {
+   "slug": "cursor-pagination",
+   "name": "Phân trang cursor (keyset)",
+   "model": "Keyset",
+   "how": "Phân trang theo cursor thay vì offset.",
+   "why": "Ổn định khi dữ liệu thay đổi và nhanh ở trang sâu.",
+   "endpoints": [
+    "e15",
+    "e22",
+    "e9",
+    "e10"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/admin/admin.controller.ts",
+     "line": 313,
+     "quote": "@Query() query: CursorPageQueryDto,"
+    },
+    {
+     "file": "apps/core-api/src/modules/admin/admin.service.ts",
+     "line": 29,
+     "quote": "CursorPageQueryDto,"
+    },
+    {
+     "file": "apps/core-api/src/modules/admin/dto/admin-economy.dto.ts",
+     "line": 38,
+     "quote": "@ApiProperty({ nullable: true }) nextCursor!: string | null;"
+    }
+   ],
+   "auto": true,
+   "count": 12,
+   "id": "t16",
+   "local": "Các danh sách phòng, video, giao dịch nhận CursorPageQueryDto (query.limit, query.cursor) và trả CursorPage."
+  },
+  {
+   "slug": "audit-log",
+   "name": "Audit log hành động nhạy cảm",
+   "model": "Audit",
+   "how": "Ghi audit log cho hành động nhạy cảm của admin.",
+   "why": "Truy trách nhiệm: mọi hành động nhạy cảm của admin để lại dấu vết gắn với người thực hiện.",
+   "endpoints": [
+    "e4",
+    "e5",
+    "e7",
+    "e8",
+    "e11",
+    "e12",
+    "e13",
+    "e14",
+    "e17",
+    "e19",
+    "e20",
+    "e23",
+    "e25",
+    "e26",
+    "e27",
+    "e29",
+    "e31",
+    "e1"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/admin/admin.service.ts",
+     "line": 49,
+     "quote": "private readonly auditLogService: AuditLogService,"
+    }
+   ],
+   "auto": true,
+   "count": 18,
+   "id": "t17",
+   "local": "AdminService inject AuditLogService và ghi audit cho các hành động nhạy cảm như ban/unban, duyệt report, video, hoàn tiền."
+  }
+ ]
+}

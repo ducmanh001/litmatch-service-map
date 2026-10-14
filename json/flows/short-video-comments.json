@@ -1,0 +1,224 @@
+{
+ "id": "short-video-comments",
+ "title": "Bình luận video ngắn",
+ "summary": "Người dùng thêm, xem và xoá comment của video ngắn. short-video sở hữu video và comment (kèm commentCount), nhưng hồ sơ tác giả thuộc module user nên controller phải gọi UserService để ghép PublicProfileDto vào kết quả.",
+ "caption": "Ba endpoint comment của short-video: ghi/đọc/xoá trong PostgreSQL và lấy hồ sơ tác giả từ module user.",
+ "participants": [
+  {
+   "id": "web",
+   "label": "Web client",
+   "kind": "client"
+  },
+  {
+   "id": "short-video",
+   "label": "short-video",
+   "kind": "service"
+  },
+  {
+   "id": "user",
+   "label": "user",
+   "kind": "service"
+  },
+  {
+   "id": "postgres",
+   "label": "PostgreSQL",
+   "kind": "infra"
+  }
+ ],
+ "steps": [
+  {
+   "from": "web",
+   "to": "short-video",
+   "label": "POST /videos/:id/comments gửi nội dung bình luận",
+   "kind": "call",
+   "mechanism": "http"
+  },
+  {
+   "from": "short-video",
+   "to": "postgres",
+   "label": "getVideoOrThrow: đọc Video, kiểm tra quyền nhìn thấy",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/short-video/short-video.service.ts",
+     "line": 174,
+     "quote": "const video = await this.videoRepo.findOneBy({ id: videoId });"
+    }
+   ]
+  },
+  {
+   "from": "short-video",
+   "to": "postgres",
+   "label": "Transaction: lưu VideoComment và tăng Video.commentCount",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/short-video/short-video.service.ts",
+     "line": 350,
+     "quote": "return this.dataSource.transaction(async (manager) => {"
+    }
+   ]
+  },
+  {
+   "from": "short-video",
+   "to": "user",
+   "label": "getAuthor: UserService.getByIdOrThrow lấy hồ sơ tác giả",
+   "kind": "call",
+   "mechanism": "di-call",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/short-video/short-video.controller.ts",
+     "line": 209,
+     "quote": "return PublicProfileDto.from(await this.userService.getByIdOrThrow(userId));"
+    }
+   ]
+  },
+  {
+   "from": "short-video",
+   "to": "web",
+   "label": "Trả 201 VideoCommentDto kèm hồ sơ tác giả",
+   "kind": "return",
+   "mechanism": "http"
+  },
+  {
+   "from": "web",
+   "to": "short-video",
+   "label": "GET /videos/:id/comments với cursor phân trang",
+   "kind": "call",
+   "mechanism": "http"
+  },
+  {
+   "from": "short-video",
+   "to": "postgres",
+   "label": "getVideoOrThrow: đọc Video trước khi liệt kê",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/short-video/short-video.service.ts",
+     "line": 174,
+     "quote": "const video = await this.videoRepo.findOneBy({ id: videoId });"
+    }
+   ]
+  },
+  {
+   "from": "short-video",
+   "to": "postgres",
+   "label": "Truy vấn comment chưa xoá, sắp theo seq giảm dần",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/short-video/short-video.service.ts",
+     "line": 370,
+     "quote": "const qb = this.commentRepo"
+    }
+   ]
+  },
+  {
+   "from": "short-video",
+   "to": "user",
+   "label": "getAuthors: UserService.findByIds tải hồ sơ cả trang một lần",
+   "kind": "call",
+   "mechanism": "di-call",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/short-video/short-video.controller.ts",
+     "line": 216,
+     "quote": "const users = await this.userService.findByIds("
+    }
+   ]
+  },
+  {
+   "from": "short-video",
+   "to": "web",
+   "label": "Trả trang comment kèm hồ sơ tác giả",
+   "kind": "return",
+   "mechanism": "http"
+  },
+  {
+   "from": "web",
+   "to": "short-video",
+   "label": "DELETE /videos/:id/comments/:commentId",
+   "kind": "call",
+   "mechanism": "http"
+  },
+  {
+   "from": "short-video",
+   "to": "postgres",
+   "label": "Đọc Video và VideoComment để kiểm tra tồn tại và quyền xoá",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/short-video/short-video.service.ts",
+     "line": 391,
+     "quote": "const comment = await this.commentRepo.findOneBy({"
+    }
+   ]
+  },
+  {
+   "from": "short-video",
+   "to": "postgres",
+   "label": "Transaction: đặt deletedAt cho comment và giảm commentCount",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/short-video/short-video.service.ts",
+     "line": 412,
+     "quote": "await this.dataSource.transaction(async (manager) => {"
+    }
+   ]
+  },
+  {
+   "from": "short-video",
+   "to": "web",
+   "label": "Trả 204 No Content",
+   "kind": "return",
+   "mechanism": "http"
+  }
+ ],
+ "groups": [
+  {
+   "from": 3,
+   "to": 3,
+   "label": "Transaction tạo comment",
+   "kind": "transaction"
+  },
+  {
+   "from": 13,
+   "to": 13,
+   "label": "Transaction xoá comment",
+   "kind": "transaction"
+  }
+ ],
+ "invariants": [
+  "Lưu comment và tăng Video.commentCount nằm trong cùng một dataSource.transaction (và xoá mềm kèm giảm commentCount cũng vậy), nên số đếm không lệch với số comment.",
+  "getVideoOrThrow luôn chạy trước mọi thao tác comment: chỉ tác giả hoặc video đã published mới được thao tác, và các trường hợp không hợp lệ trả cùng một mã lỗi.",
+  "Hồ sơ tác giả thuộc module user nên short-video lấy qua UserService ở controller; danh sách dùng findByIds một lần cho cả trang thay vì gọi từng người.",
+  "Xoá comment chỉ cho tác giả comment hoặc tác giả video, kiểm tra trước khi mở transaction."
+ ],
+ "failureModes": [
+  {
+   "when": "Video không tồn tại, bị gỡ hoặc chưa published với người không phải tác giả",
+   "effect": "getVideoOrThrow từ chối, comment không được tạo/liệt kê/xoá"
+  },
+  {
+   "when": "Comment không tồn tại hoặc đã có deletedAt khi xoá",
+   "effect": "Ném DomainException 404 'Không tìm thấy comment', không mở transaction"
+  },
+  {
+   "when": "Người xoá không phải tác giả comment hay tác giả video",
+   "effect": "Ném DomainException 403, không có thay đổi dữ liệu"
+  },
+  {
+   "when": "Lỗi trong transaction tạo hoặc xoá comment",
+   "effect": "Cả lưu/cập nhật comment và thay đổi commentCount cùng bị rollback"
+  }
+ ],
+ "dataIssues": [],
+ "uncertain": []
+}

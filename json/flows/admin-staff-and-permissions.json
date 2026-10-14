@@ -1,0 +1,53 @@
+{
+ "id": "admin-staff-and-permissions",
+ "title": "Admin quản lý nhân sự và ma trận quyền",
+ "summary": "Admin xem và bật/tắt quyền theo vai trò, liệt kê nhân sự và đổi vai trò. AdminModule giữ ma trận quyền và audit, còn bảng users thuộc module user, nên đổi vai trò phải đi qua UserService trong cùng một transaction với audit.",
+ "caption": "Guard đọc lại vai trò và quyền từ DB mỗi request; đổi quyền hoặc vai trò ghi audit cùng transaction.",
+ "participants": [
+  {"id": "admin-console", "label": "Admin console", "kind": "client"},
+  {"id": "admin", "label": "Admin API", "kind": "service"},
+  {"id": "user", "label": "User", "kind": "service"},
+  {"id": "postgres", "label": "PostgreSQL", "kind": "infra"}
+ ],
+ "steps": [
+  {"from": "admin-console", "to": "admin", "label": "GET /admin/permissions xem ma trận quyền", "kind": "call", "mechanism": "http", "note": "AdminPermissionGuard gắn ở class AdminController và chạy trước mỗi route; cả 4 route đều yêu cầu ManagePermissions."},
+  {"from": "admin", "to": "user", "label": "Guard đọc lại role hiện tại của người gọi", "kind": "call", "mechanism": "di-call", "note": "Vì đọc từ DB nên hạ quyền có hiệu lực ngay dù access token cũ còn hạn.", "evidence": [{"file": "apps/core-api/src/modules/admin/admin.service.ts", "line": 473, "quote": "const user = await this.userService.getByIdOrThrow(userId);"}]},
+  {"from": "admin", "to": "postgres", "label": "Guard tra chính sách enabled của role/permission", "kind": "call", "mechanism": "shared-db", "evidence": [{"file": "apps/core-api/src/modules/admin/admin.service.ts", "line": 476, "quote": "const policy = await this.rolePermissionRepo.findOneBy({"}]},
+  {"from": "admin", "to": "postgres", "label": "Đọc toàn bộ admin_role_permissions dựng ma trận", "kind": "call", "mechanism": "shared-db", "evidence": [{"file": "apps/core-api/src/modules/admin/admin.service.ts", "line": 491, "quote": "const policies = await this.rolePermissionRepo.find();"}]},
+  {"from": "admin", "to": "admin-console", "label": "Trả ma trận quyền moderator/admin", "kind": "return", "mechanism": "http"},
+  {"from": "admin-console", "to": "admin", "label": "PATCH /admin/permissions/:role/:permission", "kind": "call", "mechanism": "http", "note": "Guard lại đọc role và chính sách như ở bước 2-3 trước khi vào service."},
+  {"from": "admin", "to": "postgres", "label": "Cập nhật cờ enabled của chính sách trong transaction", "kind": "call", "mechanism": "shared-db", "note": "Trả 404 nếu không có dòng chính sách.", "evidence": [{"file": "apps/core-api/src/modules/admin/admin.service.ts", "line": 550, "quote": "await repo.save(policy);"}]},
+  {"from": "admin", "to": "postgres", "label": "Ghi admin_audit_logs cùng transaction", "kind": "call", "mechanism": "shared-db", "evidence": [{"file": "apps/core-api/src/modules/admin/admin.service.ts", "line": 551, "quote": "await this.auditLogService.record("}]},
+  {"from": "admin", "to": "admin-console", "label": "204 No Content sau khi commit", "kind": "return", "mechanism": "http"},
+  {"from": "admin-console", "to": "admin", "label": "GET /admin/staff liệt kê nhân sự", "kind": "call", "mechanism": "http"},
+  {"from": "admin", "to": "user", "label": "Nhờ UserService lấy user có role staff", "kind": "call", "mechanism": "di-call", "evidence": [{"file": "apps/core-api/src/modules/admin/admin.service.ts", "line": 565, "quote": "return this.userService.listStaff();"}]},
+  {"from": "user", "to": "postgres", "label": "Tìm users role moderator hoặc admin, sắp theo createdAt", "kind": "call", "mechanism": "shared-db", "evidence": [{"file": "apps/core-api/src/modules/user/user.service.ts", "line": 119, "quote": "return this.userRepo.find({"}]},
+  {"from": "admin", "to": "admin-console", "label": "Trả danh sách nhân sự", "kind": "return", "mechanism": "http"},
+  {"from": "admin-console", "to": "admin", "label": "PATCH /admin/staff/:id/role đổi vai trò", "kind": "call", "mechanism": "http", "note": "Từ chối nếu actor tự đổi role của chính mình (CANNOT_CHANGE_OWN_ROLE) trước khi mở transaction."},
+  {"from": "admin", "to": "user", "label": "Khoá admin hiện tại + target, đếm số admin", "kind": "call", "mechanism": "di-call", "evidence": [{"file": "apps/core-api/src/modules/admin/admin.service.ts", "line": 581, "quote": "const context = await this.userService.lockRoleAssignmentContext("}]},
+  {"from": "user", "to": "postgres", "label": "SELECT users role admin hoặc id target FOR UPDATE", "kind": "call", "mechanism": "shared-db", "note": "Hai request hạ quyền song song phải xếp hàng nên không thể cùng hạ hai admin cuối.", "evidence": [{"file": "apps/core-api/src/modules/user/user.service.ts", "line": 163, "quote": ".setLock('pessimistic_write')"}]},
+  {"from": "admin", "to": "user", "label": "Chặn hạ admin cuối, rồi gán role mới cho target", "kind": "call", "mechanism": "di-call", "evidence": [{"file": "apps/core-api/src/modules/admin/admin.service.ts", "line": 597, "quote": "const updated = await this.userService.setRoleWithManager("}]},
+  {"from": "user", "to": "postgres", "label": "Lưu user với role mới bằng manager của transaction", "kind": "call", "mechanism": "shared-db", "evidence": [{"file": "apps/core-api/src/modules/user/user.service.ts", "line": 185, "quote": "return manager.getRepository(User).save(user);"}]},
+  {"from": "admin", "to": "postgres", "label": "Ghi audit previousRole và role mới cùng transaction", "kind": "call", "mechanism": "shared-db", "evidence": [{"file": "apps/core-api/src/modules/admin/admin.service.ts", "line": 602, "quote": "await this.auditLogService.record("}]},
+  {"from": "admin", "to": "admin-console", "label": "Trả AdminStaffDto của user đã đổi role", "kind": "return", "mechanism": "http"}
+ ],
+ "groups": [
+  {"from": 7, "to": 8, "label": "Transaction đổi quyền + audit", "kind": "transaction"},
+  {"from": 15, "to": 19, "label": "Transaction đổi role + audit", "kind": "transaction"}
+ ],
+ "invariants": [
+  "Guard đọc role từ DB (UserService) rồi tra admin_role_permissions mỗi request, nên hạ quyền hoặc tắt quyền có hiệu lực ngay dù JWT cũ còn hạn.",
+  "Ghi audit dùng cùng manager với thay đổi quyền/role: nếu audit lỗi thì thay đổi rollback, không có thay đổi quyền nào thiếu dấu vết.",
+  "Bảng users thuộc module user nên admin phải gọi UserService với manager chung của transaction, thay vì tự ghi bảng users.",
+  "Khoá pessimistic_write trên mọi admin và target trước khi đếm adminCount để kiểm tra last-admin không bị race giữa hai request song song."
+ ],
+ "failureModes": [
+  {"when": "Người gọi không có quyền ManagePermissions hoặc route thiếu metadata quyền", "effect": "Guard ném PERMISSION_FORBIDDEN (403), service không chạy."},
+  {"when": "Admin tắt ManagePermissions của role admin", "effect": "Ném CANNOT_DISABLE_PERMISSION_CONTROL (409) trước khi mở transaction."},
+  {"when": "Actor tự đổi role của mình", "effect": "Ném CANNOT_CHANGE_OWN_ROLE (409), không mở transaction."},
+  {"when": "Hạ vai trò admin cuối cùng (adminCount <= 1)", "effect": "Ném CANNOT_DEMOTE_LAST_ADMIN (409) trong transaction, rollback, không đổi gì."},
+  {"when": "Ghi audit lỗi trong transaction", "effect": "Cả thay đổi quyền/role và audit rollback."}
+ ],
+ "dataIssues": [],
+ "uncertain": []
+}

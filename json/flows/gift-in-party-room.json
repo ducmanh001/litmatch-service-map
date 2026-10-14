@@ -1,0 +1,311 @@
+{
+ "id": "gift-in-party-room",
+ "title": "Tặng quà trong phòng party",
+ "summary": "Người dùng tặng quà trong phòng party đang diễn ra. Gift giữ catalog và GiftEvent, Economy là nơi duy nhất ghi sổ cái, Notification ghi thông báo, rồi cả phòng nhận hiệu ứng realtime qua Redis và signaling-gateway.",
+ "caption": "Luồng tặng quà từ request của web, qua giao dịch tiền và GiftEvent, tới realtime cho cả phòng.",
+ "participants": [
+  {
+   "id": "web",
+   "label": "Web client",
+   "kind": "client"
+  },
+  {
+   "id": "gift",
+   "label": "Gift",
+   "kind": "service"
+  },
+  {
+   "id": "party-room",
+   "label": "Party Room",
+   "kind": "service"
+  },
+  {
+   "id": "economy",
+   "label": "Economy",
+   "kind": "service"
+  },
+  {
+   "id": "notification",
+   "label": "Notification",
+   "kind": "service"
+  },
+  {
+   "id": "postgres",
+   "label": "PostgreSQL",
+   "kind": "infra"
+  },
+  {
+   "id": "redis",
+   "label": "Redis",
+   "kind": "infra"
+  },
+  {
+   "id": "signaling-gateway",
+   "label": "Signaling gateway",
+   "kind": "service"
+  }
+ ],
+ "steps": [
+  {
+   "from": "web",
+   "to": "gift",
+   "label": "POST /party/rooms/:roomId/gifts kèm giftId và idempotencyKey",
+   "kind": "call",
+   "mechanism": "http",
+   "note": "Mọi route REST đều qua JwtAuthGuard toàn cục.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/app/app.module.ts",
+     "line": 154,
+     "quote": "{ provide: APP_GUARD, useClass: JwtAuthGuard },"
+    }
+   ]
+  },
+  {
+   "from": "gift",
+   "to": "postgres",
+   "label": "Đọc quà đang bán, giá lấy từ DB lúc tặng",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/gift/gift.service.ts",
+     "line": 172,
+     "quote": "const gift = await this.giftRepo.findOneBy({ id: giftId, active: true });"
+    }
+   ]
+  },
+  {
+   "from": "gift",
+   "to": "party-room",
+   "label": "Lấy member active, kiểm tra người tặng và người nhận đều ở trong phòng",
+   "kind": "call",
+   "mechanism": "di-call",
+   "note": "Đây là kiểm tra nghiệp vụ, không phải chốt an toàn tiền. Gift cũng đọc user nhận để biết guest (không có điểm).",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/gift/gift.service.ts",
+     "line": 184,
+     "quote": "await this.partyRoomService.getActiveRoomMembers(roomId);"
+    }
+   ]
+  },
+  {
+   "from": "gift",
+   "to": "economy",
+   "label": "Gọi sendGift: giá, điểm PTS, idempotencyKey và callback trong giao dịch",
+   "kind": "call",
+   "mechanism": "di-call",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/gift/gift.service.ts",
+     "line": 210,
+     "quote": "const result = await this.economy.sendGift({"
+    }
+   ]
+  },
+  {
+   "from": "economy",
+   "to": "postgres",
+   "label": "Ghi bút toán sổ cái và sự kiện outbox economy.gift.sent",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/economy/economy.service.ts",
+     "line": 647,
+     "quote": "await manager.save("
+    }
+   ],
+   "note": "Giao dịch DB mở ở LedgerService.record (dataSource.transaction), callback withinTransaction chạy trong cùng manager."
+  },
+  {
+   "from": "gift",
+   "to": "postgres",
+   "label": "Cùng giao dịch: lưu GiftEvent gắn transactionId",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/gift/gift.service.ts",
+     "line": 225,
+     "quote": "await manager.save("
+    }
+   ]
+  },
+  {
+   "from": "gift",
+   "to": "notification",
+   "label": "Cùng giao dịch: tạo thông báo GiftReceived cho người nhận",
+   "kind": "call",
+   "mechanism": "di-call",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/gift/gift.service.ts",
+     "line": 238,
+     "quote": "notification = await this.notificationService.createWithManager("
+    }
+   ]
+  },
+  {
+   "from": "economy",
+   "to": "gift",
+   "label": "Trả transactionId và cờ replayed",
+   "kind": "return",
+   "mechanism": "di-call",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/economy/economy.service.ts",
+     "line": 665,
+     "quote": "return { transactionId: result.transaction.id, replayed: result.replayed };"
+    }
+   ]
+  },
+  {
+   "from": "gift",
+   "to": "postgres",
+   "label": "Đọc lại GiftEvent theo transactionId",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/gift/gift.service.ts",
+     "line": 255,
+     "quote": "const giftEvent = await this.giftEventRepo.findOneByOrFail({"
+    }
+   ]
+  },
+  {
+   "from": "gift",
+   "to": "redis",
+   "label": "Publish sự kiện quà tới từng member active của phòng",
+   "kind": "async",
+   "mechanism": "redis-pubsub",
+   "note": "Chỉ chạy khi không phải replay.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/gift/gift.service.ts",
+     "line": 498,
+     "quote": "publishRealtimeEvent(this.redis, this.logger, m.userId, envelope),"
+    },
+    {
+     "file": "apps/core-api/src/common/realtime/redis-realtime-publisher.adapter.ts",
+     "line": 11,
+     "quote": "return this.redis.publish(channel, payload);"
+    }
+   ]
+  },
+  {
+   "from": "redis",
+   "to": "signaling-gateway",
+   "label": "Gateway PSUBSCRIBE realtime:user:* nhận envelope",
+   "kind": "async",
+   "mechanism": "redis-pubsub",
+   "evidence": [
+    {
+     "file": "apps/signaling-gateway/src/app/signaling.gateway.ts",
+     "line": 346,
+     "quote": ".psubscribe(REALTIME_USER_CHANNEL_PATTERN)"
+    }
+   ]
+  },
+  {
+   "from": "signaling-gateway",
+   "to": "web",
+   "label": "Relay hiệu ứng quà xuống socket của từng member",
+   "kind": "async",
+   "mechanism": "socket",
+   "evidence": [
+    {
+     "file": "apps/signaling-gateway/src/app/signaling.gateway.ts",
+     "line": 346,
+     "quote": ".psubscribe(REALTIME_USER_CHANNEL_PATTERN)"
+    }
+   ]
+  },
+  {
+   "from": "gift",
+   "to": "notification",
+   "label": "Đẩy push cho người nhận (best-effort)",
+   "kind": "async",
+   "mechanism": "di-call",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/gift/gift.service.ts",
+     "line": 261,
+     "quote": "if (notification) await this.notificationService.sendPush(notification);"
+    }
+   ]
+  },
+  {
+   "from": "gift",
+   "to": "web",
+   "label": "Trả giftEvent, gift và replayed",
+   "kind": "return",
+   "mechanism": "http"
+  }
+ ],
+ "groups": [
+  {
+   "from": 5,
+   "to": 7,
+   "label": "Một giao dịch: sổ cái, outbox, GiftEvent và thông báo",
+   "kind": "transaction"
+  },
+  {
+   "from": 10,
+   "to": 13,
+   "label": "Realtime và push sau khi tiền đã chốt",
+   "kind": "besteffort"
+  }
+ ],
+ "invariants": [
+  "Economy là nơi duy nhất ghi sổ cái, nên Gift phải gọi economy.sendGift thay vì tự trừ tiền.",
+  "GiftEvent và thông báo được ghi qua callback withinTransaction cùng manager với bút toán, nên không có quà mà thiếu tiền hoặc ngược lại.",
+  "Realtime và push chỉ chạy sau khi giao dịch xong và không phải replay, nên retry cùng idempotencyKey không bắn hiệu ứng lần hai."
+ ],
+ "failureModes": [
+  {
+   "when": "Redis publish, fanout hoặc push thất bại sau khi giao dịch đã commit",
+   "effect": "Lỗi bị nuốt và chỉ log warn: publishRealtimeEvent có try/catch, publishGiftSent bọc try/catch, sendPush bọc try/catch. Tiền và GiftEvent vẫn đúng, request vẫn trả 200, member có thể không nhận hiệu ứng realtime."
+  },
+  {
+   "when": "Người nhận rời phòng đúng lúc đang tặng",
+   "effect": "Tiền vẫn đúng nhờ giao dịch và idempotency ở economy, theo comment trong gift.service.ts."
+  },
+  {
+   "when": "Client gửi lại cùng idempotencyKey",
+   "effect": "Economy trả replayed, Gift trả lại GiftEvent cũ và bỏ qua realtime và push."
+  }
+ ],
+ "dataIssues": [],
+ "uncertain": [],
+ "resolved": [
+  {
+   "id": "gift-in-party-room#1",
+   "status": "confirmed",
+   "finding": "Giao dịch DB mở thật ở LedgerService.record bằng dataSource.transaction; economy.sendGift truyền callback withinTransaction chạy trong cùng manager, nên nhóm transaction bước 5-7 đúng."
+  },
+  {
+   "id": "gift-in-party-room#2",
+   "status": "confirmed",
+   "finding": "createWithManager được gọi trong callback withinTransaction với cùng manager, nên thông báo GiftReceived nằm trong giao dịch."
+  },
+  {
+   "id": "gift-in-party-room#3",
+   "status": "confirmed",
+   "finding": "Đọc user nhận bằng userService.getByIdOrThrow đúng để xác định guest (isGuest thì pointsAwarded = 0); gộp vào note bước party-room là chấp nhận được."
+  },
+  {
+   "id": "gift-in-party-room#4",
+   "status": "corrected",
+   "finding": "Lỗi publish và push đều bị nuốt: publishRealtimeEvent có try/catch chỉ log warn, publishGiftSent bọc try/catch, sendPush bọc try/catch. Đã sửa failureMode thành khẳng định có căn cứ."
+  },
+  {
+   "id": "gift-in-party-room#5",
+   "status": "corrected",
+   "finding": "Bước return của economy thực tế là return ở economy.service.ts:665; đã đổi evidence từ dòng gọi sang dòng return đó."
+  }
+ ],
+ "resolutionApplied": true
+}

@@ -1,0 +1,223 @@
+{
+ "id": "friend-streak-warning-job",
+ "title": "Job cảnh báo streak sắp mất",
+ "summary": "Job nền của module friend chạy theo chu kỳ, chỉ một replica được chạy nhờ advisory lock trong Postgres. Nó tìm các conversation sắp mất streak, báo realtime qua Redis và signaling-gateway, tạo thông báo kèm push, rồi đánh dấu đã cảnh báo.",
+ "caption": "Mỗi tick, friend quét streak trong Postgres, publish realtime qua Redis tới gateway, nhờ notification ghi thông báo rồi đánh dấu đã cảnh báo.",
+ "participants": [
+  {
+   "id": "friend",
+   "label": "friend (StreakWarningJob)",
+   "kind": "service"
+  },
+  {
+   "id": "postgres",
+   "label": "PostgreSQL",
+   "kind": "infra"
+  },
+  {
+   "id": "redis",
+   "label": "Redis",
+   "kind": "infra"
+  },
+  {
+   "id": "signaling-gateway",
+   "label": "signaling-gateway",
+   "kind": "service"
+  },
+  {
+   "id": "notification",
+   "label": "notification",
+   "kind": "service"
+  },
+  {
+   "id": "web",
+   "label": "Web client",
+   "kind": "client"
+  }
+ ],
+ "steps": [
+  {
+   "from": "friend",
+   "to": "postgres",
+   "label": "Tick định kỳ: giành advisory lock để chỉ một replica chạy job",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/friend/jobs/streak-warning.job.ts",
+     "line": 62,
+     "quote": "clusterSingleton: { dataSource: this.dataSource }"
+    }
+   ]
+  },
+  {
+   "from": "friend",
+   "to": "postgres",
+   "label": "Tìm conversation có streak>0, hôm qua đã nhắn, chưa cảnh báo hôm nay",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "note": "Chỉ chạy khi giờ UTC đã qua STREAK_WARNING_HOURS; giới hạn theo STREAK_WARNING_BATCH_SIZE.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/friend/services/streak.service.ts",
+     "line": 141,
+     "quote": "const rows = await this.streakRepo"
+    }
+   ]
+  },
+  {
+   "from": "friend",
+   "to": "postgres",
+   "label": "Với mỗi conversation: đọc Conversation để lấy 2 thành viên",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/friend/services/conversation.service.ts",
+     "line": 59,
+     "quote": "return this.conversationRepo.findOneBy({ id });"
+    }
+   ]
+  },
+  {
+   "from": "friend",
+   "to": "redis",
+   "label": "Publish friend.streak-at-risk cho từng thành viên",
+   "kind": "async",
+   "mechanism": "redis-pubsub",
+   "note": "publishRealtimeEvent nuốt lỗi và chỉ log warn.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/friend/jobs/streak-warning.job.ts",
+     "line": 100,
+     "quote": "publishRealtimeEvent(this.redis, this.logger, uid, envelope),"
+    }
+   ]
+  },
+  {
+   "from": "redis",
+   "to": "signaling-gateway",
+   "label": "Gateway PSUBSCRIBE realtime:user:* nhận envelope",
+   "kind": "async",
+   "mechanism": "redis-pubsub",
+   "evidence": [
+    {
+     "file": "apps/signaling-gateway/src/app/signaling.gateway.ts",
+     "line": 346,
+     "quote": ".psubscribe(REALTIME_USER_CHANNEL_PATTERN)"
+    }
+   ]
+  },
+  {
+   "from": "signaling-gateway",
+   "to": "web",
+   "label": "Emit sự kiện xuống room socket của người dùng",
+   "kind": "async",
+   "mechanism": "socket",
+   "evidence": [
+    {
+     "file": "apps/signaling-gateway/src/app/signaling.gateway.ts",
+     "line": 332,
+     "quote": "this.server.local.to(userRoom(userId)).emit(envelope.event, envelope.data);"
+    }
+   ]
+  },
+  {
+   "from": "friend",
+   "to": "notification",
+   "label": "Tạo thông báo StreakAtRisk cho từng thành viên",
+   "kind": "call",
+   "mechanism": "di-call",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/friend/jobs/streak-warning.job.ts",
+     "line": 106,
+     "quote": "const notification = await this.notificationService.create({"
+    }
+   ]
+  },
+  {
+   "from": "notification",
+   "to": "postgres",
+   "label": "Ghi bản ghi notification (bảng notifications)",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "note": "Suy luận: bước ghi DB nằm trong NotificationService.create, không nằm trong trace của friend.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/friend/jobs/streak-warning.job.ts",
+     "line": 106,
+     "quote": "const notification = await this.notificationService.create({"
+    }
+   ]
+  },
+  {
+   "from": "friend",
+   "to": "notification",
+   "label": "Đẩy Web Push cho thông báo vừa tạo",
+   "kind": "async",
+   "mechanism": "di-call",
+   "note": "Lỗi create/sendPush của một thành viên bị bắt và chỉ log warn.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/friend/jobs/streak-warning.job.ts",
+     "line": 111,
+     "quote": "await this.notificationService.sendPush(notification);"
+    }
+   ]
+  },
+  {
+   "from": "friend",
+   "to": "postgres",
+   "label": "markWarningSent: ghi lastWarningSentAt để hôm nay không cảnh báo lại",
+   "kind": "call",
+   "mechanism": "shared-db",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/friend/services/streak.service.ts",
+     "line": 158,
+     "quote": "await this.streakRepo.update("
+    }
+   ]
+  }
+ ],
+ "groups": [
+  {
+   "from": 4,
+   "to": 6,
+   "label": "Realtime best-effort qua Redis",
+   "kind": "besteffort"
+  },
+  {
+   "from": 7,
+   "to": 9,
+   "label": "Thông báo và push best-effort",
+   "kind": "besteffort"
+  }
+ ],
+ "invariants": [
+  "Job chỉ ghi lastWarningSentAt (markWarningSent) sau khi đã publish realtime và chạy xong vòng tạo thông báo/push, nên mỗi conversation được cảnh báo tối đa một lần mỗi ngày UTC; chỉ lỗi nằm ngoài các try/catch best-effort (ví dụ markWarningSent) mới được thử lại ở tick sau, còn lỗi notification/push bị nuốt thì vẫn được đánh dấu đã cảnh báo.",
+  "friend không ghi currentStreak hoặc longestStreak ở job này; StreakService chỉ trả danh sách conversation và để job gọi Redis và notification, nhờ đó StreakService không phụ thuộc hai module đó.",
+  "Realtime đi qua Redis tới signaling-gateway vì core-api không giữ socket; gateway chỉ relay envelope xuống room user."
+ ],
+ "failureModes": [
+  {
+   "when": "Publish Redis cho một thành viên thất bại",
+   "effect": "Lỗi bị nuốt và log warn; job vẫn tạo thông báo và đánh dấu đã cảnh báo, client còn polling."
+  },
+  {
+   "when": "notification.create hoặc sendPush lỗi cho một thành viên",
+   "effect": "Bị bắt và log warn rồi bỏ qua; job vẫn gọi markWarningSent cho conversation."
+  },
+  {
+   "when": "Một lỗi khác trong warnOne (ví dụ markWarningSent lỗi)",
+   "effect": "Log error cho conversation đó, chưa đánh dấu nên tick sau thử lại, các conversation còn lại vẫn được xử lý."
+  },
+  {
+   "when": "Conversation bị xoá giữa lúc quét và xử lý",
+   "effect": "warnOne trả về sớm, bỏ qua êm."
+  }
+ ],
+ "dataIssues": [],
+ "uncertain": []
+}

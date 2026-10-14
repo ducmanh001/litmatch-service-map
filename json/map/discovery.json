@@ -1,0 +1,618 @@
+{
+ "id": "discovery",
+ "title": "Discovery",
+ "tagline": "Duyệt người dùng và Nearby ẩn vị trí",
+ "deployable": "core-api",
+ "role": "Sở hữu user_locations (toạ độ đã quantize ~500m) và discovery_settings (opt-in nearbyVisible), cộng logic browse/nearby: ghép bộ lọc, loại block/report, jitter khoảng cách, rate limit. Không sở hữu bảng users/privacy (module user), không sở hữu block/report (safety), không có logic mời Voice/Soul Match (matching).",
+ "owns": [
+  "bảng user_locations (latQuantized, lonQuantized, updatedAt)",
+  "bảng discovery_settings (nearbyVisible mặc định false)",
+  "Redis counter discovery:location-update:count:{userId} và discovery:nearby-query:count:{userId} (TTL 3600s)"
+ ],
+ "confidence": "high",
+ "endpoints": [
+  {
+   "id": "e1",
+   "kind": "rest",
+   "method": "GET",
+   "path": "/api/v1/discovery/browse",
+   "purpose": "Duyệt user theo gender/tuổi (cursor createdAt,id); loại self + block/report 2 chiều + hide_profile + guest/banned; trả DiscoveryCardDto kèm ageBucket, ageMin>ageMax trả 422.",
+   "auth": "jwt",
+   "file": "apps/core-api/src/modules/discovery/discovery.controller.ts",
+   "line": 33,
+   "quote": "@Get('browse')"
+  },
+  {
+   "id": "e2",
+   "kind": "rest",
+   "method": "PUT",
+   "path": "/api/v1/discovery/nearby/location",
+   "purpose": "Ghi vị trí hiện tại, quantize ~500m ngay lúc ghi (không lưu toạ độ thô); rate limit DISCOVERY_LOCATION_UPDATE_RATE_LIMIT_PER_HOUR, vượt trả 429.",
+   "auth": "jwt",
+   "file": "apps/core-api/src/modules/discovery/discovery.controller.ts",
+   "line": 49,
+   "quote": "@Put('nearby/location')"
+  },
+  {
+   "id": "e3",
+   "kind": "rest",
+   "method": "PUT",
+   "path": "/api/v1/discovery/nearby/visible",
+   "purpose": "Bật/tắt opt-in Nearby; tắt thì xoá user_locations cùng transaction với cập nhật discovery_settings.",
+   "auth": "jwt",
+   "file": "apps/core-api/src/modules/discovery/discovery.controller.ts",
+   "line": 62,
+   "quote": "@Put('nearby/visible')"
+  },
+  {
+   "id": "e4",
+   "kind": "rest",
+   "method": "GET",
+   "path": "/api/v1/discovery/nearby",
+   "purpose": "Liệt kê người gần: yêu cầu caller đã opt-in và vị trí còn tươi (403/409 nếu không), rate limit truy vấn, chỉ trả distanceBucket đã jitter, không trả toạ độ/km.",
+   "auth": "jwt",
+   "file": "apps/core-api/src/modules/discovery/discovery.controller.ts",
+   "line": 75,
+   "quote": "@Get('nearby')"
+  }
+ ],
+ "collaborators": [
+  {
+   "id": "c1",
+   "label": "lấy danh sách ẩn nhau",
+   "what": "SafetyService.getHiddenUserIds(userId): hợp các user bị block (2 chiều, đang active) với mọi user từng có report với caller (cả hai hướng, từ bảng reports); kết quả được gộp vào excludeUserIds/candidate loại trừ.",
+   "why": "Block/report thuộc Safety (nguồn sự thật), Discovery không được tự dựng lại luật; người đã block hoặc đã report nhau phải biến mất vĩnh viễn khỏi màn duyệt lặp lại nhiều lần/ngày (khác cooldown rematch), nên mỗi request phải hỏi Safety.",
+   "ifMissing": "Người dùng bị block/report vẫn hiện trong browse và Nearby của nhau, mở đường quấy rối và lộ vị trí gần đúng cho người đã chặn.",
+   "with": "safety",
+   "withKind": "service",
+   "direction": "out",
+   "mechanism": "di-call",
+   "endpoints": [
+    "e1",
+    "e4"
+   ],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/discovery/discovery.service.ts",
+     "line": 49,
+     "quote": "const hiddenUserIds = await this.safetyService.getHiddenUserIds("
+    },
+    {
+     "file": "apps/core-api/src/modules/discovery/nearby.service.ts",
+     "line": 174,
+     "quote": "const hiddenUserIds = await this.safetyService.getHiddenUserIds("
+    }
+   ],
+   "basis": "ast",
+   "logic": {
+    "verdict": "sound"
+   }
+  },
+  {
+   "id": "c2",
+   "label": "lọc user hợp lệ + riêng tư",
+   "what": "UserService.browsePage(filter, limit, after) cho browse; UserService.findActiveByIds(ids, {gender, ageMin, ageMax, excludeGuests}) và PrivacySettingsService.findForUsers(ids) cho Nearby (lấy showDistance).",
+   "why": "Bảng users và luật 'user hợp lệ để hiện' (active, không guest nếu DISCOVERY_GUEST_VISIBLE=false, tuổi/gender, hide_profile) thuộc module user; gọi qua public API giữ một định nghĩa duy nhất và đảm bảo tôn trọng cài đặt riêng tư của đối phương (showDistance).",
+   "ifMissing": "Discovery phải tự query users và tự chế luật hiển thị, dễ lộ user banned/guest hoặc bỏ qua showDistance/hide_profile.",
+   "with": "user",
+   "withKind": "service",
+   "direction": "out",
+   "mechanism": "di-call",
+   "endpoints": [
+    "e1",
+    "e4"
+   ],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/discovery/discovery.service.ts",
+     "line": 63,
+     "quote": "const page = await this.userService.browsePage(filter, query.limit, after);"
+    },
+    {
+     "file": "apps/core-api/src/modules/discovery/nearby.service.ts",
+     "line": 188,
+     "quote": "const users = await this.userService.findActiveByIds("
+    },
+    {
+     "file": "apps/core-api/src/modules/discovery/nearby.service.ts",
+     "line": 200,
+     "quote": "const privacyByUserId = await this.privacySettings.findForUsers("
+    }
+   ],
+   "basis": "ast",
+   "logic": {
+    "verdict": "sound"
+   }
+  },
+  {
+   "id": "c3",
+   "label": "rate limit vị trí/truy vấn",
+   "what": "checkRateLimit (Redis INCR+EXPIRE atomic) trên key discovery:location-update:count:{userId} và discovery:nearby-query:count:{userId}, cửa sổ 3600s, ngưỡng lấy từ env DISCOVERY_*_RATE_LIMIT_PER_HOUR.",
+   "why": "Chống trilateration: kẻ tấn công đổi vị trí và truy vấn nhiều lần để định vị chính xác một người từ distanceBucket; đếm phải atomic và dùng chung giữa các instance core-api nên đặt ở Redis, không thể giữ trong bộ nhớ process.",
+   "ifMissing": "Có thể quét liên tục nhiều vị trí giả để triangulate nơi ở của người khác, hoặc spam ghi vị trí; mỗi instance đếm riêng nên giới hạn thực tế bị nhân lên.",
+   "with": "redis",
+   "withKind": "infra",
+   "direction": "out",
+   "mechanism": "redis-state",
+   "endpoints": [
+    "e2",
+    "e4"
+   ],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/discovery/discovery.module.ts",
+     "line": 34,
+     "quote": "await closeCoreRedisClient(this.redis);"
+    },
+    {
+     "file": "apps/core-api/src/modules/discovery/nearby.service.ts",
+     "line": 76,
+     "quote": "const allowed = await checkRateLimit("
+    },
+    {
+     "file": "apps/core-api/src/modules/discovery/nearby.service.ts",
+     "line": 128,
+     "quote": "const allowed = await checkRateLimit("
+    }
+   ],
+   "review": {
+    "verdict": "supported"
+   },
+   "logic": {
+    "verdict": "sound"
+   }
+  },
+  {
+   "id": "c4",
+   "label": "ghi vị trí + opt-in",
+   "what": "Upsert user_locations (lat/lon quantized, updated_at), upsert discovery_settings.nearby_visible, DELETE user_locations khi tắt visible (transaction); đọc candidate bằng bounding-box SQL JOIN discovery_settings và user_privacy_settings.",
+   "why": "Trạng thái opt-in và vị trí phải bền vững và nhất quán: tắt visible phải xoá toạ độ cùng transaction để không còn dữ liệu vị trí của người đã rút lui; độ tươi dựa vào updated_at để vị trí cũ tự biến mất khi đọc.",
+   "ifMissing": "Không có opt-in thật sự (reciprocity), toạ độ cũ còn tồn tại sau khi user tắt Nearby, hoặc kết quả nearby không lọc được theo độ tươi.",
+   "with": "postgres",
+   "withKind": "infra",
+   "direction": "out",
+   "mechanism": "shared-db",
+   "endpoints": [
+    "e2",
+    "e3",
+    "e4"
+   ],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/discovery/entities/discovery-setting.entity.ts",
+     "line": 13,
+     "quote": "@Entity({ name: 'discovery_settings' })"
+    },
+    {
+     "file": "apps/core-api/src/modules/discovery/entities/user-location.entity.ts",
+     "line": 14,
+     "quote": "@Entity({ name: 'user_locations' })"
+    }
+   ],
+   "review": {
+    "verdict": "supported"
+   },
+   "logic": {
+    "verdict": "sound"
+   }
+  },
+  {
+   "id": "c50",
+   "with": "user",
+   "withKind": "service",
+   "direction": "out",
+   "mechanism": "shared-db",
+   "endpoints": [
+    "e4"
+   ],
+   "label": "JOIN user_privacy_settings",
+   "what": "queryCandidates chạy SQL thô JOIN user_privacy_settings (LEFT JOIN, COALESCE(hide_profile,false)=false) để loại những user đã bật hideProfile khỏi candidate Nearby ngay ở DB.",
+   "why": "Prefilter bounding-box giới hạn candidate bằng LIMIT DISCOVERY_NEARBY_CANDIDATE_CAP; nếu loại hide_profile muộn ở tầng app thì các hàng bị ẩn vẫn chiếm chỗ trong cap và đẩy người hợp lệ ra ngoài. Đây là coupling trực tiếp với bảng của module user, bỏ qua public API.",
+   "ifMissing": "Hàng hide_profile sẽ bị loại ở bước sau vẫn chiếm chỗ trong LIMIT DISCOVERY_NEARBY_CANDIDATE_CAP nên người hợp lệ biến mất khỏi kết quả; việc lộ hideProfile vẫn được UserService.findActiveByIds chặn lần hai bằng NOT EXISTS user_privacy_settings.",
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/discovery/nearby.service.ts",
+     "line": 318,
+     "quote": "LEFT JOIN user_privacy_settings ups ON ups.user_id = ul.user_id"
+    }
+   ],
+   "review": {
+    "verdict": "supported"
+   },
+   "logic": {
+    "verdict": "corrected",
+    "note": "UserService.findActiveByIds cũng loại hide_profile bằng NOT EXISTS, nên hideProfile không lộ; SQL chỉ để cap không bị lấp."
+   }
+  },
+  {
+   "id": "c51",
+   "with": "web",
+   "withKind": "client",
+   "direction": "in",
+   "mechanism": "http",
+   "endpoints": [
+    "e2",
+    "e3",
+    "e4"
+   ],
+   "label": "lấy GPS rồi opt-in",
+   "what": "apps/web lấy toạ độ bằng navigator.geolocation.getCurrentPosition rồi PUT nearby/location, sau đó PUT nearby/visible=true; chỉ khi đó mới gọi GET nearby (nếu vị trí hết hạn thì client phải ghi lại).",
+   "why": "Server không có nguồn vị trí nào khác ngoài toạ độ do trình duyệt gửi; thứ tự location rồi visible là bắt buộc vì listNearby trả 409 nếu chưa có vị trí tươi và 403 nếu chưa opt-in.",
+   "ifMissing": "Không có vị trí nên Nearby luôn trả 409/403; user không thể opt-in và không thấy ai.",
+   "evidence": [
+    {
+     "file": "apps/web/src/features/discovery/components/nearby-opt-in.tsx",
+     "line": 109,
+     "quote": "navigator.geolocation.getCurrentPosition("
+    }
+   ],
+   "review": {
+    "verdict": "supported"
+   },
+   "logic": {
+    "verdict": "sound"
+   }
+  }
+ ],
+ "waivedEdges": [],
+ "excludedRoutes": [],
+ "notes": [
+  "Code vs doc: doc § 2 nói Discovery 'không sở hữu bảng riêng' (W1) nhưng § 8 và code có 2 bảng user_locations/discovery_settings; chỉ là doc ghép 2 giai đoạn, code là sự thật.",
+  "Nearby có quy tắc loại trừ không nằm trong doc § 8.2: query SQL thô trong NearbyService.queryCandidates JOIN trực tiếp bảng user_privacy_settings (của module user) để loại hide_profile=true; và PrivacySettingsService.findForUsers quyết showDistance (false thì distanceBucket = null). Đây là coupling shared-db với bảng của module user, không đi qua public API của user.",
+  "setLocation KHÔNG kiểm tra nearbyVisible: user chưa opt-in vẫn ghi được vị trí (chỉ bị ẩn nhờ JOIN discovery_settings.nearby_visible = true khi người khác truy vấn). Tắt visible mới xoá hàng user_locations.",
+  "Discovery không có inbound caller trong module khác (dossier); CTA mời Voice/Soul Match ở UI gọi API của matching, không đi qua Discovery.",
+  "DISCOVERY_REDIS là client ioredis riêng của module (createCoreRedisClient với REDIS_URL), đóng ở onModuleDestroy qua closeCoreRedisClient."
+ ],
+ "techniques": [
+  {
+   "slug": "jwt-bearer",
+   "name": "JWT bearer (access token không trạng thái)",
+   "model": "JWT bearer",
+   "how": "Client gửi access token (JWT) trong header Authorization; guard xác minh chữ ký và hạn rồi gắn user vào request, server không giữ phiên.",
+   "why": "Không trạng thái nên scale ngang dễ và không phải tra DB mỗi request; đánh đổi là không thu hồi tức thì trước khi token hết hạn.",
+   "alternative": "Session phía server (cookie + kho phiên) thu hồi được tức thì nhưng cần kho phiên dùng chung.",
+   "endpoints": [
+    "e1",
+    "e2",
+    "e3",
+    "e4"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/app/app.module.ts",
+     "line": 117,
+     "quote": "{ provide: APP_GUARD, useClass: JwtAuthGuard },"
+    }
+   ],
+   "auto": true,
+   "count": 4,
+   "id": "t1",
+   "local": "Mọi endpoint của service được bảo vệ bởi `JwtAuthGuard` đăng ký qua `APP_GUARD` toàn cục trong app.module.ts, nên cần bearer JWT hợp lệ mới vào được controller."
+  },
+  {
+   "slug": "rebac-relationship",
+   "name": "Kiểm tra theo quan hệ (bạn bè, block, thành viên phòng)",
+   "model": "ReBAC",
+   "how": "Cho phép hoặc chặn dựa trên quan hệ giữa hai người: bạn bè, block, cùng phòng.",
+   "why": "Quyền trong mạng xã hội phụ thuộc quan hệ động chứ không phải vai trò cố định.",
+   "endpoints": [
+    "e1",
+    "e4"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/discovery/discovery.service.ts",
+     "line": 49,
+     "quote": "const hiddenUserIds = await this.safetyService.getHiddenUserIds("
+    },
+    {
+     "file": "apps/core-api/src/modules/discovery/nearby.service.ts",
+     "line": 174,
+     "quote": "const hiddenUserIds = await this.safetyService.getHiddenUserIds("
+    }
+   ],
+   "auto": true,
+   "count": 2,
+   "id": "t2",
+   "local": "Browse và nearby lọc user qua `safetyService.getHiddenUserIds(user.userId)` để loại những người đã block/report hai chiều."
+  },
+  {
+   "id": "t3",
+   "slug": "abac-attribute-policy",
+   "name": "ABAC theo thuộc tính (guest, ban, VIP, giới tính, tuổi…)",
+   "model": "ABAC",
+   "how": "Quyết định dựa trên thuộc tính của người dùng hoặc tài nguyên như guest, bị ban, hạng VIP, giới tính, tuổi.",
+   "why": "Nghiệp vụ có quy tắc theo ngữ cảnh mà vai trò đơn thuần không diễn đạt được.",
+   "alternative": "Policy engine (OPA/Casbin/CASL) tách chính sách khỏi mã nhưng thêm thành phần vận hành.",
+   "endpoints": [
+    "e4"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/discovery/nearby.service.ts",
+     "line": 147,
+     "quote": "if (!mySetting?.nearbyVisible) {"
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "local": "listNearby chỉ cho caller đã opt-in: nếu discovery_settings.nearbyVisible=false trả 403 NEARBY_NOT_OPTED_IN; vị trí thiếu/hết hạn trả 409 NEARBY_LOCATION_MISSING.",
+   "addedByLogicReview": true
+  },
+  {
+   "slug": "unique-constraint-guard",
+   "name": "Ràng buộc unique ở DB làm chốt chặn cuối",
+   "model": "Ràng buộc DB",
+   "how": "Ràng buộc unique hoặc index duy nhất ở DB là chốt chặn cuối cho trùng lặp.",
+   "why": "Check-rồi-insert ở tầng code vẫn dính race; DB mới bảo đảm tuyệt đối.",
+   "endpoints": [
+    "e2",
+    "e3"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/discovery/nearby.service.ts",
+     "line": 101,
+     "quote": "ON CONFLICT (user_id) DO UPDATE"
+    }
+   ],
+   "auto": true,
+   "count": 2,
+   "id": "t4",
+   "local": "`setLocation` upsert `user_locations` bằng `ON CONFLICT (user_id) DO UPDATE`, dựa vào khoá unique theo user."
+  },
+  {
+   "slug": "db-transaction",
+   "name": "Transaction DB (một đơn vị công việc)",
+   "model": "Transaction",
+   "how": "Gói nhiều thao tác ghi vào một transaction: cùng commit hoặc cùng rollback.",
+   "why": "Tránh trạng thái nửa vời khi lỗi giữa chừng.",
+   "endpoints": [
+    "e3"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/discovery/nearby.service.ts",
+     "line": 109,
+     "quote": "await this.dataSource.transaction(async (manager) => {"
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "id": "t5",
+   "local": "`setVisible` chạy `dataSource.transaction` upsert `discovery_settings` và xoá `user_locations` khi tắt, cùng một transaction."
+  },
+  {
+   "id": "t6",
+   "slug": "redis-lua-atomic",
+   "name": "Lua script nguyên tử trong Redis",
+   "model": "Lua nguyên tử",
+   "how": "Script Lua chạy nguyên tử trong Redis: nhiều lệnh không bị xen giữa.",
+   "why": "Rate limit và lease cần đọc-so sánh-ghi không race.",
+   "endpoints": [
+    "e2",
+    "e4"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/common/redis/redis-rate-limit.adapter.ts",
+     "line": 21,
+     "quote": "const RATE_LIMIT_CONSUME_LUA ="
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "local": "RedisRateLimitAdapter.consume chạy Lua RATE_LIMIT_CONSUME_LUA: INCR+EXPIRE nguyên tử, vượt hạn thì DECR lại nên lượt bị từ chối không tính.",
+   "addedByLogicReview": true
+  },
+  {
+   "id": "t7",
+   "slug": "lazy-expiry",
+   "name": "Hết hạn lười (xử lý khi có request)",
+   "model": "Hết hạn lười",
+   "how": "Hết hạn được xử lý khi có request đụng tới, không cần job.",
+   "why": "Đúng đắn không phụ thuộc job; job chỉ để dọn.",
+   "endpoints": [
+    "e4"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/discovery/entities/user-location.entity.ts",
+     "line": 10,
+     "quote": "KHÔNG có cron dọn hàng riêng cho bảng này"
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "local": "Vị trí quá DISCOVERY_LOCATION_FRESHNESS_HOURS tự biến mất khỏi kết quả nhờ lọc ul.updated_at lúc đọc; không có cron dọn user_locations.",
+   "addedByLogicReview": true
+  },
+  {
+   "slug": "rate-limit-throttler",
+   "name": "Rate limit (@nestjs/throttler)",
+   "model": "Rate limit",
+   "how": "@Throttle giới hạn số request theo khoảng thời gian cho từng route.",
+   "why": "Chặn spam và dò quét bằng cách giới hạn số request theo thời gian, trước khi request tới logic nghiệp vụ.",
+   "endpoints": [
+    "e1",
+    "e2",
+    "e3",
+    "e4"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/app/app.module.ts",
+     "line": 116,
+     "quote": "{ provide: APP_GUARD, useClass: ThrottlerGuard },"
+    }
+   ],
+   "auto": true,
+   "count": 4,
+   "id": "t8",
+   "local": "Giới hạn tốc độ qua `ThrottlerGuard` đăng ký `APP_GUARD` toàn cục, chạy trước JwtAuthGuard; áp cho mọi route của service."
+  },
+  {
+   "id": "t9",
+   "slug": "rate-limit-redis",
+   "name": "Rate limit bằng Redis (Lua)",
+   "model": "Rate limit Redis",
+   "how": "Bộ đếm dùng chung trong Redis (Lua) giới hạn theo khoá nghiệp vụ.",
+   "why": "Giới hạn đúng khi có nhiều instance.",
+   "endpoints": [
+    "e2",
+    "e4"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/discovery/nearby.service.ts",
+     "line": 76,
+     "quote": "const allowed = await checkRateLimit("
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "local": "checkRateLimit trên discovery:location-update:count:{userId} và discovery:nearby-query:count:{userId}, cửa sổ 3600s, ngưỡng DISCOVERY_*_RATE_LIMIT_PER_HOUR; vượt trả 429 NEARBY_RATE_LIMITED.",
+   "addedByLogicReview": true
+  },
+  {
+   "slug": "openapi-contract",
+   "name": "Hợp đồng OpenAPI + client sinh tự động",
+   "model": "OpenAPI",
+   "how": "OpenAPI sinh từ code và client TypeScript sinh tự động.",
+   "why": "Client và server không lệch hợp đồng.",
+   "endpoints": [
+    "e1",
+    "e2",
+    "e3",
+    "e4"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/discovery/discovery.controller.ts",
+     "line": 34,
+     "quote": "@ApiOperation({"
+    }
+   ],
+   "auto": true,
+   "count": 4,
+   "id": "t10",
+   "local": "`@ApiOperation` trên `GET browse` mô tả bộ lọc gender/tuổi, loại block/report, làm hợp đồng OpenAPI."
+  },
+  {
+   "slug": "cursor-pagination",
+   "name": "Phân trang cursor (keyset)",
+   "model": "Keyset",
+   "how": "Phân trang theo cursor thay vì offset.",
+   "why": "Ổn định khi dữ liệu thay đổi và nhanh ở trang sâu.",
+   "endpoints": [
+    "e4"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/discovery/dto/discovery.dtos.ts",
+     "line": 15,
+     "quote": "export class BrowseQueryDto extends CursorPageQueryDto {"
+    },
+    {
+     "file": "apps/core-api/src/modules/discovery/dto/nearby.dtos.ts",
+     "line": 44,
+     "quote": "export class NearbyQueryDto extends CursorPageQueryDto {"
+    },
+    {
+     "file": "apps/core-api/src/modules/discovery/nearby.service.ts",
+     "line": 185,
+     "quote": "return { items: [], meta: { nextCursor: null } };"
+    }
+   ],
+   "auto": true,
+   "count": 7,
+   "id": "t11",
+   "local": "`BrowseQueryDto` và `NearbyQueryDto` đều `extends CursorPageQueryDto` nên browse/nearby phân trang theo cursor."
+  },
+  {
+   "slug": "geo-query",
+   "name": "Truy vấn theo vị trí (nearby)",
+   "model": "Truy vấn địa lý",
+   "how": "Truy vấn khoảng cách địa lý để tìm người ở gần.",
+   "why": "Khám phá người ở gần cần tính khoảng cách địa lý ngay trong truy vấn thay vì lọc ở tầng ứng dụng.",
+   "endpoints": [
+    "e4"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/discovery/nearby.constants.ts",
+     "line": 10,
+     "quote": "export function haversineDistanceKm("
+    },
+    {
+     "file": "apps/core-api/src/modules/discovery/nearby.service.ts",
+     "line": 10,
+     "quote": "haversineDistanceKm,"
+    }
+   ],
+   "auto": true,
+   "count": 4,
+   "id": "t12",
+   "local": "Nearby tính khoảng cách bằng `haversineDistanceKm` với toạ độ lượng tử hoá (`quantizeCoordinate`, `nearbyJitterKm`) và bán kính `DISCOVERY_NEARBY_RADIUS_KM`, không dùng PostGIS."
+  },
+  {
+   "id": "t13",
+   "slug": "cursor-pagination",
+   "name": "Phân trang cursor (keyset)",
+   "model": "Keyset",
+   "how": "Phân trang theo cursor thay vì offset.",
+   "why": "Ổn định khi dữ liệu thay đổi và nhanh ở trang sâu.",
+   "endpoints": [
+    "e1"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/discovery/discovery.service.ts",
+     "line": 48,
+     "quote": "const after = this.decodeBrowseCursor(query.cursor);"
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "local": "Browse dùng cursor (createdAt,id) qua decodeBrowseCursor và UserService.browsePage(filter, limit, after), trả meta.nextCursor.",
+   "addedByLogicReview": true
+  },
+  {
+   "id": "t14",
+   "slug": "data-minimization",
+   "name": "Tối thiểu hoá dữ liệu trả về (ẩn danh, DTO công khai)",
+   "model": "Tối thiểu dữ liệu",
+   "how": "Chỉ trả trường cần thiết (DTO công khai, ẩn danh theo từng người nhận).",
+   "why": "Giảm rò rỉ dữ liệu: chỉ trả đúng các trường cần thiết cho người nhận thay vì cả bản ghi nội bộ.",
+   "endpoints": [
+    "e2",
+    "e4"
+   ],
+   "collaborators": [],
+   "evidence": [
+    {
+     "file": "apps/core-api/src/modules/discovery/nearby.service.ts",
+     "line": 63,
+     "quote": "không giữ toạ độ thô ở bất kỳ bước nào"
+    }
+   ],
+   "auto": true,
+   "count": 1,
+   "local": "Toạ độ quantize ngay lúc ghi (DISCOVERY_LOCATION_QUANTIZE_DEGREES), Nearby chỉ trả distanceBucket đã jitter theo cặp-ngày và null nếu đối phương tắt showDistance; không trả toạ độ/km.",
+   "addedByLogicReview": true
+  }
+ ]
+}
